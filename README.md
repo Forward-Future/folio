@@ -32,3 +32,20 @@ window (opening another PDF reuses it), and asks before closing with unsaved ann
 
 The builds are not code-signed, so Windows SmartScreen may warn on first run ("More info → Run anyway").
 If you run Electron from a terminal that has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
+
+## Releasing updates
+
+Installed copies of Folio check [mberman84/folio-releases](https://github.com/mberman84/folio-releases) on launch
+and every 4 hours, download new versions in the background, and install them when Folio closes (or right away
+via the "Restart" button). To ship an update, commit your changes and run:
+
+```sh
+npm run release                                  # 1.0.0 -> 1.0.1
+npm run release -- minor --notes "What changed"  # 1.0.0 -> 1.1.0
+```
+
+This bumps the version, builds the installers, uploads them to a new public release, and pushes the source
+(private repo [mberman84/folio](https://github.com/mberman84/folio)). Needs the GitHub CLI logged in (`gh auth login`).
+
+Install link (always the newest version):
+https://github.com/mberman84/folio-releases/releases/latest/download/Folio-Setup.exe
