@@ -15,4 +15,12 @@ contextBridge.exposeInMainWorld("folioDesktop", {
     ipcRenderer.invoke("folio:update-status").then((version) => version && callback(version));
   },
   installUpdate: () => ipcRenderer.send("folio:install-update"),
+  /** Called with the updater state ({ state, version?, percent?, message? }) now and whenever it changes. */
+  onUpdateStatus(callback) {
+    const listener = (_e, status) => callback(status);
+    ipcRenderer.on("folio:update-status-changed", listener);
+    ipcRenderer.invoke("folio:update-state").then(callback);
+    return () => ipcRenderer.removeListener("folio:update-status-changed", listener);
+  },
+  checkForUpdates: () => ipcRenderer.send("folio:check-update"),
 });

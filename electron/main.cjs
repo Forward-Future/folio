@@ -40,23 +40,61 @@ function sendFile(file) {
 // ── Auto-update ──────────────────────────────────────────────────────
 // Installed copies check GitHub Releases (mberman84/folio-releases, see "publish" in package.json)
 // on launch and every few hours, download new versions in the background, and install them on quit
-// or when the user clicks "Restart" in the update banner.
+// or when the user clicks "Restart" in the update banner. Progress is shown on the home screen and
+// logged to %APPDATA%\Folio\update.log.
 let updateReady = null;
+let updateStatus = { state: "idle" };
+let updatesEnabled = false;
 const UPDATE_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
+function logUpdate(msg) {
+  try {
+    fs.appendFileSync(path.join(app.getPath("userData"), "update.log"), `${new Date().toISOString()} ${msg}\n`);
+  } catch {}
+}
+
+function setUpdateStatus(status) {
+  updateStatus = status;
+  win?.webContents.send("folio:update-status-changed", status);
+}
+
+function checkForUpdates() {
+  if (!updatesEnabled) return setUpdateStatus({ state: "unsupported" });
+  if (updateReady || ["checking", "downloading"].includes(updateStatus.state)) return;
+  autoUpdater.checkForUpdates().catch(() => {}); // failures arrive via the "error" event
+}
+
 function setupAutoUpdate() {
-  // Only real installs can update themselves; skip dev runs. FOLIO_UPDATE_TEST lets the unpacked build be tested.
-  if (!app.isPackaged && !process.env.FOLIO_UPDATE_TEST) return;
+  // Only real installs can update themselves; skip dev runs and the portable exe.
+  // FOLIO_UPDATE_TEST lets the unpacked build be tested.
+  const portable = !!process.env.PORTABLE_EXECUTABLE_FILE;
+  if ((!app.isPackaged && !process.env.FOLIO_UPDATE_TEST) || portable) {
+    updateStatus = { state: "unsupported" };
+    return;
+  }
+  updatesEnabled = true;
+  if (!app.isPackaged) autoUpdater.forceDevUpdateConfig = true; // reads dev-app-update.yml
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = { info: logUpdate, warn: logUpdate, error: logUpdate, debug() {} };
+  autoUpdater.on("checking-for-update", () => setUpdateStatus({ state: "checking" }));
+  autoUpdater.on("update-not-available", () => setUpdateStatus({ state: "latest", checkedAt: Date.now() }));
+  autoUpdater.on("update-available", (info) => setUpdateStatus({ state: "downloading", version: info.version, percent: 0 }));
+  autoUpdater.on("download-progress", (p) =>
+    setUpdateStatus({ state: "downloading", version: updateStatus.version, percent: Math.round(p.percent) }),
+  );
   autoUpdater.on("update-downloaded", (info) => {
     updateReady = info.version;
+    setUpdateStatus({ state: "ready", version: info.version });
     win?.webContents.send("folio:update-ready", info.version);
   });
-  autoUpdater.on("error", (err) => console.warn("[update]", err?.message || err));
-  const check = () => autoUpdater.checkForUpdates().catch((err) => console.warn("[update]", err?.message || err));
-  check();
-  setInterval(check, UPDATE_INTERVAL_MS);
+  autoUpdater.on("error", (err) => {
+    logUpdate(`error: ${err?.stack || err}`);
+    setUpdateStatus({ state: "error", message: String(err?.message || err).split("\n")[0] });
+  });
+  logUpdate(`Folio ${app.getVersion()} (${process.arch}) starting update checks`);
+  checkForUpdates();
+  setInterval(checkForUpdates, UPDATE_INTERVAL_MS);
 }
 
 function createWindow() {
@@ -139,6 +177,8 @@ if (!app.requestSingleInstanceLock()) {
     });
     ipcMain.handle("folio:version", () => app.getVersion());
     ipcMain.handle("folio:update-status", () => updateReady);
+    ipcMain.handle("folio:update-state", () => updateStatus);
+    ipcMain.on("folio:check-update", () => checkForUpdates());
     ipcMain.on("folio:install-update", () => {
       if (updateReady) autoUpdater.quitAndInstall(false, true);
     });

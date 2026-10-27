@@ -12,6 +12,42 @@ function timeAgo(t: number) {
   return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function UpdateLine({ status }: { status: UpdateStatus }) {
+  const desktop = window.folioDesktop!;
+  const check = (
+    <button className="link version-action" onClick={() => desktop.checkForUpdates()}>
+      Check for updates
+    </button>
+  );
+  switch (status.state) {
+    case "checking":
+      return <> · Checking for updates…</>;
+    case "downloading":
+      return <> · Downloading {status.version} ({status.percent ?? 0}%)…</>;
+    case "ready":
+      return (
+        <>
+          {" · "}
+          <button className="link version-action" onClick={() => desktop.installUpdate()}>
+            Restart to update to {status.version}
+          </button>
+        </>
+      );
+    case "latest":
+      return <> · Up to date · {check}</>;
+    case "error":
+      return (
+        <>
+          <span title={status.message}> · Couldn't check for updates</span> · {check}
+        </>
+      );
+    case "unsupported":
+      return <> · This copy doesn't update itself</>;
+    default:
+      return <> · {check}</>;
+  }
+}
+
 interface Props {
   onPick: () => void;
   onOpenBytes: (name: string, data: Uint8Array) => void;
@@ -23,8 +59,11 @@ export function Welcome({ onPick, onOpenBytes, onSample, loading }: Props) {
   const [recent, setRecent] = useState<RecentFile[]>([]);
   const [version, setVersion] = useState<string | null>(null);
 
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+
   useEffect(() => {
     window.folioDesktop?.getVersion().then(setVersion);
+    return window.folioDesktop?.onUpdateStatus?.(setUpdate);
   }, []);
 
   useEffect(() => {
@@ -97,7 +136,12 @@ export function Welcome({ onPick, onOpenBytes, onSample, loading }: Props) {
           </section>
         )}
 
-        {version && <p className="version">Folio {version}</p>}
+        {version && (
+          <p className="version">
+            Folio {version}
+            {update && <UpdateLine status={update} />}
+          </p>
+        )}
       </div>
     </div>
   );
