@@ -8,10 +8,11 @@ const { autoUpdater } = require("electron-updater");
 const DIST = path.join(__dirname, "..", "dist");
 const DEV_URL = process.env.FOLIO_DEV_URL; // e.g. http://localhost:5173 while developing
 
-// Title bar colours follow the app theme (see src/styles.css --bg).
+// Title bar colours follow the app theme (see src/styles.css --bg). Height is one pixel short of
+// --topbar-h so the toolbar's bottom border runs underneath the window controls.
 const TITLEBAR = {
-  dark: { color: "#171717", symbolColor: "#edece9", height: 52 },
-  light: { color: "#f5f4f1", symbolColor: "#1c1b19", height: 52 },
+  dark: { color: "#171717", symbolColor: "#edece9", height: 51 },
+  light: { color: "#f5f4f1", symbolColor: "#1c1b19", height: 51 },
 };
 
 protocol.registerSchemesAsPrivileged([
