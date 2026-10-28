@@ -144,13 +144,21 @@
         "application/pdf"
       ],
       "executableName": "folio",
-      "syncDesktopName": true
+      "syncDesktopName": true,
+      "extraResources": [
+        {
+          "from": "build/linux/folio-archive-keyring.gpg",
+          "to": "folio-archive-keyring.gpg"
+        }
+      ]
     },
     "appImage": {
       "artifactName": "Folio-linux-x86_64.AppImage"
     },
     "deb": {
-      "artifactName": "Folio-linux-amd64.deb"
+      "artifactName": "Folio-linux-amd64.deb",
+      "afterInstall": "build/linux/after-install.tpl",
+      "afterRemove": "build/linux/after-remove.tpl"
     }
   },
   "repository": {

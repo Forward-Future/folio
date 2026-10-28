@@ -36,7 +36,12 @@ This bumps the version and pushes the commit and tag. The tag starts the **Relea
 (`.github/workflows/release-build.yml`), which builds the Windows, macOS, and Linux installers on GitHub Actions and
 checks that each packaged app starts. The script waits for it, downloads the installers, and publishes the release.
 Nothing is published if any platform fails; fix the problem, then run `npm run release -- --publish-only` to publish
-the same tag. Installed copies see the new version automatically.
+the same tag. After publishing, the script checks the release with `scripts/check-release.mjs`: every platform's files
+are present and every update feed (Windows, macOS, AppImage, apt) offers the new version. The daily **Release check**
+workflow repeats that check and opens an issue if anything is off.
+
+**Never publish any other way** (no hand-made `gh release` uploads or single-platform builds); see
+[AGENTS.md](AGENTS.md). Signing certificates are set up as repository secrets; see [SIGNING.md](SIGNING.md).
 
 CI (`.github/workflows/ci.yml`) type-checks, builds, and runs `npm run smoke` on all three platforms for every push to
 `main` and every pull request.

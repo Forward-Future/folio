@@ -52,7 +52,7 @@ function UpdateLine({ status }: { status: UpdateStatus }) {
         </>
       );
     case "unsupported":
-      return <> · This copy doesn't update itself</>;
+      return status.message === "system" ? <> · Updates arrive with your system updates</> : <> · This copy doesn't update itself</>;
     default:
       return <> · {check}</>;
   }

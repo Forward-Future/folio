@@ -1,6 +1,13 @@
 # Builds the installers for every platform when a version tag is pushed (scripts/release.mjs does that),
 # checks that each packaged app starts, and hands the files to the release script as artifacts.
 # Nothing is published from here: the maintainer's release script downloads these and creates the release.
+#
+# Signing is automatic once its secrets exist (see SIGNING.md):
+#   macOS:   MAC_CERTIFICATE_P12_BASE64, MAC_CERTIFICATE_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+#   Windows: AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT,
+#            AZURE_SIGNING_PROFILE, AZURE_SIGNING_PUBLISHER
+#   Linux:   APT_SIGNING_KEY (signs the apt repository published with each release)
+# Without them, macOS builds are ad-hoc signed and Windows builds are unsigned.
 name: Release build
 
 on:
@@ -41,6 +48,11 @@ jobs:
               release/Folio-linux-x86_64.AppImage
               release/Folio-linux-amd64.deb
               release/latest-linux.yml
+              release/Packages
+              release/Packages.gz
+              release/Release
+              release/InRelease
+              release/Release.gpg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -53,10 +65,45 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Package
-        run: npx electron-builder ${{ matrix.args }} --publish never
+        shell: bash
         env:
-          # No Apple/Windows signing certificates yet: never look for them.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          MAC_CERTIFICATE_P12_BASE64: ${{ secrets.MAC_CERTIFICATE_P12_BASE64 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          AZURE_SIGNING_PUBLISHER: ${{ secrets.AZURE_SIGNING_PUBLISHER }}
+        run: |
+          extra=()
+          if [ "$RUNNER_OS" = "macOS" ] && [ -n "$MAC_CERTIFICATE_P12_BASE64" ]; then
+            echo "Signing with the Developer ID certificate and notarizing"
+            export CSC_LINK="$MAC_CERTIFICATE_P12_BASE64" CSC_KEY_PASSWORD="$MAC_CERTIFICATE_PASSWORD" CSC_IDENTITY_AUTO_DISCOVERY=true
+            # Signed builds install their own updates (Squirrel.Mac requires a Developer ID signature).
+            extra+=(-c.mac.identity="Developer ID Application" -c.mac.hardenedRuntime=true -c.mac.notarize=true -c.extraMetadata.folioMacSigned=true)
+          fi
+          if [ "$RUNNER_OS" = "Windows" ] && [ -n "$AZURE_CLIENT_SECRET" ]; then
+            echo "Signing with Azure Trusted Signing"
+            extra+=(-c.win.azureSignOptions.endpoint="$AZURE_SIGNING_ENDPOINT"
+              -c.win.azureSignOptions.codeSigningAccountName="$AZURE_SIGNING_ACCOUNT"
+              -c.win.azureSignOptions.certificateProfileName="$AZURE_SIGNING_PROFILE"
+              -c.win.azureSignOptions.publisherName="$AZURE_SIGNING_PUBLISHER")
+          fi
+          npx electron-builder ${{ matrix.args }} "${extra[@]}" --publish never
+
+      - name: Signed apt repository (Linux)
+        if: runner.os == 'Linux'
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          sudo apt-get install -y -qq dpkg-dev apt-utils > /dev/null
+          bash scripts/apt-repo.sh
 
       # Launch the packaged app and make sure it's still running after 20 seconds.
       - name: Packaged app starts (Windows)

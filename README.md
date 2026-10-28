@@ -8,7 +8,7 @@ A simple, clean PDF reader for Windows, macOS, and Linux. Free and open source.
 | --- | --- | --- |
 | **Windows** 10/11 (64-bit) | [Folio-Setup.exe](https://github.com/Forward-Future/folio-releases/releases/latest/download/Folio-Setup.exe) | Automatic |
 | **macOS** 12 or later (Apple Silicon and Intel) | [Folio-mac.dmg](https://github.com/Forward-Future/folio-releases/releases/latest/download/Folio-mac.dmg) | Folio tells you when a new version is out |
-| **Linux**: Ubuntu, Debian, and derivatives (64-bit) | [Folio-linux-amd64.deb](https://github.com/Forward-Future/folio-releases/releases/latest/download/Folio-linux-amd64.deb) | Download the new .deb |
+| **Linux**: Ubuntu, Debian, and derivatives (64-bit) | [Folio-linux-amd64.deb](https://github.com/Forward-Future/folio-releases/releases/latest/download/Folio-linux-amd64.deb) | Automatic, with your system updates (apt) |
 | **Linux**: other distributions (64-bit) | [Folio-linux-x86_64.AppImage](https://github.com/Forward-Future/folio-releases/releases/latest/download/Folio-linux-x86_64.AppImage) | Automatic |
 
 [All releases](https://github.com/Forward-Future/folio-releases/releases) · [Changelog](CHANGELOG.md) · Prefer not to
@@ -19,7 +19,9 @@ Folio's builds aren't signed with paid developer certificates yet, so the first 
 - **Windows:** if SmartScreen warns, choose **More info → Run anyway**.
 - **macOS:** open the DMG and drag Folio to Applications. The first time you open it, macOS says it can't verify the
   developer: click **Done**, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
-- **Linux (.deb):** `sudo apt install ./Folio-linux-amd64.deb`, then open Folio from your applications menu.
+- **Linux (.deb):** `sudo apt install ./Folio-linux-amd64.deb`, then open Folio from your applications menu. The
+  package adds Folio's signed apt repository, so new versions arrive with your regular system updates (or
+  `sudo apt update && sudo apt upgrade`). Copies installed from a .deb before 1.9 need the new .deb installed once.
 - **Linux (AppImage):** make it executable (`chmod +x Folio-linux-x86_64.AppImage`) and run it. AppImages need FUSE 2:
   `sudo apt install libfuse2t64` on Ubuntu 24.04 or later, `libfuse2` on older releases.
 

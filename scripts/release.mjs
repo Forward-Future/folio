@@ -14,9 +14,9 @@
 import { execFileSync, execSync } from "node:child_process";
 import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
+import { checkRelease, RELEASES_REPO, REQUIRED_ASSETS } from "./check-release.mjs";
 
 const SOURCE_REPO = "Forward-Future/folio";
-const RELEASES_REPO = "Forward-Future/folio-releases";
 const WORKFLOW = "release-build.yml";
 const DOWNLOADS = "release-dist";
 
@@ -77,22 +77,33 @@ gh(["run", "download", String(runId), "--repo", SOURCE_REPO, "--dir", DOWNLOADS]
 const files = readdirSync(DOWNLOADS, { recursive: true })
   .map((f) => path.join(DOWNLOADS, f))
   .filter((f) => statSync(f).isFile());
-const required = ["Folio-Setup.exe", "latest.yml", "Folio-mac.dmg", "latest-mac.yml", "Folio-linux-x86_64.AppImage", "Folio-linux-amd64.deb", "latest-linux.yml"];
-const missing = required.filter((name) => !files.some((f) => path.basename(f) === name));
+// Every platform ships together: refuse to publish unless the build produced all of them.
+const missing = REQUIRED_ASSETS.map((a) => a.name).filter((name) => !files.some((f) => path.basename(f) === name));
 if (missing.length) {
   console.error(`Missing from the build: ${missing.join(", ")}. Nothing was published.`);
   process.exit(1);
 }
 
+// Mac builds are signed and notarized once the Developer ID secrets exist (see SIGNING.md).
+const macSigned = gh(["secret", "list", "--repo", SOURCE_REPO]).includes("MAC_CERTIFICATE_P12_BASE64");
 const body = [
   notes || `Folio ${version}.`,
   "",
   "## Download",
   "- **Windows:** **Folio-Setup.exe** (updates itself), or **Folio-Portable.exe** to run without installing.",
-  "- **macOS:** **Folio-mac.dmg** (Apple Silicon and Intel). The first time you open it, macOS blocks it because it isn't notarized yet: open **System Settings → Privacy & Security** and click **Open Anyway**.",
-  "- **Linux:** **Folio-linux-amd64.deb** for Ubuntu/Debian, or **Folio-linux-x86_64.AppImage** (updates itself) for other distributions.",
+  macSigned
+    ? "- **macOS:** **Folio-mac.dmg** (Apple Silicon and Intel). Installed copies update themselves."
+    : "- **macOS:** **Folio-mac.dmg** (Apple Silicon and Intel). The first time you open it, macOS blocks it because it isn't notarized yet: open **System Settings → Privacy & Security** and click **Open Anyway**.",
+  "- **Linux:** **Folio-linux-amd64.deb** for Ubuntu/Debian (after that, updates arrive with your system updates), or **Folio-linux-x86_64.AppImage** (updates itself) for other distributions.",
 ].join("\n");
 gh(["release", "create", tag, "--repo", RELEASES_REPO, "--title", `Folio ${version}`, "--notes", body, ...files], { stdio: "inherit" });
 
-console.log(`\nFolio ${version} is live: https://github.com/${RELEASES_REPO}/releases/tag/${tag}`);
+// Double-check what actually got published: every file present, every update feed at this version.
+const { problems } = await checkRelease(tag);
+if (problems.length) {
+  console.error(`\nPublished, but the release is incomplete:\n- ${problems.join("\n- ")}`);
+  process.exit(1);
+}
+
+console.log(`\nFolio ${version} is live for Windows, macOS, and Linux: https://github.com/${RELEASES_REPO}/releases/tag/${tag}`);
 console.log("Installed copies will see it within a few hours (or on next launch).");

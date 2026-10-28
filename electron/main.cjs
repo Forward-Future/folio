@@ -131,7 +131,8 @@ function setUpdateStatus(status) {
 }
 
 async function checkForUpdates(manual = false) {
-  if (!updatesEnabled) return setUpdateStatus({ state: "unsupported" });
+  // Keep the reason (e.g. "system" for apt-managed copies) when a manual check finds updates unsupported.
+  if (!updatesEnabled) return setUpdateStatus(updateStatus.state === "unsupported" ? updateStatus : { state: "unsupported" });
   if ((!manual && !automaticUpdates) || updateReady || activeUpdate) return;
   const operation = { manual, token: null };
   activeUpdate = operation;
@@ -163,17 +164,23 @@ function installLocation() {
   return path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || process.env.APPIMAGE || app.getPath("exe"));
 }
 
-// macOS only installs updates that are signed with an Apple Developer ID. Until Folio's Mac builds are,
-// Macs are told about new versions and download them from the releases page.
-const NOTIFY_ONLY = IS_MAC;
+// macOS only installs updates signed with an Apple Developer ID. Release builds made with the Developer ID
+// certificate set folioMacSigned (see .github/workflows/release-build.yml); other Mac builds are told about
+// new versions and download them from the releases page.
+const MAC_SIGNED = !!require("../package.json").folioMacSigned;
+const NOTIFY_ONLY = IS_MAC && !MAC_SIGNED;
 
 function setupAutoUpdate() {
   loadUpdatePreference();
-  // Installed Windows builds, Linux AppImages, and Macs (notify only) check for updates. Dev runs, the
-  // portable Windows exe, and Linux packages (updated by downloading the new .deb) don't.
+  // Installed Windows builds, Linux AppImages, and Macs check for updates. Dev runs and the portable Windows exe
+  // don't; Linux packages (.deb) are updated by apt along with the rest of the system.
   // FOLIO_UPDATE_TEST lets the unpacked build be tested.
   const kind = installKind();
-  if ((kind === "development" && !process.env.FOLIO_UPDATE_TEST) || kind === "portable" || kind === "package") {
+  if (kind === "package") {
+    updateStatus = { state: "unsupported", message: "system" };
+    return;
+  }
+  if ((kind === "development" && !process.env.FOLIO_UPDATE_TEST) || kind === "portable") {
     updateStatus = { state: "unsupported" };
     return;
   }
