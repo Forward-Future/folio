@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.2
+
+- Folio now lives in the Forward Future GitHub organization: source at github.com/Forward-Future/folio, downloads and
+  updates at github.com/Forward-Future/folio-releases. Installed copies switch over automatically.
+
 ## 1.3.1
 
 - Folio is now open source under the MIT License.

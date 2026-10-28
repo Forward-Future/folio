@@ -68,7 +68,7 @@ function sendFile(file) {
 }
 
 // ── Auto-update ──────────────────────────────────────────────────────
-// Installed copies check GitHub Releases (mberman84/folio-releases, see "publish" in package.json)
+// Installed copies check GitHub Releases (Forward-Future/folio-releases, see "publish" in package.json)
 // on launch and every few hours, download new versions in the background, and install them on quit
 // or when the user clicks "Restart" in the update banner. Progress is shown on the home screen and
 // logged to %APPDATA%\Folio\update.log.

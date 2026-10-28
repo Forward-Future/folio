@@ -2,11 +2,11 @@
 
 A simple, clean PDF reader for Windows. Free and open source.
 
-**[Download Folio for Windows](https://github.com/mberman84/folio-releases/releases/latest/download/Folio-Setup.exe)**
-· [All releases](https://github.com/mberman84/folio-releases/releases) · [Changelog](CHANGELOG.md)
+**[Download Folio for Windows](https://github.com/Forward-Future/folio-releases/releases/latest/download/Folio-Setup.exe)**
+· [All releases](https://github.com/Forward-Future/folio-releases/releases) · [Changelog](CHANGELOG.md)
 
 Installed copies update themselves. Prefer not to install? Download **Folio-Portable.exe** from the
-[latest release](https://github.com/mberman84/folio-releases/releases/latest); it runs as-is but doesn't auto-update.
+[latest release](https://github.com/Forward-Future/folio-releases/releases/latest); it runs as-is but doesn't auto-update.
 
 > Folio's builds aren't code-signed yet, so Windows SmartScreen may warn the first time you run the installer.
 > Choose **More info → Run anyway**, or build Folio yourself from source (below).

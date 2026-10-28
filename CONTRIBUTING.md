@@ -4,7 +4,7 @@ Thanks for helping. Bug reports, ideas, and pull requests are all welcome.
 
 ## Reporting bugs
 
-[Open an issue](https://github.com/mberman84/folio/issues/new) with your Folio version (shown in **About Folio**),
+[Open an issue](https://github.com/Forward-Future/folio/issues/new) with your Folio version (shown in **About Folio**),
 what you did, what you expected, and what happened. If a specific PDF triggers the problem and you can share it,
 attach it, or describe how to make one. For security issues, follow [SECURITY.md](SECURITY.md) instead.
 
@@ -25,7 +25,7 @@ By contributing, you agree that your contributions are licensed under the projec
 ## Releasing
 
 Maintainers publish releases with the GitHub CLI logged in to an account that can write to
-[mberman84/folio-releases](https://github.com/mberman84/folio-releases). Commit everything, then run:
+[Forward-Future/folio-releases](https://github.com/Forward-Future/folio-releases). Commit everything, then run:
 
 ```sh
 npm run release                                  # 1.0.0 -> 1.0.1

@@ -32,9 +32,9 @@
   "productName": "Folio",
   "description": "A simple, clean PDF reader for Windows",
   "license": "MIT",
-  "homepage": "https://github.com/mberman84/folio",
+  "homepage": "https://github.com/Forward-Future/folio",
   "bugs": {
-    "url": "https://github.com/mberman84/folio/issues"
+    "url": "https://github.com/Forward-Future/folio/issues"
   },
   "main": "electron/main.cjs",
   "build": {
@@ -80,7 +80,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "mberman84",
+        "owner": "Forward-Future",
         "repo": "folio-releases",
         "releaseType": "release"
       }
@@ -106,7 +106,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/mberman84/folio.git"
+    "url": "https://github.com/Forward-Future/folio.git"
   },
-  "author": "mberman84"
+  "author": "Forward Future"
 }

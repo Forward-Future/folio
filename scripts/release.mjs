@@ -1,5 +1,5 @@
 // Publish a new Folio version: bump the version, build the Windows installers, upload them to the
-// public GitHub repo mberman84/folio-releases, and push the source to mberman84/folio.
+// public GitHub repo Forward-Future/folio-releases, and push the source to Forward-Future/folio.
 // Every installed copy picks the update up automatically (electron-updater reads latest.yml from the release).
 //
 //   npm run release                      # 1.0.0 -> 1.0.1
@@ -8,7 +8,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 
-const RELEASES_REPO = "mberman84/folio-releases";
+const RELEASES_REPO = "Forward-Future/folio-releases";
 const ASSETS = ["Folio-Setup.exe", "Folio-Setup.exe.blockmap", "latest.yml", "Folio-Portable.exe"];
 
 const args = process.argv.slice(2);

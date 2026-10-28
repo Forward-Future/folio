@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please **don't open a public issue** for security problems. Instead, report them privately through
-[GitHub's private vulnerability reporting](https://github.com/mberman84/folio/security/advisories/new).
+[GitHub's private vulnerability reporting](https://github.com/Forward-Future/folio/security/advisories/new).
 
 Include the Folio version (shown in **About Folio**), what an attacker could do, and steps or a sample PDF that
 reproduce it. You can expect an acknowledgement within a week. Fixes ship as a new release that installed copies pick
@@ -30,7 +30,7 @@ Folio opens untrusted PDFs, so it's built to keep a malicious document contained
 Known limitations:
 
 - **Builds aren't code-signed yet.** Updates are downloaded over HTTPS from
-  [mberman84/folio-releases](https://github.com/mberman84/folio-releases) and checked against the SHA-512 published
+  [Forward-Future/folio-releases](https://github.com/Forward-Future/folio-releases) and checked against the SHA-512 published
   with each release, but without a signature the update channel is only as secure as that GitHub account.
 - Local data (recent files, reading positions, an optionally remembered signature) is stored unencrypted in your
   Windows profile. See [Privacy](README.md#privacy).
