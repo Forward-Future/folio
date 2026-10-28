@@ -21,7 +21,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
-    "electron": "^45.0.0",
+    "electron": "^45.1.0",
     "electron-builder": "^26.18.0",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.3.1",
@@ -30,8 +30,12 @@
     "vite": "^8.3.5"
   },
   "productName": "Folio",
-  "description": "A simple, clean PDF reader",
-  "author": "Folio",
+  "description": "A simple, clean PDF reader for Windows",
+  "license": "MIT",
+  "homepage": "https://github.com/mberman84/folio",
+  "bugs": {
+    "url": "https://github.com/mberman84/folio/issues"
+  },
   "main": "electron/main.cjs",
   "build": {
     "appId": "app.folio.reader",
@@ -80,10 +84,29 @@
         "repo": "folio-releases",
         "releaseType": "release"
       }
-    ]
+    ],
+    "extraResources": [
+      {
+        "from": "LICENSE",
+        "to": "LICENSE.txt"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
+      }
+    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
+    }
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/mberman84/folio.git"
-  }
+  },
+  "author": "mberman84"
 }

@@ -919,13 +919,23 @@ kbd {
 .recent {
   margin-top: 56px;
 }
+.recent-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0 0 14px 4px;
+}
+.recent-head .link {
+  padding: 4px 8px;
+  font-size: 12.5px;
+}
 .recent h3 {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-3);
   font-weight: 620;
-  margin: 0 0 14px 4px;
+  margin: 0;
 }
 .recent-grid {
   display: grid;

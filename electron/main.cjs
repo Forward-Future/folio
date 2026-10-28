@@ -3,12 +3,40 @@ const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, screen } = re
 const path = require("node:path");
 const fs = require("node:fs");
 const { pathToFileURL } = require("node:url");
+const { isIP } = require("node:net");
 const { autoUpdater } = require("electron-updater");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 
 const DIST = path.join(__dirname, "..", "dist");
-const DEV_URL = process.env.FOLIO_DEV_URL; // e.g. http://localhost:5173 while developing
+// Development only (e.g. http://localhost:5173); ignored by installed builds.
+const DEV_URL = !app.isPackaged && process.env.FOLIO_DEV_URL ? new URL(process.env.FOLIO_DEV_URL).origin : null;
+const isAppUrl = (url) => {
+  try { return url.startsWith("app://folio/") || (!!DEV_URL && new URL(url).origin === DEV_URL); } catch { return false; }
+};
+
+// The page only loads its own bundled code; PDFs can't bring in scripts or reach the network.
+// Inline styles are needed by pdf.js page layout; wasm by its image decoders; blob: frames for printing.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data: blob:",
+  "connect-src 'self' data: blob:",
+  "worker-src 'self' blob:",
+  "media-src 'self' blob: mediastream:",
+  "frame-src 'self' blob:",
+  "object-src 'self' blob:",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join("; ");
+
+function isTrustedSender(event) {
+  if (!win || event.sender !== win.webContents) return false;
+  const url = event.senderFrame?.url ?? "";
+  return isAppUrl(url);
+}
 
 // Title bar colours follow the app theme (see src/styles.css --bg). Height is one pixel short of
 // --topbar-h so the toolbar's bottom border runs underneath the window controls.
@@ -167,10 +195,7 @@ function createWindow() {
   });
 
   const cameraOwner = win.webContents;
-  const trustedCameraOrigin = (url) => {
-    try { const origin = new URL(url).origin; return url.startsWith("app://folio/") || !!DEV_URL && origin === new URL(DEV_URL).origin; }
-    catch { return false; }
-  };
+  const trustedCameraOrigin = isAppUrl;
   cameraOwner.session.setPermissionCheckHandler((contents, permission, origin, details) =>
     contents === cameraOwner && permission === "media" && trustedCameraOrigin(details.requestingUrl || origin) && details.mediaType !== "audio");
   cameraOwner.session.setPermissionRequestHandler((contents, permission, callback, details) => {
@@ -197,15 +222,21 @@ function createWindow() {
   win.on("resize", scheduleWindowSave);
   win.on("move", scheduleWindowSave);
   win.on("close", saveWindow);
-  win.loadURL(DEV_URL || "app://folio/index.html");
+  win.loadURL(DEV_URL ? DEV_URL + "/" : "app://folio/index.html");
 
   // Links inside PDFs open in the default browser, never in-app.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:|^mailto:/.test(url)) shell.openExternal(url);
     return { action: "deny" };
   });
+  // Subframes (the print frame) may only show Folio pages, local blob: PDFs, and Chromium's built-in PDF viewer.
+  const PDF_VIEWER = "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/";
+  win.webContents.on("will-frame-navigate", (e) => {
+    const allowed = isAppUrl(e.url) || e.url.startsWith("blob:app://folio/") || e.url.startsWith(PDF_VIEWER) || e.url === "about:blank";
+    if (!e.isMainFrame && !allowed) e.preventDefault();
+  });
   win.webContents.on("will-navigate", (e, url) => {
-    if (!url.startsWith("app://") && !(DEV_URL && url.startsWith(DEV_URL))) {
+    if (!isAppUrl(url)) {
       e.preventDefault();
       if (/^https?:/.test(url)) shell.openExternal(url);
     }
@@ -228,7 +259,24 @@ function createWindow() {
   win.on("closed", () => { clearTimeout(windowTimer); win = null; });
 }
 
-const MAX_URL_PDF_BYTES = 500 * 1024 * 1024;
+const MAX_URL_PDF_BYTES = 300 * 1024 * 1024;
+
+// Literal loopback/private/link-local hosts. A public link isn't allowed to redirect into the local network.
+function isLocalHost(hostname) {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+  const version = isIP(host);
+  if (version === 4) {
+    const [a, b] = host.split(".").map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+  if (version === 6) {
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host);
+    if (mapped) return isLocalHost(mapped[1]);
+    return host === "::" || host === "::1" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host) || host.startsWith("::ffff:");
+  }
+  return false;
+}
 
 function pdfNameFromResponse(url, disposition) {
   const match = /filename\*=(?:UTF-8'')?([^;]+)|filename="?([^";]+)"?/i.exec(disposition || "");
@@ -242,7 +290,8 @@ function pdfNameFromResponse(url, disposition) {
 // Resolves to { name, data } or { error } (error text is shown to the user as-is).
 function downloadPdf(rawUrl) {
   let url;
-  try { url = new URL(String(rawUrl).trim()); } catch { return Promise.resolve({ error: "That isn't a valid web address." }); }
+  if (typeof rawUrl !== "string" || rawUrl.length > 8192) return Promise.resolve({ error: "That isn't a valid web address." });
+  try { url = new URL(rawUrl.trim()); } catch { return Promise.resolve({ error: "That isn't a valid web address." }); }
   if (url.protocol !== "http:" && url.protocol !== "https:") return Promise.resolve({ error: "Only http:// and https:// links can be opened." });
   return new Promise((resolve) => {
     let done = false;
@@ -262,6 +311,7 @@ function downloadPdf(rawUrl) {
       const next = new URL(redirectUrl, url);
       if (++hops > 10) return finish({ error: "That link redirects too many times." });
       if (next.protocol !== "http:" && next.protocol !== "https:") return finish({ error: "That link redirects somewhere Folio can't open." });
+      if (isLocalHost(next.hostname) && !isLocalHost(url.hostname)) return finish({ error: "That link redirects to a local network address, so Folio didn't follow it." });
       url = next;
       request.followRedirect();
     });
@@ -271,7 +321,7 @@ function downloadPdf(rawUrl) {
         return finish({ error: `The server responded with ${response.statusCode}${response.statusMessage ? " " + response.statusMessage : ""}.` });
       }
       const header = (key) => [].concat(response.headers[key] ?? [])[0];
-      const tooBig = { error: "That PDF is larger than 500 MB." };
+      const tooBig = { error: "That PDF is larger than 300 MB." };
       if (Number(header("content-length")) > MAX_URL_PDF_BYTES) return finish(tooBig);
       const chunks = [];
       let size = 0;
@@ -303,35 +353,48 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
-    protocol.handle("app", (req) => {
+    protocol.handle("app", async (req) => {
       const { pathname } = new URL(req.url);
-      const file = path.normalize(path.join(DIST, decodeURIComponent(pathname)));
-      if (!file.startsWith(DIST)) return new Response("Forbidden", { status: 403 });
-      return net.fetch(pathToFileURL(file).toString());
+      let file;
+      try { file = path.normalize(path.join(DIST, decodeURIComponent(pathname))); } catch { return new Response("Bad request", { status: 400 }); }
+      if (!file.startsWith(DIST + path.sep)) return new Response("Forbidden", { status: 403 });
+      const response = await net.fetch(pathToFileURL(file).toString());
+      const headers = new Headers(response.headers);
+      headers.set("Content-Security-Policy", CSP);
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     });
 
-    ipcMain.handle("folio:ready", () => {
+    // Only Folio's own page may call into the main process.
+    const handle = (channel, listener) => ipcMain.handle(channel, (event, ...args) => {
+      if (!isTrustedSender(event)) throw new Error("Untrusted sender");
+      return listener(event, ...args);
+    });
+    const on = (channel, listener) => ipcMain.on(channel, (event, ...args) => {
+      if (isTrustedSender(event)) listener(event, ...args);
+    });
+
+    handle("folio:ready", () => {
       const file = pendingFile;
       pendingFile = null;
       if (file) setTimeout(() => sendFile(file), 0);
       return !!file;
     });
-    ipcMain.handle("folio:fetch-pdf", (_event, url) => downloadPdf(url));
-    ipcMain.handle("folio:version", () => app.getVersion());
-    ipcMain.handle("folio:app-info", () => ({ version: app.getVersion(),
+    handle("folio:fetch-pdf", (_event, url) => downloadPdf(url));
+    handle("folio:version", () => app.getVersion());
+    handle("folio:app-info", () => ({ version: app.getVersion(),
       mode: !app.isPackaged ? "development" : process.env.PORTABLE_EXECUTABLE_FILE ? "portable" : "installed",
       location: path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || app.getPath("exe")) }));
-    ipcMain.handle("folio:open-installation", () => shell.openPath(path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || app.getPath("exe"))));
-    ipcMain.handle("folio:update-status", () => updateReady);
-    ipcMain.handle("folio:update-state", () => updateStatus);
-    ipcMain.handle("folio:auto-update-setting", () => automaticUpdates);
-    ipcMain.handle("folio:set-auto-update-setting", (_event, enabled) => saveUpdatePreference(enabled));
-    ipcMain.on("folio:check-update", () => void checkForUpdates(true));
-    ipcMain.on("folio:install-update", () => {
+    handle("folio:open-installation", () => shell.openPath(path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || app.getPath("exe"))));
+    handle("folio:update-status", () => updateReady);
+    handle("folio:update-state", () => updateStatus);
+    handle("folio:auto-update-setting", () => automaticUpdates);
+    handle("folio:set-auto-update-setting", (_event, enabled) => saveUpdatePreference(enabled));
+    on("folio:check-update", () => void checkForUpdates(true));
+    on("folio:install-update", () => {
       if (updateReady) autoUpdater.quitAndInstall(true, true);
     });
-    ipcMain.on("folio:theme", (_e, theme) => {
-      if (win && TITLEBAR[theme]) {
+    on("folio:theme", (_e, theme) => {
+      if (win && Object.hasOwn(TITLEBAR, theme)) {
         win.setTitleBarOverlay(TITLEBAR[theme]);
         win.setBackgroundColor(TITLEBAR[theme].color);
       }

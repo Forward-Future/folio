@@ -1,82 +1,70 @@
 # Folio
 
-A simplified, clean PDF reader built on pdf.js — React + Vite, runs fully in the browser.
+A simple, clean PDF reader for Windows. Free and open source.
 
-```sh
-npm install
-npm run dev      # http://localhost:5173
-npm run build    # static site in dist/
-```
+**[Download Folio for Windows](https://github.com/mberman84/folio-releases/releases/latest/download/Folio-Setup.exe)**
+· [All releases](https://github.com/mberman84/folio-releases/releases) · [Changelog](CHANGELOG.md)
 
-**Reading:** continuous scroll, page thumbnails, outline/bookmarks, find (match case / whole word),
-zoom (fit width, fit page, presets, Ctrl+wheel/pinch), two-page view, rotate, focus mode, dark theme, night-reading page inversion.
+Installed copies update themselves. Prefer not to install? Download **Folio-Portable.exe** from the
+[latest release](https://github.com/mberman84/folio-releases/releases/latest); it runs as-is but doesn't auto-update.
 
-**Marking up:** highlight, freehand draw, and text boxes with color palettes and undo.
-Ctrl+S downloads a copy with annotations embedded as real PDF annotations.
+> Folio's builds aren't code-signed yet, so Windows SmartScreen may warn the first time you run the installer.
+> Choose **More info → Run anyway**, or build Folio yourself from source (below).
 
-**Library:** drag a PDF anywhere to open it. Recent files (with thumbnail and reading progress)
-are kept locally in IndexedDB; each file reopens on the page you left off. Nothing is uploaded.
+## Features
+
+- **Reading:** continuous scroll, page thumbnails, outline/bookmarks, find with match case and whole word plus
+  per-page result snippets, zoom (fit width, fit page, presets, Ctrl+wheel/pinch), two-page view, rotate, focus mode,
+  light and dark themes, and night reading that dims bright pages.
+- **Opening:** drag in a PDF, open from Windows Explorer ("Open with → Folio"), or drop, paste, or enter a link to a
+  PDF on the web (Ctrl+Shift+O).
+- **Marking up:** highlight, freehand draw, and text boxes with color palettes and undo. Ctrl+S saves a copy with
+  annotations embedded as standard PDF annotations.
+- **Signing:** add a handwritten signature captured with your camera or from a photo, placed on signature lines Folio
+  detects or anywhere you choose. These are visual signatures, not cryptographic certificates.
+- **Library:** recent files with thumbnails, each reopening where you left off.
 
 Press `?` in the app for keyboard shortcuts.
 
-## Windows app
+## Privacy
 
-### Open from URL and night reading in 1.3.0
+Folio has no accounts, analytics, or telemetry, and never uploads your documents. It makes network requests only to:
 
-- Drop a PDF link anywhere in Folio (for example, dragged from a browser's address bar or a page link), paste one with Ctrl+V outside a text field, or choose Open from URL (Ctrl+Shift+O). Folio downloads it and opens it automatically.
-- Downloads happen in the desktop app's main process, so links work regardless of the site's CORS policy. Redirects are followed, the file name comes from the server or the final URL, and links that aren't PDFs, fail, exceed 500 MB, or take longer than 60 seconds show a clear error while keeping the current document open.
-- Night reading remembers its last on/off setting across documents and app restarts, independently of the interface theme. The preference saves immediately when toggled.
+- check GitHub for updates (installed copies; can be turned off in **About Folio**), and
+- download a PDF from a link you give it.
 
-### Handwritten signatures in 1.2.0
+Stored locally in your Windows profile (`%APPDATA%\Folio`): recently opened PDFs and their thumbnails (up to 8,
+removable from the home screen with **Clear all**; password-protected PDFs are never kept), reading positions,
+preferences, and, only if you choose to remember it, your signature image. This data isn't encrypted, so anyone with
+access to your Windows account can read it.
 
-- About Folio includes an Automatic updates toggle, enabled by default and saved across restarts. Disabling stops background checks/downloads and installation on close; manual checks and explicitly restarting to update remain available. Updates run silently through the updater rather than the manually launched Setup wizard; Windows can still request elevation when required.
+## Building from source
 
-- Choose Sign to capture dark ink on white paper using your camera, or upload a PNG, JPEG, or WebP photo. Crop around the signature and adjust ink sensitivity to remove the paper background. Processing stays on this device; the camera stops after capture or closing the dialog.
-- Folio checks the current page for PDF signature widgets and possible signature labels after navigation settles. Suggestions never sign automatically: review the page preview and click Approve and add signature. Label detection is heuristic, not OCR; scanned pages still support manual placement.
-- Choose a detected field or click a position in the page preview. Signatures preserve their proportions and are embedded as visual PDF stamp annotations. Ctrl+Z undoes placement; Ctrl+S exports a copy, including on repeated saves. This does not create a cryptographic signature or fill a digital-signature certificate field. Editing may affect existing digital signatures; automatic suggestions are suppressed for documents with detected digital signatures.
-- Remembering a signature is optional. Saved signature images are stored unencrypted in the local app profile; Forget saved signature removes the reusable image, not signatures already added to documents or exported copies.
-
-### Responsiveness and updates in 1.1.1
-
-- Restart-to-update now runs the installer silently and relaunches Folio. Install-on-close was already silent. First-time manual installation still uses the setup wizard, and Windows may still request permission if elevation is needed.
-- The page sidebar only mounts thumbnails near its visible area, cancels discarded thumbnail rendering, and releases off-screen canvases instead of retaining one for every page.
-- Reading progress reuses a database connection and updates only the current recent-file record, without fetching and pruning the entire library on every page change.
-- Document controls become available without waiting for library thumbnail generation. Search snippets appear in batches without copying every match offset.
-- Reading-position writes are coalesced outside the scroll event path and flushed when leaving the app. Repeated zoom commands reuse the current page image before sharpening it after the input settles.
-
-### Reading features
-
-- Reopens the last active document at startup, unless a PDF was explicitly opened from Explorer. Returning to the library clears automatic reopening.
-- Remembers each recent document's page, position within the page, zoom, rotation, sidebar visibility, and two-page mode locally. Passwords and unsaved annotations are not saved in the reading session.
-- Shows matching-page snippets and match counts beneath Find. Click a result to jump to that page; Enter and Shift+Enter still navigate individual matches with all matches highlighted. Lists at most 100 matching pages to keep the panel responsive.
-- Adds About Folio in the toolbar with the running version, installed/portable/development edition, installation folder, and live update status. Installed builds can check for updates or restart to install a downloaded update.
-- Restores the desktop window's size, position, and maximized state, adjusting off-screen bounds when monitors change.
+Requires [Node.js](https://nodejs.org/) 22 or newer.
 
 ```sh
-npm run app        # build and run Folio as a desktop app
-npm run dist:win   # build release/Folio-Setup-<version>.exe and release/Folio-Portable-<version>.exe
+npm install
+npm run app        # build and run the desktop app
+npm run dist:win   # build release/Folio-Setup.exe and release/Folio-Portable.exe
+npm run dev        # browser version with hot reload at http://localhost:5173
 ```
 
-The desktop shell lives in `electron/` (Electron). It serves the built app from `dist/` over an `app://`
-protocol, opens PDFs passed on the command line or from Explorer ("Open with → Folio"), keeps a single
-window (opening another PDF reuses it), and asks before closing with unsaved annotations.
+If your terminal has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
 
-The builds are not code-signed, so Windows SmartScreen may warn on first run ("More info → Run anyway").
-If you run Electron from a terminal that has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
+### How it's put together
 
-## Releasing updates
+- `src/`: the reader UI (React + TypeScript, built with Vite) on top of [pdf.js](https://github.com/mozilla/pdf.js).
+- `electron/`: the Windows desktop shell. It serves the built app from `dist/` over a custom `app://` protocol with
+  a strict Content Security Policy, runs the page sandboxed with context isolation, opens PDFs passed from Explorer,
+  keeps a single window, downloads PDF links, and handles automatic updates.
+- `scripts/release.mjs`: the maintainer release script (see [CONTRIBUTING.md](CONTRIBUTING.md#releasing)).
 
-Installed copies of Folio check [mberman84/folio-releases](https://github.com/mberman84/folio-releases) on launch
-and every 4 hours, download new versions in the background, and install them when Folio closes (or right away
-via the "Restart" button). To ship an update, commit your changes and run:
+## Contributing
 
-```sh
-npm run release                                  # 1.0.0 -> 1.0.1
-npm run release -- minor --notes "What changed"  # 1.0.0 -> 1.1.0
-```
+Bug reports and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). To report a security issue
+privately, see [SECURITY.md](SECURITY.md).
 
-This bumps the version, builds the installers, uploads them to a new public release, and pushes the source
-(private repo [mberman84/folio](https://github.com/mberman84/folio)). Needs the GitHub CLI logged in (`gh auth login`).
+## License
 
-Install link (always the newest version):
-https://github.com/mberman84/folio-releases/releases/latest/download/Folio-Setup.exe
+[MIT](LICENSE). Folio includes third-party software under its own licenses; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

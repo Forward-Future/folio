@@ -14,6 +14,8 @@ export function loadPdf(data: Uint8Array, password?: string) {
     // pdf.js transfers the buffer to the worker, so hand it a copy and keep ours for saving/printing.
     data: data.slice(),
     password,
+    // PDFs are untrusted: don't render XFA forms (embedded PDF JavaScript is never run; no scripting manager).
+    enableXfa: false,
     cMapUrl: `${base}cmaps/`,
     cMapPacked: true,
     standardFontDataUrl: `${base}standard_fonts/`,

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listRecent, removeRecent, type RecentFile } from "./recent";
+import { clearRecent, listRecent, removeRecent, type RecentFile } from "./recent";
 import { Icon } from "./icons";
 import { formatBytes } from "./Dialogs";
 
@@ -108,7 +108,19 @@ export function Welcome({ onPick, onOpenUrl, onOpenBytes, onSample, loading }: P
 
         {recent.length > 0 && (
           <section className="recent">
-            <h3>Recent</h3>
+            <div className="recent-head">
+              <h3>Recent</h3>
+              <button
+                className="link"
+                onClick={async () => {
+                  if (!confirm("Remove all recent files from Folio? The original files aren't affected.")) return;
+                  await clearRecent();
+                  setRecent([]);
+                }}
+              >
+                Clear all
+              </button>
+            </div>
             <div className="recent-grid">
               {recent.map((f) => (
                 <div key={f.id} className="recent-card" onClick={() => reopen(f)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && reopen(f)}>

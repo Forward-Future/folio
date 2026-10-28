@@ -89,6 +89,14 @@ export async function updateLastPage(id: string, lastPage: number) {
   } catch {}
 }
 
+export async function clearRecent() {
+  try {
+    await tx("readwrite", (s) => s.clear());
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function removeRecent(id: string) {
   try {
     await tx("readwrite", (s) => s.delete(id));

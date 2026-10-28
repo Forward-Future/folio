@@ -277,7 +277,8 @@ export default function App() {
 
         setLoading(false);
         setActiveDocument(id);
-        void (async () => {
+        // Password-protected documents stay out of Recent: it would keep their bytes and a page-1 thumbnail unprotected on disk.
+        if (!password) void (async () => {
           const thumb = existing?.thumb ?? (await thumbnailDataUrl(pdf).catch(() => ""));
           if (generation !== openGeneration.current) return;
           await saveRecent({
@@ -360,7 +361,7 @@ export default function App() {
 
   const openSample = useCallback(async () => {
     const res = await fetch(`${import.meta.env.BASE_URL}sample.pdf`);
-    openBytes("TraceMonkey — Trace-based JIT.pdf", new Uint8Array(await res.arrayBuffer()));
+    openBytes("Folio sample.pdf", new Uint8Array(await res.arrayBuffer()));
   }, [openBytes]);
 
   const closeDoc = useCallback(() => {
