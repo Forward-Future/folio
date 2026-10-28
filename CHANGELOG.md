@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.0
+
+- **Drop a webpage, get a PDF.** Drop, paste, or enter (Ctrl+Shift+O) a link to any webpage and Folio converts it to a
+  PDF you can highlight, take notes on, and ask AI about, with the page's layout, images, and selectable text. PDF
+  links still open directly.
+
 ## 1.5.1
 
 - The sidebar keeps one width on every tab, so Pages, Outline, and Notes no longer change size when you switch between them.

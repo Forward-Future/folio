@@ -23,6 +23,10 @@ Folio opens untrusted PDFs, so it's built to keep a malicious document contained
   Content Security Policy. Only a small, validated set of calls into the main process is exposed, and only to Folio's
   own page.
 - Links inside PDFs open in your default browser; Folio never navigates its own window away from the app.
+- Webpages opened from a link are loaded in a separate hidden window: sandboxed, no Node.js or preload, a throwaway
+  in-memory session per page, every permission denied, pop-ups and downloads blocked, only http(s)/data/blob requests
+  allowed, no requests into local-network addresses when the page itself is public, and a 60-second limit. Only the
+  printed PDF reaches Folio.
 - Electron fuses disable `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, and inspector flags, and require app code to load
   from an integrity-checked archive.
 - Printing hands the document to Chromium's built-in PDF viewer.

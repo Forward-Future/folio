@@ -6,6 +6,7 @@ const { pathToFileURL } = require("node:url");
 const { isIP } = require("node:net");
 const { autoUpdater } = require("electron-updater");
 const ai = require("./ai.cjs");
+const { captureWebpage } = require("./webpage.cjs");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 
@@ -322,6 +323,11 @@ function downloadPdf(rawUrl) {
         return finish({ error: `The server responded with ${response.statusCode}${response.statusMessage ? " " + response.statusMessage : ""}.` });
       }
       const header = (key) => [].concat(response.headers[key] ?? [])[0];
+      // A webpage: stop downloading and let the caller render it to PDF instead.
+      if (/\b(text\/html|application\/xhtml\+xml)\b/i.test(header("content-type") ?? "")) {
+        request.abort();
+        return finish({ webpage: url.toString() });
+      }
       const tooBig = { error: "That PDF is larger than 300 MB." };
       if (Number(header("content-length")) > MAX_URL_PDF_BYTES) return finish(tooBig);
       const chunks = [];
@@ -334,7 +340,11 @@ function downloadPdf(rawUrl) {
       response.on("error", () => finish({ error: "The download was interrupted." }));
       response.on("end", () => {
         const data = Buffer.concat(chunks);
-        if (data.subarray(0, 1024).indexOf("%PDF-") < 0) return finish({ error: "That link doesn't point to a PDF." });
+        if (data.subarray(0, 1024).indexOf("%PDF-") < 0) {
+          // Some servers don't label HTML; recognize it by its start.
+          if (/^\s*(<!doctype html|<html|<head|<body)/i.test(data.subarray(0, 512).toString("latin1"))) return finish({ webpage: url.toString() });
+          return finish({ error: "That link isn't a PDF or a webpage." });
+        }
         finish({ name: pdfNameFromResponse(url, header("content-disposition")), data });
       });
     });
@@ -382,7 +392,11 @@ if (!app.requestSingleInstanceLock()) {
       if (file) setTimeout(() => sendFile(file), 0);
       return !!file;
     });
-    handle("folio:fetch-pdf", (_event, url) => downloadPdf(url));
+    // PDF links open directly; webpages are converted to a PDF first.
+    handle("folio:fetch-pdf", async (_event, url) => {
+      const result = await downloadPdf(url);
+      return result.webpage ? captureWebpage(result.webpage, isLocalHost) : result;
+    });
     handle("folio:version", () => app.getVersion());
     handle("folio:app-info", () => ({ version: app.getVersion(),
       mode: !app.isPackaged ? "development" : process.env.PORTABLE_EXECUTABLE_FILE ? "portable" : "installed",

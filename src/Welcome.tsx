@@ -92,7 +92,7 @@ export function Welcome({ onPick, onOpenUrl, onOpenBytes, onSample, loading }: P
           </div>
           <div className="dropzone-text">
             <strong>{loading ? "Opening…" : "Open a PDF"}</strong>
-            <span>Drop a file or PDF link anywhere, or click to browse</span>
+            <span>Drop a PDF, a link, or a webpage anywhere, or click to browse</span>
           </div>
           <kbd>Ctrl O</kbd>
         </button>

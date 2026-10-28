@@ -211,8 +211,8 @@ export function OpenUrlDialog({ onSubmit, onClose }: { onSubmit: (url: string) =
           if (url) onSubmit(url);
         }}
       >
-        <p>Paste a link to a PDF. Folio downloads it and opens it here. You can also drop or paste a PDF link anywhere in Folio.</p>
-        <input type="url" autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder="https://example.com/document.pdf" aria-label="PDF URL" />
+        <p>Paste a link to a PDF or a webpage. Webpages become a PDF you can highlight and mark up. You can also drop or paste a link anywhere in Folio.</p>
+        <input type="url" autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder="https://example.com/article" aria-label="PDF URL" />
         {value.trim() && !url && <p className="form-error">Enter an http:// or https:// address.</p>}
         <div className="form-actions">
           <button type="button" className="btn ghost" onClick={onClose}>

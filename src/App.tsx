@@ -366,7 +366,7 @@ export default function App() {
       const host = new URL(url).hostname;
       setLoading(true);
       setError(null);
-      setToast(`Downloading from ${host}…`);
+      setToast(`Opening ${host}…`);
       try {
         let file: { name: string; data: Uint8Array };
         if (window.folioDesktop) {

@@ -19,11 +19,12 @@ Requires 64-bit Windows 10 or 11.
   per-page result snippets, zoom (fit width, fit page, presets, Ctrl+wheel/pinch), two-page view, rotate, focus mode
   (F; Esc to exit), light and dark themes, and night reading that dims bright pages while keeping images in their true
   colors.
-- **Opening:** drag in a PDF, open from Windows Explorer ("Open with → Folio"), or drop, paste, or enter a link to a
-  PDF on the web (Ctrl+Shift+O).
+- **Opening:** drag in a PDF, open from Windows Explorer ("Open with → Folio"), or drop, paste, or enter a link
+  (Ctrl+Shift+O). PDF links open directly; **webpages are converted to a PDF** you can highlight, annotate, and ask AI
+  about, with their layout, images, and selectable text.
 - **Highlights and notes:** select text and click a color (or press H) to highlight it, or type a note in the box that
-  appears under the colors and press Enter. Click any highlight to recolor it, edit its note, or remove it. The Notes tab lists every highlight with its note, plus a notes box for the whole document, and copies them all
-  as Markdown. Everything saves automatically and comes back when you reopen the file. Ctrl+S saves a PDF copy with
+  appears under the colors and press Enter. Click any highlight to recolor it, edit its note, or remove it. The Notes
+  tab lists every highlight with its note, plus a notes box for the whole document, and copies them all as Markdown. Everything saves automatically and comes back when you reopen the file. Ctrl+S saves a PDF copy with
   highlights and notes embedded as standard PDF annotations. Freehand drawing and text boxes are there too.
 - **Ask AI:** ask questions about the whole document, or select a passage and ask about just that part. Answers cite
   clickable page numbers. Uses your own ChatGPT plan (Sign in with ChatGPT) or your Claude subscription through
@@ -53,7 +54,9 @@ Folio has no accounts, analytics, or telemetry, and never uploads your documents
 only to:
 
 - check GitHub for updates (installed copies; can be turned off in **About Folio**),
-- download a PDF from a link you give it, and
+- open a link you give it (a webpage is loaded in a hidden, sandboxed window with its own temporary session, so no
+  cookies or sign-ins are shared, and every permission is denied; its scripts run while it loads, as in any browser,
+  and it's then printed to PDF), and
 - answer a question you ask in **Ask AI**. Only then, the document's text (up to about 400,000 characters), any passage
   you selected, and the conversation go to the provider you chose: OpenAI for ChatGPT, or Anthropic through your
   installed Claude Code. Their privacy terms apply to that data.
