@@ -18,7 +18,8 @@ import { Sidebar, type SidebarTab } from "./Sidebar";
 import { MarkupController, type Mark, type MarkupState } from "./markup";
 import { HighlightMenu, NoteBox, SelectionPopover, useTextSelection, type SelectionInfo } from "./Selection";
 import { NotesPanel } from "./NotesPanel";
-import { trackPageImages } from "./nightImages";
+import { imageRegions, trackPageImages } from "./nightImages";
+import { ImageMenu, ImageViewer, type ImageTarget } from "./ImageViewer";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { AiPanel, type AiContext } from "./AiPanel";
 import { ZoomMenu } from "./ZoomMenu";
@@ -144,6 +145,8 @@ export default function App() {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const [pinned, setPinned] = useState<SelectionInfo | null>(null);
   const [highlightMenu, setHighlightMenu] = useState<{ id: string; rect: { left: number; top: number; right: number; bottom: number } } | null>(null);
+  const [imageMenu, setImageMenu] = useState<{ target: ImageTarget; x: number; y: number } | null>(null);
+  const [imageView, setImageView] = useState<ImageTarget | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiContext, setAiContext] = useState<AiContext | null>(null);
 
@@ -533,6 +536,50 @@ export default function App() {
     };
   }, [container]);
   useEffect(() => setHighlightMenu(null), [doc, scale, tool]);
+
+  // Clicking an image offers "View larger" and, when it has a web address, "Open in browser".
+  useEffect(() => {
+    if (!container) return;
+    const onClick = (e: MouseEvent) => {
+      setImageMenu(null);
+      if (toolRef.current !== "select" || e.button !== 0) return;
+      const current = document.getSelection();
+      if (current && !current.isCollapsed) return;
+      if (markupRef.current?.markAt(e.clientX, e.clientY)) return; // highlights take precedence
+      const pageEl = (e.target as HTMLElement).closest<HTMLElement>(".page");
+      const pageNumber = Number(pageEl?.dataset.pageNumber);
+      const view = pageNumber ? (viewerRef.current?.getPageView(pageNumber - 1) as unknown as
+        { pdfPage?: { imageCoordinates?: ArrayLike<number> | null }; viewport?: { rotation: number } } | undefined) : undefined;
+      const surface = pageEl?.querySelector(".canvasWrapper");
+      if (!view?.pdfPage || !view.viewport || !surface) return;
+      const box = surface.getBoundingClientRect();
+      const x = (e.clientX - box.left) / box.width;
+      const y = (e.clientY - box.top) / box.height;
+      const hits = imageRegions(view.pdfPage, view.viewport.rotation).filter((r) => {
+        const w = (r.right - r.left) * box.width;
+        const h = (r.bottom - r.top) * box.height;
+        // Skip tiny icons and full-page images (scanned pages), where a menu would just get in the way.
+        return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom && w >= 40 && h >= 40 && (r.right - r.left) * (r.bottom - r.top) < 0.85;
+      });
+      if (!hits.length) return;
+      const region = hits.reduce((a, b) => ((a.right - a.left) * (a.bottom - a.top) <= (b.right - b.left) * (b.bottom - b.top) ? a : b));
+      const link = document.elementsFromPoint(e.clientX, e.clientY)
+        .find((el): el is HTMLAnchorElement => el instanceof HTMLAnchorElement && /^https?:/i.test(el.href) && !!el.closest(".annotationLayer"));
+      e.preventDefault();
+      e.stopPropagation();
+      setHighlightMenu(null);
+      const stage = container.parentElement!.getBoundingClientRect();
+      setImageMenu({ target: { pageNumber, region, rotation: view.viewport.rotation, href: link?.href ?? null }, x: e.clientX - stage.left, y: e.clientY - stage.top });
+    };
+    const onScroll = () => setImageMenu(null);
+    container.addEventListener("click", onClick, true);
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      container.removeEventListener("click", onClick, true);
+      container.removeEventListener("scroll", onScroll);
+    };
+  }, [container]);
+  useEffect(() => { setImageMenu(null); setImageView(null); }, [doc]);
   const menuMark = highlightMenu ? markup.marks.find((m) => m.id === highlightMenu.id) : undefined;
 
   const removeHighlight = (id: string) => {
@@ -1061,6 +1108,16 @@ export default function App() {
               onDismiss={dismissSelection}
             />
           )}
+          {imageMenu && (
+            <ImageMenu
+              x={imageMenu.x}
+              y={imageMenu.y}
+              stageWidth={stageWidth}
+              href={imageMenu.target.href}
+              onView={() => { setImageView(imageMenu.target); setImageMenu(null); }}
+              onOpen={() => { window.open(imageMenu.target.href!, "_blank", "noopener"); setImageMenu(null); }}
+            />
+          )}
           {highlightMenu && menuMark && !noteBox && (
             <HighlightMenu
               rect={highlightMenu.rect}
@@ -1134,6 +1191,7 @@ export default function App() {
       {dialog === "info" && doc && <InfoDialog pdf={doc.pdf} name={doc.name} size={doc.data.byteLength} onClose={() => setDialog(null)} />}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} />}
+      {doc && imageView && <ImageViewer pdf={doc.pdf} target={imageView} onClose={() => setImageView(null)} />}
       {dialog === "url" && <OpenUrlDialog onClose={() => setDialog(null)} onSubmit={(url) => { setDialog(null); openUrl(url); }} />}
       {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}
         onClose={() => setSigning(false)} onApprove={async (signature, rect) => {

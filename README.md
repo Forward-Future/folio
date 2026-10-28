@@ -21,7 +21,8 @@ Requires 64-bit Windows 10 or 11.
   colors.
 - **Opening:** drag in a PDF, open from Windows Explorer ("Open with → Folio"), or drop, paste, or enter a link
   (Ctrl+Shift+O). PDF links open directly; **webpages are converted to a PDF** you can highlight, annotate, and ask AI
-  about, with their layout, images, and selectable text.
+  about, keeping the site's on-screen look (backgrounds, transparency, colors, and layout) and selectable text.
+- **Images:** click an image to view it larger in Folio, or open it in your browser when it has a web address.
 - **Highlights and notes:** select text and click a color (or press H) to highlight it, or type a note in the box that
   appears under the colors and press Enter. Click any highlight to recolor it, edit its note, or remove it. The Notes
   tab lists every highlight with its note, plus a notes box for the whole document, and copies them all as Markdown. Everything saves automatically and comes back when you reopen the file. Ctrl+S saves a PDF copy with

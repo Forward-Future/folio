@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.0
+
+- **Webpages look like the real site.** Converted pages keep their on-screen design (backgrounds, translucent and
+  see-through panels, transparent images, and colors) instead of the site's print styles, at desktop width with no
+  margins. Fade-in effects are captured finished, and sticky headers appear once instead of on every page.
+- **Click an image** to **View larger** in a full-window viewer (sharp, with actual size and copy) or **Open in
+  browser** when it has a web address. Images on converted webpages link to their original address.
+
 ## 1.6.0
 
 - **Drop a webpage, get a PDF.** Drop, paste, or enter (Ctrl+Shift+O) a link to any webpage and Folio converts it to a
