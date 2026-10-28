@@ -35,4 +35,20 @@ contextBridge.exposeInMainWorld("folioDesktop", {
   checkForUpdates: () => ipcRenderer.send("folio:check-update"),
   getAutoUpdateEnabled: () => ipcRenderer.invoke("folio:auto-update-setting"),
   setAutoUpdateEnabled: (enabled) => ipcRenderer.invoke("folio:set-auto-update-setting", enabled),
+  ai: {
+    status: () => ipcRenderer.invoke("folio:ai-status"),
+    signInChatGPT: () => ipcRenderer.invoke("folio:ai-chatgpt-signin"),
+    signOutChatGPT: () => ipcRenderer.invoke("folio:ai-chatgpt-signout"),
+    chatgptWelcomeSeen: () => ipcRenderer.invoke("folio:ai-chatgpt-welcome-seen"),
+    chatgptModels: () => ipcRenderer.invoke("folio:ai-chatgpt-models"),
+    recheckClaude: () => ipcRenderer.invoke("folio:ai-claude-recheck"),
+    ask: (request) => ipcRenderer.invoke("folio:ai-ask", request),
+    cancel: (id) => ipcRenderer.invoke("folio:ai-cancel", id),
+    /** Called with { id, type: "delta" | "done" | "error", text?, message?, code?, link? } for every answer. */
+    onEvent(callback) {
+      const listener = (_e, event) => callback(event);
+      ipcRenderer.on("folio:ai-event", listener);
+      return () => ipcRenderer.removeListener("folio:ai-event", listener);
+    },
+  },
 });

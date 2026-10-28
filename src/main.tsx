@@ -2,6 +2,7 @@ import "./pdfjs-global";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./styles.css";
+import "./reading-tools.css";
 
 if (window.folioDesktop) document.documentElement.classList.add("desktop");
 

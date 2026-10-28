@@ -148,6 +148,8 @@ export function InfoDialog({ pdf, name, size, onClose }: { pdf: PDFDocumentProxy
 const SHORTCUTS: [string, string][] = [
   ["Open file", "Ctrl O"],
   ["Open from URL", "Ctrl Shift O"],
+  ["Highlight selection", "H"],
+  ["Highlight with a note", "N"],
   ["Find", "Ctrl F"],
   ["Save / download", "Ctrl S"],
   ["Print", "Ctrl P"],

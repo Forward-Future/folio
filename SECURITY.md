@@ -26,6 +26,11 @@ Folio opens untrusted PDFs, so it's built to keep a malicious document contained
 - Electron fuses disable `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, and inspector flags, and require app code to load
   from an integrity-checked archive.
 - Printing hands the document to Chromium's built-in PDF viewer.
+- **Ask AI** runs entirely in the main process. ChatGPT uses OpenAI's Sign in with ChatGPT (OAuth 2.0 with PKCE, a
+  loopback redirect on `127.0.0.1`, state and nonce checks, and ID-token signature verification). Tokens are encrypted
+  with Electron `safeStorage` (Windows DPAPI) and never reach the page. Claude runs the user's own, unmodified Claude
+  Code CLI with all tools, MCP servers, settings, and slash commands disabled, in an empty temporary folder; Folio never
+  handles Claude credentials. Document text goes to the chosen provider only when the user asks a question.
 
 Known limitations:
 

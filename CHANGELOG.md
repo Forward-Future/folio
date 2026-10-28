@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0
+
+- **Highlights and notes are first-class.** Select text and a toolbar pops up: click a color to highlight in one click
+  (or press H), or choose Note (N) to highlight and write a note. Highlights, notes, drawings, and text boxes now save
+  automatically and come back when you reopen a document.
+- New **Notes** tab: every highlight with its note (click one to jump to it), a notes box for the whole document, and
+  Copy all as Markdown.
+- **Ask AI** about the whole document or a selected passage, with clickable page citations. Connect your ChatGPT plan
+  with Sign in with ChatGPT, or use your Claude subscription through Claude Code. No API keys needed.
+- Focus mode shows a discreet "Esc to exit focus mode" hint.
+
 ## 1.3.2
 
 - Folio now lives in the Forward Future GitHub organization: source at github.com/Forward-Future/folio, downloads and

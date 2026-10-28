@@ -13,14 +13,19 @@ export interface RecentFile {
 
 const DB_NAME = "folio";
 const STORE = "recent";
+const NOTES = "notes";
 const MAX_RECENT = 8;
 let connection: Promise<IDBDatabase> | null = null;
 
 function open(): Promise<IDBDatabase> {
   if (connection) return connection;
   connection = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: "id" });
+    const req = indexedDB.open(DB_NAME, 2);
+    req.onupgradeneeded = () => {
+      const database = req.result;
+      if (!database.objectStoreNames.contains(STORE)) database.createObjectStore(STORE, { keyPath: "id" });
+      if (!database.objectStoreNames.contains(NOTES)) database.createObjectStore(NOTES, { keyPath: "id" });
+    };
     req.onsuccess = () => {
       const database = req.result;
       database.onversionchange = () => { database.close(); connection = null; };
@@ -32,11 +37,11 @@ function open(): Promise<IDBDatabase> {
   return connection;
 }
 
-async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>, store = STORE): Promise<T> {
   const db = await open();
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE, mode);
-    const req = fn(transaction.objectStore(STORE));
+    const transaction = db.transaction(store, mode);
+    const req = fn(transaction.objectStore(store));
     transaction.oncomplete = () => resolve(req.result);
     transaction.onabort = () => reject(transaction.error);
     req.onerror = () => reject(req.error);
@@ -44,6 +49,19 @@ async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBReq
 }
 
 export const fileId = (name: string, size: number) => `${name}:${size}`;
+
+/** Identifies a PDF by its content: SHA-256 of the first and last megabyte plus its size (fast even for huge files). */
+export async function contentKey(data: Uint8Array) {
+  const chunk = 1 << 20;
+  let sample: Uint8Array = data;
+  if (data.byteLength > 2 * chunk) {
+    sample = new Uint8Array(2 * chunk);
+    sample.set(data.subarray(0, chunk));
+    sample.set(data.subarray(data.byteLength - chunk), chunk);
+  }
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", sample.slice()));
+  return "sha256:" + Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("") + ":" + data.byteLength;
+}
 
 export async function listRecent(): Promise<RecentFile[]> {
   try {
@@ -102,5 +120,44 @@ export async function removeRecent(id: string) {
     await tx("readwrite", (s) => s.delete(id));
   } catch {
     /* ignore */
+  }
+}
+
+// ── Highlights and notes ──────────────────────────────────────────────
+// Saved per document (same id as Recent) so markup survives closing Folio.
+
+export interface StoredMark {
+  id: string;
+  type: "highlight" | "ink" | "freetext";
+  page: number; // 0-based
+  text: string;
+  note: string;
+  color: string;
+  createdAt: number;
+  /** pdf.js editor serialization, used to recreate the mark. */
+  data: Record<string, unknown>;
+}
+
+export interface DocNotes {
+  id: string;
+  note: string;
+  marks: StoredMark[];
+  updatedAt: number;
+}
+
+export async function getNotes(id: string): Promise<DocNotes | undefined> {
+  try {
+    return await tx<DocNotes | undefined>("readonly", (s) => s.get(id), NOTES);
+  } catch {
+    return undefined;
+  }
+}
+
+export async function saveNotes(notes: DocNotes) {
+  try {
+    if (!notes.note.trim() && notes.marks.length === 0) await tx("readwrite", (s) => s.delete(notes.id), NOTES);
+    else await tx("readwrite", (s) => s.put(notes), NOTES);
+  } catch {
+    /* best-effort, like Recent */
   }
 }

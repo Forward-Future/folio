@@ -9,12 +9,16 @@ import {
 } from "./viewer";
 import { AnnotationEditorParamsType, AnnotationEditorType } from "pdfjs-dist";
 import { loadPdf, thumbnailDataUrl, type PDFDocumentProxy } from "./pdf";
-import { fileId, getRecent, saveRecent, updateLastPage } from "./recent";
+import { contentKey, fileId, getRecent, saveRecent, updateLastPage } from "./recent";
 import { activeDocument, readView, setActiveDocument, writeView, type ReadingView } from "./session";
 import { SearchResults } from "./SearchResults";
 import { Icon, type IconName } from "./icons";
 import { Welcome } from "./Welcome";
-import { Sidebar } from "./Sidebar";
+import { Sidebar, type SidebarTab } from "./Sidebar";
+import { MarkupController, type Mark, type MarkupState } from "./markup";
+import { NoteBox, SelectionPopover, useTextSelection } from "./Selection";
+import { NotesPanel } from "./NotesPanel";
+import { AiPanel, type AiContext } from "./AiPanel";
 import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
 import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
@@ -63,6 +67,8 @@ const COLOR_PARAM: Partial<Record<Tool, number>> = {
 
 interface OpenDoc {
   id: string;
+  /** Content-based key for highlights, notes, and AI conversations (two files can share a name and size). */
+  key: string;
   name: string;
   data: Uint8Array;
   pdf: PDFDocumentProxy;
@@ -87,6 +93,8 @@ export default function App() {
   const openGeneration = useRef(0);
   const lastPageRef = useRef<number>(1);
   const docRef = useRef<OpenDoc | null>(null);
+  const markupRef = useRef<MarkupController | null>(null);
+  const persistRef = useRef(false);
 
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const [loading, setLoading] = useState(false);
@@ -127,6 +135,13 @@ export default function App() {
   const [signing, setSigning] = useState(false);
   const [signatureTargets, setSignatureTargets] = useState<SignatureTarget[]>([]);
   const [signatureDismissed, setSignatureDismissed] = useState(false);
+  const [markup, setMarkup] = useState<MarkupState>({ marks: [], note: "" });
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("pages");
+  const [noteBox, setNoteBox] = useState<{ markId: string; anchor: { x: number; top: number; bottom: number }; quote: string; initial: string } | null>(null);
+  const [stageWidth, setStageWidth] = useState(800);
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiContext, setAiContext] = useState<AiContext | null>(null);
 
   useEffect(() => {
     setSigning(false); setSignatureTargets([]); setSignatureDismissed(false);
@@ -167,6 +182,7 @@ export default function App() {
     });
     linkService.setViewer(viewer);
     viewerRef.current = viewer;
+    markupRef.current = new MarkupController(eventBus, viewer, setMarkup);
     busRef.current = eventBus;
     linkRef.current = linkService;
 
@@ -205,6 +221,8 @@ export default function App() {
         setFind({ ...matchesCount, state }),
     );
     eventBus.on("annotationeditormodechanged", ({ mode }: { mode: number }) => {
+      // One-click highlights pass through highlight mode; the reader stays in Select.
+      if (markupRef.current?.quickHighlighting) return;
       const entry = Object.entries(TOOL_MODES).find(([, m]) => m === mode);
       const next = entry ? (entry[0] as Tool) : "select";
       setTool(next);
@@ -239,6 +257,7 @@ export default function App() {
       try {
         const pdf = await loadPdf(data, password).promise;
         const id = fileId(name, data.byteLength);
+        const key = await contentKey(data);
         const existing = await getRecent(id);
         if (generation !== openGeneration.current) {
           void pdf.loadingTask.destroy();
@@ -255,15 +274,21 @@ export default function App() {
         }
 
         const prev = docRef.current;
-        docRef.current = { id, name, data, pdf };
+        docRef.current = { id, key, name, data, pdf };
+        // Password-protected documents aren't stored by Folio (same rule as Recent).
+        persistRef.current = !password;
+        void markupRef.current!.load(key, !password);
+        setNoteBox(null);
+        setAiContext(null);
         viewer.setDocument(pdf);
         linkRef.current!.setDocument(pdf, null);
         prev?.pdf.loadingTask.destroy();
 
-        (pdf.annotationStorage as { onSetModified: unknown }).onSetModified = () => setDirty(true);
+        // Markup is saved automatically; only documents Folio can't store count as having unsaved changes.
+        (pdf.annotationStorage as { onSetModified: unknown }).onSetModified = () => { if (!persistRef.current) setDirty(true); };
         (pdf.annotationStorage as { onResetModified: unknown }).onResetModified = () => setDirty(false);
 
-        setDoc({ id, name, data, pdf });
+        setDoc({ id, key, name, data, pdf });
         setNumPages(pdf.numPages);
         setPage(lastPageRef.current);
         setPageInput(String(lastPageRef.current));
@@ -368,6 +393,8 @@ export default function App() {
     if (dirty && !confirm("You have unsaved annotations. Close anyway?")) return;
     openGeneration.current++;
     setActiveDocument(null);
+    markupRef.current!.unload();
+    setNoteBox(null);
     setLoading(false);
     setPending(null);
     viewerRef.current!.setDocument(null as unknown as PDFDocumentProxy);
@@ -440,6 +467,80 @@ export default function App() {
     if (param) busRef.current!.dispatch("switchannotationeditorparams", { source: null, type: param, value: hex });
   };
 
+  // ── Highlights and notes ────────────────────────────────────────────
+  const selection = useTextSelection(container, !!doc && tool === "select" && !signing && !noteBox);
+  const highlightColor = colors.highlight ?? HIGHLIGHTS[0].hex;
+
+  const quickHighlight = async (hex: string, withNote = false) => {
+    const info = selection;
+    if (!info) return;
+    setColors((c) => ({ ...c, highlight: hex }));
+    const id = await markupRef.current!.highlightSelection(hex);
+    if (!id) {
+      flash("Couldn't highlight that selection");
+      return;
+    }
+    if (withNote) setNoteBox({ markId: id, anchor: info, quote: info.text, initial: "" });
+  };
+
+  const askAbout = (text: string, pageNumber: number) => {
+    setAiContext({ text, page: pageNumber });
+    setAiOpen(true);
+    document.getSelection()?.removeAllRanges();
+  };
+
+  const toggleNotes = () => {
+    if (sidebar && sidebarTab === "notes") setSidebar(false);
+    else {
+      setSidebar(true);
+      setSidebarTab("notes");
+    }
+  };
+
+  useEffect(() => setContainer(containerRef.current), []);
+  // Panels change the space the page has: re-fit "auto"/"fit" zoom once they finish sliding.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const v = viewerRef.current;
+      if (v?.pdfDocument && ["auto", "page-width", "page-fit"].includes(v.currentScaleValue)) v.currentScaleValue = v.currentScaleValue;
+    }, 280);
+    return () => window.clearTimeout(timer);
+  }, [aiOpen, sidebar, sidebarTab]);
+  useEffect(() => {
+    const stage = container?.parentElement;
+    if (!stage) return;
+    const observer = new ResizeObserver(() => setStageWidth(stage.clientWidth));
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, [container]);
+
+  // pdf.js shows a small note button on highlights that have a note; open Folio's note box from it.
+  useEffect(() => {
+    if (!container) return;
+    const onClick = (e: MouseEvent) => {
+      const button = (e.target as HTMLElement).closest(".annotationCommentButton");
+      const editorDiv = button?.parentElement?.closest<HTMLElement>("[id]");
+      const markId = editorDiv && markupRef.current?.markForEditorId(editorDiv.id);
+      if (!button || !markId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const mark = markupRef.current!.state.marks.find((m) => m.id === markId);
+      const stage = container.parentElement!.getBoundingClientRect();
+      const r = button.getBoundingClientRect();
+      setNoteBox({ markId, anchor: { x: r.left + r.width / 2 - stage.left, top: r.top - stage.top, bottom: r.bottom - stage.top },
+        quote: mark?.text ?? "", initial: mark?.note ?? "" });
+    };
+    container.addEventListener("click", onClick, true);
+    return () => container.removeEventListener("click", onClick, true);
+  }, [container]);
+
+  // Save notes and highlights before the window goes away.
+  useEffect(() => {
+    const flush = () => markupRef.current?.flush();
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
+
   const currentBytes = async () => {
     if (!doc) return null;
     return doc.pdf.annotationStorage.size > 0 ? await doc.pdf.saveDocument() : doc.data;
@@ -454,7 +555,7 @@ export default function App() {
     a.download = doc.name.toLowerCase().endsWith(".pdf") ? doc.name : `${doc.name}.pdf`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    flash(dirty ? "Saved a copy with your annotations" : "Download started");
+    flash(doc.pdf.annotationStorage.size > 0 ? "Saved a copy with your highlights and notes" : "Download started");
   };
 
   const print = async () => {
@@ -594,8 +695,12 @@ export default function App() {
         setSidebar((s) => !s);
       } else if (typing || mod || e.altKey) {
         return;
+      } else if (selection && tool === "select" && /^[hn]$/i.test(e.key)) {
+        e.preventDefault();
+        void quickHighlight(highlightColor, e.key.toLowerCase() === "n");
       } else if (e.key === "Escape") {
-        if (dialog) setDialog(null);
+        if (noteBox) setNoteBox(null);
+        else if (dialog) setDialog(null);
         else if (searchOpen) setSearchOpen(false);
         else if (tool !== "select") chooseTool("select");
         else if (focus) toggleFocus();
@@ -751,6 +856,8 @@ export default function App() {
           <IconButton icon="info" label="About Folio" onClick={() => setDialog("about")} />
           {doc && (
             <>
+              <IconButton icon="note" label="Highlights and notes" active={sidebar && sidebarTab === "notes"} onClick={toggleNotes} />
+              <IconButton icon="sparkle" label="Ask AI" active={aiOpen} onClick={() => setAiOpen(!aiOpen)} />
               <IconButton icon="search" label="Search (Ctrl+F)" active={searchOpen} onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))} />
               <IconButton icon="print" label="Print (Ctrl+P)" className="wide-only" onClick={print} />
               <IconButton icon="download" label={dirty ? "Save copy with annotations (Ctrl+S)" : "Download (Ctrl+S)"} onClick={download} />
@@ -776,6 +883,21 @@ export default function App() {
             rotation={rotation}
             onSelectPage={goTo}
             onSelectDest={(dest) => linkRef.current!.goToDestination(dest as string)}
+            tab={sidebarTab}
+            onTab={setSidebarTab}
+            noteCount={markup.marks.filter((m) => m.type === "highlight").length}
+            notes={
+              <NotesPanel
+                state={markup}
+                docName={doc.name}
+                persisted={persistRef.current}
+                onReveal={(id) => markupRef.current!.reveal(id)}
+                onNote={(id, note) => markupRef.current!.setNote(id, note)}
+                onRemove={(id) => markupRef.current!.remove(id)}
+                onDocNote={(note) => markupRef.current!.setDocNote(note)}
+                onAsk={(mark: Mark) => askAbout(mark.text, mark.page + 1)}
+              />
+            }
           />
         )}
 
@@ -855,12 +977,47 @@ export default function App() {
             </div>
           )}
 
+          {selection && !noteBox && (
+            <SelectionPopover
+              info={selection}
+              stageWidth={stageWidth}
+              colors={HIGHLIGHTS}
+              current={highlightColor}
+              onHighlight={(hex) => void quickHighlight(hex)}
+              onNote={() => void quickHighlight(highlightColor, true)}
+              onAsk={() => askAbout(selection.text, selection.page)}
+            />
+          )}
+          {noteBox && (
+            <NoteBox
+              key={noteBox.markId}
+              anchor={noteBox.anchor}
+              stageWidth={stageWidth}
+              quote={noteBox.quote}
+              initial={noteBox.initial}
+              onSave={(note) => markupRef.current!.setNote(noteBox.markId, note)}
+              onClose={() => setNoteBox(null)}
+            />
+          )}
+
           {focus && (
-            <button className="exit-focus" onClick={toggleFocus}>
-              <Icon name="close" size={14} /> Exit focus
+            <button className="exit-focus" onClick={toggleFocus} title="Exit focus mode">
+              <kbd>Esc</kbd> to exit focus mode
             </button>
           )}
         </main>
+
+        {doc && aiOpen && !focus && (
+          <AiPanel
+            pdf={doc.pdf}
+            docId={doc.key}
+            docName={doc.name}
+            context={aiContext}
+            onClearContext={() => setAiContext(null)}
+            onGoToPage={goTo}
+            onClose={() => setAiOpen(false)}
+          />
+        )}
       </div>
 
       {!doc && <Welcome onPick={pickFile} onOpenUrl={() => setDialog("url")} onOpenBytes={openBytes} onSample={openSample} loading={loading} />}

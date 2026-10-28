@@ -786,27 +786,36 @@ kbd {
 .app[data-focus] .pill:focus-within {
   opacity: 1;
 }
+/* Always on screen in focus mode, but quiet until pointed at. */
 .exit-focus {
   position: absolute;
-  top: 14px;
-  right: 18px;
+  top: 12px;
+  right: 16px;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 12px;
-  border-radius: 10px;
-  font-size: 12.5px;
-  font-weight: 550;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 520;
   color: var(--text-2);
-  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
   backdrop-filter: blur(12px);
-  box-shadow: var(--shadow-md);
-  opacity: 0;
-  transition: opacity 0.3s;
+  opacity: 0.55;
+  transition: opacity 0.25s, box-shadow 0.25s;
   z-index: 10;
 }
-.stage:hover .exit-focus {
-  opacity: 0.85;
+.exit-focus:hover,
+.exit-focus:focus-visible {
+  opacity: 1;
+  box-shadow: var(--shadow-md);
+}
+.exit-focus kbd {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong);
 }
 
 /* ── Welcome ────────────────────────────────────────────────────────── */

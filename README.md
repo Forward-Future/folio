@@ -18,8 +18,13 @@ Installed copies update themselves. Prefer not to install? Download **Folio-Port
   light and dark themes, and night reading that dims bright pages.
 - **Opening:** drag in a PDF, open from Windows Explorer ("Open with → Folio"), or drop, paste, or enter a link to a
   PDF on the web (Ctrl+Shift+O).
-- **Marking up:** highlight, freehand draw, and text boxes with color palettes and undo. Ctrl+S saves a copy with
-  annotations embedded as standard PDF annotations.
+- **Highlights and notes:** select text and click a color (or press H) to highlight it; choose Note (N) to attach a
+  note. The Notes tab lists every highlight with its note, plus a notes box for the whole document, and copies them all
+  as Markdown. Everything saves automatically and comes back when you reopen the file. Ctrl+S saves a PDF copy with
+  highlights and notes embedded as standard PDF annotations. Freehand drawing and text boxes are there too.
+- **Ask AI:** ask questions about the whole document, or select a passage and ask about just that part. Answers cite
+  clickable page numbers. Uses your own ChatGPT plan (Sign in with ChatGPT) or your Claude subscription through
+  [Claude Code](https://claude.com/claude-code); no API keys needed.
 - **Signing:** add a handwritten signature captured with your camera or from a photo, placed on signature lines Folio
   detects or anywhere you choose. These are visual signatures, not cryptographic certificates.
 - **Library:** recent files with thumbnails, each reopening where you left off.
@@ -28,14 +33,23 @@ Press `?` in the app for keyboard shortcuts.
 
 ## Privacy
 
-Folio has no accounts, analytics, or telemetry, and never uploads your documents. It makes network requests only to:
+Folio has no accounts, analytics, or telemetry, and never uploads your documents on its own. It makes network requests
+only to:
 
-- check GitHub for updates (installed copies; can be turned off in **About Folio**), and
-- download a PDF from a link you give it.
+- check GitHub for updates (installed copies; can be turned off in **About Folio**),
+- download a PDF from a link you give it, and
+- answer a question you ask in **Ask AI**. Only then, the document's text (up to about 400,000 characters), any passage
+  you selected, and the conversation go to the provider you chose: OpenAI for ChatGPT, or Anthropic through your
+  installed Claude Code. Their privacy terms apply to that data.
+
+For ChatGPT, Folio stores its sign-in tokens encrypted with Windows' per-user data protection and never shows them to
+the page. For Claude, Folio runs your own Claude Code with every tool disabled; it never sees or stores your Claude
+credentials.
 
 Stored locally in your Windows profile (`%APPDATA%\Folio`): recently opened PDFs and their thumbnails (up to 8,
-removable from the home screen with **Clear all**; password-protected PDFs are never kept), reading positions,
-preferences, and, only if you choose to remember it, your signature image. This data isn't encrypted, so anyone with
+removable from the home screen with **Clear all**; password-protected PDFs are never kept), highlights and
+notes for each document (except password-protected ones), reading positions, preferences, and, only if you choose to
+remember it, your signature image. This data isn't encrypted, so anyone with
 access to your Windows account can read it.
 
 ## Building from source

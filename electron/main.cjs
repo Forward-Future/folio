@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const { pathToFileURL } = require("node:url");
 const { isIP } = require("node:net");
 const { autoUpdater } = require("electron-updater");
+const ai = require("./ai.cjs");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 
@@ -372,6 +373,8 @@ if (!app.requestSingleInstanceLock()) {
     const on = (channel, listener) => ipcMain.on(channel, (event, ...args) => {
       if (isTrustedSender(event)) listener(event, ...args);
     });
+
+    ai.register(handle, (channel, payload) => win?.webContents.send(channel, payload));
 
     handle("folio:ready", () => {
       const file = pendingFile;

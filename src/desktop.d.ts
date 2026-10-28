@@ -21,6 +21,38 @@ interface FolioDesktop {
   checkForUpdates(): void;
   getAutoUpdateEnabled(): Promise<boolean>;
   setAutoUpdateEnabled(enabled: boolean): Promise<boolean>;
+  ai: FolioAi;
+}
+
+interface AiStatus {
+  chatgpt: { connected: boolean; email: string; name: string; welcomeSeen: boolean; encrypted: boolean };
+  claude: { installed: boolean; loggedIn: boolean; version?: string; subscription?: boolean; authMethod?: string };
+}
+
+interface AiMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+interface AiEvent {
+  id: string;
+  type: "delta" | "done" | "error";
+  text?: string;
+  message?: string;
+  code?: string;
+  link?: string;
+}
+
+interface FolioAi {
+  status(): Promise<AiStatus>;
+  signInChatGPT(): Promise<{ ok: boolean; status?: AiStatus["chatgpt"]; error?: string }>;
+  signOutChatGPT(): Promise<AiStatus["chatgpt"]>;
+  chatgptWelcomeSeen(): Promise<boolean>;
+  chatgptModels(): Promise<{ ok: boolean; models?: { id: string; name: string }[]; error?: string; code?: string }>;
+  recheckClaude(): Promise<AiStatus["claude"]>;
+  ask(request: { id: string; provider: "chatgpt" | "claude"; model: string; instructions: string; messages: AiMessage[] }): Promise<boolean>;
+  cancel(id: string): Promise<boolean>;
+  onEvent(callback: (event: AiEvent) => void): () => void;
 }
 
 interface Window {

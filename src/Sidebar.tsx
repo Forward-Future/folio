@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
 import { Icon } from "./icons";
 
@@ -8,10 +8,15 @@ interface Props {
   rotation: number;
   onSelectPage: (n: number) => void;
   onSelectDest: (dest: unknown) => void;
+  tab: SidebarTab;
+  onTab: (tab: SidebarTab) => void;
+  notes: ReactNode;
+  noteCount: number;
 }
 
-export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest }: Props) {
-  const [tab, setTab] = useState<"pages" | "outline">("pages");
+export type SidebarTab = "pages" | "outline" | "notes";
+
+export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, tab, onTab: setTab, notes, noteCount }: Props) {
   const [outline, setOutline] = useState<OutlineItem[] | null>(null);
 
   useEffect(() => {
@@ -20,7 +25,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest }: Pro
   }, [pdf]);
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar tab-${tab}`}>
       <div className="sidebar-tabs" role="tablist">
         <button role="tab" aria-selected={tab === "pages"} className={tab === "pages" ? "on" : ""} onClick={() => setTab("pages")}>
           <Icon name="grid" size={15} /> Pages
@@ -28,9 +33,14 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest }: Pro
         <button role="tab" aria-selected={tab === "outline"} className={tab === "outline" ? "on" : ""} onClick={() => setTab("outline")}>
           <Icon name="list" size={15} /> Outline
         </button>
+        <button role="tab" aria-selected={tab === "notes"} className={tab === "notes" ? "on" : ""} onClick={() => setTab("notes")}>
+          <Icon name="note" size={15} /> Notes{noteCount > 0 && <span className="tab-count">{noteCount}</span>}
+        </button>
       </div>
       <div className="sidebar-scroll">
-        {tab === "pages" ? (
+        {tab === "notes" ? (
+          notes
+        ) : tab === "pages" ? (
           <Thumbnails pdf={pdf} page={page} rotation={rotation} onSelect={onSelectPage} />
         ) : outline === null ? null : outline.length === 0 ? (
           <div className="empty-outline">
