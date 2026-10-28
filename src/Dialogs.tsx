@@ -35,38 +35,20 @@ const EDITIONS: Record<string, string> = {
   installed: "Installed",
   portable: "Portable - update manually",
   appimage: "AppImage",
-  package: "Linux package - update manually",
+  package: "Linux package (updates via apt)",
 };
 
-export function AboutDialog({ onClose }: { onClose: () => void }) {
+export function AboutDialog({ onClose, onOpenSettings }: { onClose: () => void; onOpenSettings: () => void }) {
   const desktop = window.folioDesktop;
   const [info, setInfo] = useState<Awaited<ReturnType<FolioDesktop["getAppInfo"]>> | null>(null);
-  const [status, setStatus] = useState<UpdateStatus>({ state: "idle" });
-  const [autoUpdate, setAutoUpdate] = useState<boolean | null>(null);
-  const [savingUpdate, setSavingUpdate] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    desktop?.getAutoUpdateEnabled().then(enabled => { if (!cancelled) setAutoUpdate(enabled); }).catch(() => {
-      if (!cancelled) setError("Couldn't read auto-update settings.");
-    });
     desktop?.getAppInfo().then(info => { if (!cancelled) setInfo(info); }).catch(() => {
       if (!cancelled) setError("Couldn't read application details.");
     });
-    const unsubscribe = desktop?.onUpdateStatus(setStatus);
-    return () => { cancelled = true; unsubscribe?.(); };
+    return () => { cancelled = true; };
   }, [desktop]);
-  const message = status.state === "checking" ? "Checking for updates..."
-    : status.state === "downloading" ? "Downloading " + status.version + " (" + (status.percent ?? 0) + "%)"
-    : status.state === "ready" ? "Version " + status.version + " is ready to install."
-    : status.state === "available" ? "Folio " + status.version + " is available to download."
-    : status.state === "latest" ? "You're up to date."
-    : status.state === "error" ? "Couldn't check for updates. " + (status.message ?? "Try again.")
-    : status.state === "unsupported" ? "Automatic updates aren't available for this copy."
-    : "Check for the latest release.";
-  // Installed Windows copies and Linux AppImages update themselves; Macs check and offer the download.
-  const updatable = info?.mode === "installed" || info?.mode === "appimage";
-  const notifyOnly = info?.platform === "darwin";
   return <Modal title="About Folio" onClose={onClose}>
     <dl className="info-list">
       <div><dt>Version</dt><dd>{info?.version ?? (desktop ? "Loading..." : "Browser edition")}</dd></div>
@@ -74,38 +56,15 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
       {info && <div><dt>Location</dt><dd className="installation-path">{info.location}</dd></div>}
     </dl>
     <div className="about-update">
-      {desktop && updatable && <>
-        <label className="auto-update-setting">
-          <input type="checkbox" checked={autoUpdate === true} disabled={autoUpdate === null || savingUpdate}
-            onChange={async event => {
-              setSavingUpdate(true);
-              setError(null);
-              try { setAutoUpdate(await desktop.setAutoUpdateEnabled(event.target.checked)); }
-              catch { setError("Couldn't save auto-update settings. Try again."); }
-              finally { setSavingUpdate(false); }
-            }} />
-          Automatic updates
-        </label>
-        <p className="search-hint">{autoUpdate === false
-          ? "Disabled: no background checks, downloads, or installation on close. You can still check manually."
-          : notifyOnly
-            ? "Enabled: Folio checks for new versions and lets you know; download them from the releases page."
-            : "Enabled: download updates in the background and install silently when Folio closes, or choose Restart and update."}</p>
-      </>}
-      <p role="status">{desktop ? message : "Documents and reading preferences stay on this device."}</p>
-      {status.checkedAt && <p className="search-hint">Last checked {new Date(status.checkedAt).toLocaleString()}</p>}
+      <p>{desktop ? "Updates, appearance, and Ask AI accounts are in Settings." : "Documents and reading preferences stay on this device."}</p>
+      {info?.mode === "portable" && <p className="search-hint">Use the Setup installer for automatic updates and a single installed copy.</p>}
+      {info?.mode === "package" && <p className="search-hint">New versions arrive with your system's software updates (apt).</p>}
       <div className="form-actions">
         {desktop && <button className="btn ghost" onClick={() => {
           void desktop.openInstallation().then(message => setError(message || null)).catch(() => setError("Couldn't open the installation folder."));
         }}>Open installation folder</button>}
-        {desktop && updatable && <button className="btn primary"
-          disabled={status.state === "checking" || status.state === "downloading"}
-          onClick={() => status.state === "ready" ? desktop.installUpdate() : status.state === "available" ? void desktop.openDownload() : desktop.checkForUpdates()}>
-          {status.state === "ready" ? "Restart and update" : status.state === "available" ? "Download " + status.version : "Check for updates"}
-        </button>}
+        {desktop && <button className="btn primary" onClick={onOpenSettings}>Settings</button>}
       </div>
-      {info?.mode === "portable" && <p className="search-hint">Use the Setup installer for automatic updates and a single installed copy.</p>}
-      {info?.mode === "package" && <p className="search-hint">To update, download the newest .deb from the releases page, or use the AppImage, which updates itself.</p>}
       {error && <p className="form-error">{error}</p>}
     </div>
   </Modal>;
@@ -179,6 +138,7 @@ const SHORTCUTS: [string, string][] = [
   ["Two-page view", "2"],
   ["Focus mode", "F"],
   ["First / last page", "Home / End"],
+  ["Settings", "Ctrl ,"],
   ["Shortcuts", "?"],
 ];
 

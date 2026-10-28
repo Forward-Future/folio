@@ -447,7 +447,8 @@ if (!app.requestSingleInstanceLock()) {
       return result.webpage ? captureWebpage(result.webpage, isLocalHost) : result;
     });
     handle("folio:version", () => app.getVersion());
-    handle("folio:app-info", () => ({ version: app.getVersion(), mode: installKind(), location: installLocation(), platform: process.platform }));
+    handle("folio:app-info", () => ({ version: app.getVersion(), mode: installKind(), location: installLocation(), platform: process.platform,
+      notifyOnly: NOTIFY_ONLY }));
     handle("folio:open-installation", () => shell.openPath(installLocation()));
     handle("folio:open-download", () => shell.openExternal(RELEASES_PAGE));
     handle("folio:update-status", () => updateReady);

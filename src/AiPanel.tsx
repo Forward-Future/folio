@@ -405,7 +405,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
               {(provider === "chatgpt" ? models : CLAUDE_MODELS).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
             {provider === "chatgpt" ? (
-              <span>Using ChatGPT plan · <a href={USAGE_URL} target="_blank" rel="noreferrer">Manage usage</a> · <button className="linkish" onClick={async () => setStatus({ ...status!, chatgpt: await ai!.signOutChatGPT() })}>Sign out</button></span>
+              <span>Using ChatGPT plan · <a href={USAGE_URL} target="_blank" rel="noreferrer">Manage usage</a></span>
             ) : (
               <span>{status?.claude.subscription ? "Using your Claude subscription via Claude Code" : "Using Claude Code"}</span>
             )}

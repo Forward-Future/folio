@@ -144,7 +144,6 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
         <div className="form-actions">
           <button className="btn ghost" onClick={() => void startCamera()}>Use camera</button>
           <label className="btn ghost">Upload photo<input aria-label="Upload signature photo" type="file" accept="image/png,image/jpeg,image/webp" onChange={event => { void upload(event.target.files?.[0]); event.target.value = ""; }} /></label>
-          {saved && <button className="btn ghost" onClick={() => { try { localStorage.removeItem("folio:signature"); setSaved(false); setSignature(null); setSource(null); setRemember(false); } catch { setError("Couldn't forget this signature. Please try again."); } }}>Forget saved signature</button>}
         </div>
         {camera && <div className="signature-camera"><video ref={videoRef} muted playsInline onLoadedData={() => setCameraReady(true)} /><div className="form-actions"><button className="btn primary" disabled={!cameraReady} onClick={capture}>Capture paper</button><button className="btn ghost" onClick={stopCamera}>Stop camera</button></div></div>}
         {source && <div className="signature-crop">
@@ -183,7 +182,7 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
       </fieldset>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="form-actions"><button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button><button className="btn primary" disabled={!signature || !rect || !preview || !!source || camera || busy} onClick={() => void approve()}>{busy ? "Adding signature..." : "Approve and add signature"}</button></div>
-      <p className="search-hint">Only approval adds the signature. Use {keys("Ctrl+Z")} to undo; Save copy exports the signed PDF. Changes can affect existing digital signatures. Remembered signatures are stored unencrypted on this computer; use Forget to remove them.</p>
+      <p className="search-hint">Only approval adds the signature. Use {keys("Ctrl+Z")} to undo; Save copy exports the signed PDF. Changes can affect existing digital signatures. Remembered signatures are stored unencrypted on this computer; forget them in Settings.</p>
     </div>
   </Modal>;
 }

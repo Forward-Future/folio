@@ -12,7 +12,7 @@ up automatically.
 ## Supported versions
 
 Only the latest release receives security fixes. Installed copies update automatically unless automatic updates are
-turned off in **About Folio**. Portable copies must be updated manually.
+turned off in **Settings**. Portable copies must be updated manually.
 
 ## Security model
 

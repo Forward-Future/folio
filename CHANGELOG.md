@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.0
+
+- **Settings** in the ⋯ menu (Ctrl+,) gathers every preference in one place: theme, night reading, the default Ask AI
+  provider, ChatGPT sign-in and Claude Code status, forgetting a remembered signature, and automatic updates. The
+  separate theme and night-reading toggles, the update switch in About, the sign-out link in Ask AI, and Forget in the
+  signature dialog moved there.
+
 ## 1.9.0
 
 - **Linux .deb installs now update with the rest of your system.** The package adds Folio's signed apt repository,

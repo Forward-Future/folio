@@ -27,6 +27,7 @@ import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
 import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
 import { SignatureDialog } from "./SignatureDialog";
+import { SettingsDialog } from "./SettingsDialog";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
 
 type Tool = "select" | "highlight" | "ink" | "freetext";
@@ -130,7 +131,7 @@ export default function App() {
   const [dirty, setDirty] = useState(false);
   const [focus, setFocus] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [dialog, setDialog] = useState<"info" | "shortcuts" | "about" | "url" | null>(null);
+  const [dialog, setDialog] = useState<"info" | "shortcuts" | "about" | "url" | "settings" | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -698,8 +699,7 @@ export default function App() {
   useEffect(() => window.folioDesktop?.setTheme(theme), [theme]);
   useEffect(() => window.folioDesktop?.onUpdateReady(setUpdateVersion), []);
 
-  const toggleTheme = () => {
-    const next = theme === "dark" ? "light" : "dark";
+  const setThemeTo = (next: "light" | "dark") => {
     document.documentElement.dataset.theme = next;
     localStorage.setItem("folio:theme", next);
     setTheme(next);
@@ -723,8 +723,7 @@ export default function App() {
   }, []);
 
   useEffect(() => localStorage.setItem("folio:sidebar", sidebar ? "1" : "0"), [sidebar]);
-  const toggleNight = () => {
-    const next = !night;
+  const setNightTo = (next: boolean) => {
     try { localStorage.setItem("folio:night", next ? "1" : "0"); }
     catch { flash("Night reading changed, but couldn't save the preference."); }
     setNight(next);
@@ -756,6 +755,11 @@ export default function App() {
       const target = e.target as HTMLElement;
       const typing = target.closest("input, textarea, [contenteditable=true], .freeTextEditor");
 
+      if (mod && e.key === ",") {
+        e.preventDefault();
+        setDialog("settings");
+        return;
+      }
       if (mod && e.key.toLowerCase() === "o") {
         e.preventDefault();
         if (e.shiftKey) setDialog("url");
@@ -971,12 +975,10 @@ export default function App() {
                     { kind: "action", icon: "print", label: "Print", shortcut: keys("Ctrl P"), onSelect: print },
                     { kind: "action", icon: "info", label: "Document info", onSelect: () => setDialog("info") },
                     { kind: "divider" },
-                    { kind: "toggle", icon: "eye", label: "Night reading", checked: night, onSelect: toggleNight },
                     { kind: "action", icon: "expand", label: "Focus mode", shortcut: "F", onSelect: toggleFocus },
                   ] as MoreItem[])
                 : []),
-              { kind: "toggle", icon: "moon", label: "Dark theme", checked: theme === "dark", onSelect: toggleTheme },
-              { kind: "divider" },
+              { kind: "action", icon: "settings", label: "Settings", shortcut: keys("Ctrl ,"), onSelect: () => setDialog("settings") },
               { kind: "action", icon: "keyboard", label: "Keyboard shortcuts", shortcut: "?", onSelect: () => setDialog("shortcuts") },
               { kind: "action", icon: "info", label: "About Folio", onSelect: () => setDialog("about") },
             ]}
@@ -1183,7 +1185,8 @@ export default function App() {
       )}
       {dialog === "info" && doc && <InfoDialog pdf={doc.pdf} name={doc.name} size={doc.data.byteLength} onClose={() => setDialog(null)} />}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
-      {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} />}
+      {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} onOpenSettings={() => setDialog("settings")} />}
+      {dialog === "settings" && <SettingsDialog theme={theme} onTheme={setThemeTo} night={night} onNight={setNightTo} onClose={() => setDialog(null)} />}
       {doc && imageView && <ImageViewer pdf={doc.pdf} target={imageView} onClose={() => setImageView(null)} />}
       {dialog === "url" && <OpenUrlDialog onClose={() => setDialog(null)} onSubmit={(url) => { setDialog(null); openUrl(url); }} />}
       {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}

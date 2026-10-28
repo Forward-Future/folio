@@ -11,7 +11,9 @@ interface FolioDesktop {
   onOpenFile(callback: (name: string, data: Uint8Array) => void): () => void;
   ready(): Promise<boolean>;
   fetchPdf(url: string): Promise<{ name: string; data: Uint8Array }>;
-  getAppInfo(): Promise<{ version: string; mode: "development" | "portable" | "installed" | "appimage" | "package"; location: string; platform: string }>;
+  getAppInfo(): Promise<{ version: string; mode: "development" | "portable" | "installed" | "appimage" | "package"; location: string; platform: string;
+    /** True when updates are announced with a download link instead of installed (unsigned macOS builds). */
+    notifyOnly: boolean }>;
   /** "win32", "darwin", or "linux". */
   platform: string;
   /** Opens the releases page (macOS, where updates are downloaded manually). */

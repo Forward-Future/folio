@@ -57,7 +57,7 @@ Then pick a provider at the top of the panel:
 
 - **ChatGPT:** click **Continue with ChatGPT** and sign in in your browser. Questions use your ChatGPT plan (Go, Plus,
   or Pro), and usage counts toward that plan's limits; manage it in
-  [ChatGPT settings](https://chatgpt.com/settings/usage). Sign out from the bottom of the panel.
+  [ChatGPT settings](https://chatgpt.com/settings/usage). Sign out, or change the default provider, in Folio's **Settings**.
 - **Claude:** install [Claude Code](https://claude.com/claude-code), run `claude` once in a terminal, and sign in with
   your Claude account (Pro or Max). Then click **Check again** in Folio. Questions use your Claude subscription.
 
@@ -68,7 +68,7 @@ Ask AI is available in the desktop app only, not the browser version.
 Folio has no accounts, analytics, or telemetry, and never uploads your documents on its own. It makes network requests
 only to:
 
-- check GitHub for updates (installed copies; can be turned off in **About Folio**),
+- check GitHub for updates (installed copies; can be turned off in **Settings**),
 - open a link you give it (a webpage is loaded in a hidden, sandboxed window with its own temporary session, so no
   cookies or sign-ins are shared, and every permission is denied; its scripts run while it loads, as in any browser,
   and it's then printed to PDF), and
