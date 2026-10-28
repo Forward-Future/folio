@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { clearRecent, listRecent, removeRecent, type RecentFile } from "./recent";
 import { Icon } from "./icons";
+import { keys } from "./platform";
 import { formatBytes } from "./Dialogs";
 
 function timeAgo(t: number) {
@@ -39,6 +40,15 @@ function UpdateLine({ status }: { status: UpdateStatus }) {
       return (
         <>
           <span title={status.message}> · Couldn't check for updates</span> · {check}
+        </>
+      );
+    case "available":
+      return (
+        <>
+          {" · "}
+          <button className="link version-action" onClick={() => void desktop.openDownload()}>
+            Download Folio {status.version}
+          </button>
         </>
       );
     case "unsupported":
@@ -94,7 +104,7 @@ export function Welcome({ onPick, onOpenUrl, onOpenBytes, onSample, loading }: P
             <strong>{loading ? "Opening…" : "Open a PDF"}</strong>
             <span>Drop a PDF, a link, or a webpage anywhere, or click to browse</span>
           </div>
-          <kbd>Ctrl O</kbd>
+          <kbd>{keys("Ctrl O")}</kbd>
         </button>
 
         <div className="welcome-links">

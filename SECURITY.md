@@ -32,14 +32,18 @@ Folio opens untrusted PDFs, so it's built to keep a malicious document contained
 - Printing hands the document to Chromium's built-in PDF viewer.
 - **Ask AI** runs entirely in the main process. ChatGPT uses OpenAI's Sign in with ChatGPT (OAuth 2.0 with PKCE, a
   loopback redirect on `127.0.0.1`, state and nonce checks, and ID-token signature verification). Tokens are encrypted
-  with Electron `safeStorage` (Windows DPAPI) and never reach the page. Claude runs the user's own, unmodified Claude
+  with Electron `safeStorage` (Windows DPAPI, the macOS Keychain, or the Linux secret store; kept in memory only when
+  no secret store is available) and never reach the page. Claude runs the user's own, unmodified Claude
   Code CLI with all tools, MCP servers, settings, and slash commands disabled, in an empty temporary folder; Folio never
   handles Claude credentials. Document text goes to the chosen provider only when the user asks a question.
 
 Known limitations:
 
-- **Builds aren't code-signed yet.** Updates are downloaded over HTTPS from
-  [Forward-Future/folio-releases](https://github.com/Forward-Future/folio-releases) and checked against the SHA-512 published
-  with each release, but without a signature the update channel is only as secure as that GitHub account.
-- Local data (recent files, reading positions, an optionally remembered signature) is stored unencrypted in your
-  Windows profile. See [Privacy](README.md#privacy).
+- **Builds aren't signed with developer certificates yet.** Windows builds are unsigned and macOS builds are ad-hoc
+  signed (not notarized). Installers are built on GitHub Actions from this repository. Updates are downloaded over
+  HTTPS from [Forward-Future/folio-releases](https://github.com/Forward-Future/folio-releases) and checked against the
+  SHA-512 published with each release, but without a signature the update channel is only as secure as that GitHub
+  account. Macs don't install updates automatically: Folio only announces new versions, which are downloaded from the
+  releases page.
+- Local data (recent files, reading positions, an optionally remembered signature) is stored unencrypted in your user
+  profile. See [Privacy](README.md#privacy).

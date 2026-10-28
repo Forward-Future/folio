@@ -47,12 +47,32 @@ const TITLEBAR = {
   light: { color: "#f5f4f1", symbolColor: "#1c1b19", height: 51 },
 };
 
+const IS_MAC = process.platform === "darwin";
+const IS_LINUX = process.platform === "linux";
+const RELEASES_PAGE = "https://github.com/Forward-Future/folio-releases/releases/latest";
+
 protocol.registerSchemesAsPrivileged([
   { scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ]);
 
 let win = null;
 let pendingFile = pdfFromArgs(process.argv);
+let rendererReady = false;
+
+// macOS hands files to the app through "open-file" (Finder, the Dock, "Open With") rather than argv.
+// It can fire before the app is ready, so register it right away.
+app.on("open-file", (event, file) => {
+  event.preventDefault();
+  if (!/\.pdf$/i.test(file)) return;
+  if (win && rendererReady) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    sendFile(file);
+  } else {
+    pendingFile = file;
+    if (app.isReady() && !win) createWindow();
+  }
+});
 
 function pdfFromArgs(argv) {
   const file = argv.slice(1).find((a) => !a.startsWith("-") && /\.pdf$/i.test(a) && fs.existsSync(a));
@@ -117,7 +137,9 @@ async function checkForUpdates(manual = false) {
   activeUpdate = operation;
   try {
     const result = await autoUpdater.checkForUpdates();
-    if (result?.isUpdateAvailable && (manual || automaticUpdates)) {
+    if (result?.isUpdateAvailable && NOTIFY_ONLY) {
+      setUpdateStatus({ state: "available", version: result.updateInfo.version });
+    } else if (result?.isUpdateAvailable && (manual || automaticUpdates)) {
       operation.token = result.cancellationToken;
       setUpdateStatus({ state: "downloading", version: result.updateInfo.version, percent: 0 });
       await autoUpdater.downloadUpdate(result.cancellationToken);
@@ -129,12 +151,29 @@ async function checkForUpdates(manual = false) {
   } finally { activeUpdate = null; }
 }
 
+/** How this copy was installed, which decides how it can be updated. */
+function installKind() {
+  if (!app.isPackaged) return "development";
+  if (process.env.PORTABLE_EXECUTABLE_FILE) return "portable";
+  if (IS_LINUX) return process.env.APPIMAGE ? "appimage" : "package";
+  return "installed";
+}
+
+function installLocation() {
+  return path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || process.env.APPIMAGE || app.getPath("exe"));
+}
+
+// macOS only installs updates that are signed with an Apple Developer ID. Until Folio's Mac builds are,
+// Macs are told about new versions and download them from the releases page.
+const NOTIFY_ONLY = IS_MAC;
+
 function setupAutoUpdate() {
   loadUpdatePreference();
-  // Only real installs can update themselves; skip dev runs and the portable exe.
+  // Installed Windows builds, Linux AppImages, and Macs (notify only) check for updates. Dev runs, the
+  // portable Windows exe, and Linux packages (updated by downloading the new .deb) don't.
   // FOLIO_UPDATE_TEST lets the unpacked build be tested.
-  const portable = !!process.env.PORTABLE_EXECUTABLE_FILE;
-  if ((!app.isPackaged && !process.env.FOLIO_UPDATE_TEST) || portable) {
+  const kind = installKind();
+  if ((kind === "development" && !process.env.FOLIO_UPDATE_TEST) || kind === "portable" || kind === "package") {
     updateStatus = { state: "unsupported" };
     return;
   }
@@ -187,7 +226,9 @@ function createWindow() {
     title: "Folio",
     icon: path.join(__dirname, "icon.png"),
     titleBarStyle: "hidden",
-    titleBarOverlay: TITLEBAR[theme],
+    // macOS keeps its traffic lights (inset into the top bar); Windows and Linux draw their window
+    // buttons as an overlay on the right.
+    ...(IS_MAC ? { trafficLightPosition: { x: 18, y: 18 } } : { titleBarOverlay: TITLEBAR[theme] }),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -258,7 +299,7 @@ function createWindow() {
     if (choice === 0) e.preventDefault();
   });
 
-  win.on("closed", () => { clearTimeout(windowTimer); win = null; });
+  win.on("closed", () => { clearTimeout(windowTimer); win = null; rendererReady = false; });
 }
 
 const MAX_URL_PDF_BYTES = 300 * 1024 * 1024;
@@ -387,6 +428,7 @@ if (!app.requestSingleInstanceLock()) {
     ai.register(handle, (channel, payload) => win?.webContents.send(channel, payload));
 
     handle("folio:ready", () => {
+      rendererReady = true;
       const file = pendingFile;
       pendingFile = null;
       if (file) setTimeout(() => sendFile(file), 0);
@@ -398,10 +440,9 @@ if (!app.requestSingleInstanceLock()) {
       return result.webpage ? captureWebpage(result.webpage, isLocalHost) : result;
     });
     handle("folio:version", () => app.getVersion());
-    handle("folio:app-info", () => ({ version: app.getVersion(),
-      mode: !app.isPackaged ? "development" : process.env.PORTABLE_EXECUTABLE_FILE ? "portable" : "installed",
-      location: path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || app.getPath("exe")) }));
-    handle("folio:open-installation", () => shell.openPath(path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || app.getPath("exe"))));
+    handle("folio:app-info", () => ({ version: app.getVersion(), mode: installKind(), location: installLocation(), platform: process.platform }));
+    handle("folio:open-installation", () => shell.openPath(installLocation()));
+    handle("folio:open-download", () => shell.openExternal(RELEASES_PAGE));
     handle("folio:update-status", () => updateReady);
     handle("folio:update-state", () => updateStatus);
     handle("folio:auto-update-setting", () => automaticUpdates);
@@ -412,7 +453,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     on("folio:theme", (_e, theme) => {
       if (win && Object.hasOwn(TITLEBAR, theme)) {
-        win.setTitleBarOverlay(TITLEBAR[theme]);
+        if (!IS_MAC) win.setTitleBarOverlay(TITLEBAR[theme]);
         win.setBackgroundColor(TITLEBAR[theme].color);
       }
     });
@@ -421,5 +462,7 @@ if (!app.requestSingleInstanceLock()) {
     setupAutoUpdate();
   });
 
-  app.on("window-all-closed", () => app.quit());
+  // macOS apps stay running with no windows; clicking the Dock icon opens a new one.
+  app.on("window-all-closed", () => { if (!IS_MAC) app.quit(); });
+  app.on("activate", () => { if (app.isReady() && !win) createWindow(); });
 }

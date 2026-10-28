@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
+import { keys } from "./platform";
 
 export interface SelectionInfo {
   text: string;
@@ -225,7 +226,7 @@ export function NoteBox({ anchor, stageWidth, quote, initial, onSave, onClose }:
         }}
       />
       <div className="note-actions">
-        <span className="hint">Ctrl+Enter to save</span>
+        <span className="hint">{keys("Ctrl+Enter to save")}</span>
         <button className="btn ghost" onClick={onClose}>Cancel</button>
         <button className="btn primary" onClick={save}>Save</button>
       </div>

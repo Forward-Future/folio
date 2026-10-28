@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
+import { keys } from "./platform";
 import type { Mark, MarkupState } from "./markup";
 
 interface Props {
@@ -112,8 +113,8 @@ export function NotesPanel({ state, docName, persisted, onReveal, onNote, onRemo
       )}
       {other > 0 && <p className="notes-foot">Plus {other} drawing{other === 1 ? "" : "s"} on the pages.</p>}
       <p className="notes-foot">
-        {persisted ? "Saved automatically on this computer. Ctrl+S saves a PDF copy that includes them."
-          : "Password-protected documents aren't saved in Folio. Use Ctrl+S to keep a copy with your highlights."}
+        {keys(persisted ? "Saved automatically on this computer. Ctrl+S saves a PDF copy that includes them."
+          : "Password-protected documents aren't saved in Folio. Use Ctrl+S to keep a copy with your highlights.")}
       </p>
     </div>
   );

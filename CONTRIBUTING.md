@@ -32,5 +32,11 @@ npm run release                                  # 1.0.0 -> 1.0.1
 npm run release -- minor --notes "What changed"  # 1.0.0 -> 1.1.0
 ```
 
-This bumps the version, builds the Windows installers, pushes the commit and tag, and publishes a release.
-Installed copies download it automatically.
+This bumps the version and pushes the commit and tag. The tag starts the **Release build** workflow
+(`.github/workflows/release-build.yml`), which builds the Windows, macOS, and Linux installers on GitHub Actions and
+checks that each packaged app starts. The script waits for it, downloads the installers, and publishes the release.
+Nothing is published if any platform fails; fix the problem, then run `npm run release -- --publish-only` to publish
+the same tag. Installed copies see the new version automatically.
+
+CI (`.github/workflows/ci.yml`) type-checks, builds, and runs `npm run smoke` on all three platforms for every push to
+`main` and every pull request.

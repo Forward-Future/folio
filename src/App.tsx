@@ -21,6 +21,7 @@ import { NotesPanel } from "./NotesPanel";
 import { imageRegions, trackPageImages } from "./nightImages";
 import { ImageMenu, ImageViewer, type ImageTarget } from "./ImageViewer";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
+import { keys } from "./platform";
 import { AiPanel, type AiContext } from "./AiPanel";
 import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
@@ -936,7 +937,7 @@ export default function App() {
           </button>
           {doc && (
             <>
-              <IconButton icon="sidebar" label="Toggle sidebar (Ctrl+\)" active={sidebar} onClick={() => setSidebar(!sidebar)} />
+              <IconButton icon="sidebar" label={keys("Toggle sidebar (Ctrl+\\)")} active={sidebar} onClick={() => setSidebar(!sidebar)} />
               <div className="doc-title" title={doc.name}>
                 <span>{doc.name.replace(/\.pdf$/i, "")}</span>
                 {dirty && <span className="dirty-dot" title="Unsaved annotations" />}
@@ -969,15 +970,15 @@ export default function App() {
             <>
               <IconButton icon="note" label="Highlights and notes" active={sidebar && sidebarTab === "notes"} onClick={toggleNotes} />
               <IconButton icon="sparkle" label="Ask AI" active={aiOpen} onClick={() => setAiOpen(!aiOpen)} />
-              <IconButton icon="search" label="Search (Ctrl+F)" active={searchOpen} onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))} />
+              <IconButton icon="search" label={keys("Search (Ctrl+F)")} active={searchOpen} onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))} />
             </>
           )}
           <MoreMenu
             items={[
               ...(doc
                 ? ([
-                    { kind: "action", icon: "download", label: "Save a copy", shortcut: "Ctrl S", onSelect: download },
-                    { kind: "action", icon: "print", label: "Print", shortcut: "Ctrl P", onSelect: print },
+                    { kind: "action", icon: "download", label: "Save a copy", shortcut: keys("Ctrl S"), onSelect: download },
+                    { kind: "action", icon: "print", label: "Print", shortcut: keys("Ctrl P"), onSelect: print },
                     { kind: "action", icon: "info", label: "Document info", onSelect: () => setDialog("info") },
                     { kind: "divider" },
                     { kind: "toggle", icon: "eye", label: "Night reading", checked: night, onSelect: toggleNight },
@@ -1045,7 +1046,7 @@ export default function App() {
                 />
               ))}
               <span className="divider" />
-              <button className="pill-btn" onClick={() => busRef.current!.dispatch("editingaction", { source: null, name: "undo" })} title="Undo (Ctrl+Z)">
+              <button className="pill-btn" onClick={() => busRef.current!.dispatch("editingaction", { source: null, name: "undo" })} title={keys("Undo (Ctrl+Z)")}>
                 <Icon name="undo" size={16} />
               </button>
               <button className="pill-done" onClick={() => chooseTool("select")}>Done</button>
@@ -1081,11 +1082,11 @@ export default function App() {
                 <Icon name="chevronDown" size={17} />
               </button>
               <span className="divider" />
-              <button className="pill-btn" onClick={() => zoom(-1)} title="Zoom out (Ctrl −)">
+              <button className="pill-btn" onClick={() => zoom(-1)} title={keys("Zoom out (Ctrl −)")}>
                 <Icon name="minus" size={17} />
               </button>
               <ZoomMenu scale={scale} onPick={setScaleValue} spread={spread} onToggleSpread={toggleSpread} />
-              <button className="pill-btn" onClick={() => zoom(1)} title="Zoom in (Ctrl +)">
+              <button className="pill-btn" onClick={() => zoom(1)} title={keys("Zoom in (Ctrl +)")}>
                 <Icon name="plus" size={17} />
               </button>
               <span className="divider wide-only" />
@@ -1196,7 +1197,7 @@ export default function App() {
       {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}
         onClose={() => setSigning(false)} onApprove={async (signature, rect) => {
           await placeSignature(viewerRef.current!, doc.pdf, page, signature, rect);
-          setDirty(true); setSignatureDismissed(true); flash("Signature added. Ctrl+Z to undo; Save copy to export.");
+          setDirty(true); setSignatureDismissed(true); flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
         }} />}
       {doc && !signing && signatureTargets.length > 0 && !signatureDismissed && <div className="signature-suggestion" role="status">
         <span>{signatureTargets[0].kind === "field" ? "Signature field detected" : "Possible signature area"} on page {page}</span>

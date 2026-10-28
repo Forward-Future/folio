@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
   pull_request:
 
 permissions:
@@ -10,7 +10,11 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,3 +26,19 @@ jobs:
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
+      - name: Smoke test (Linux, virtual display)
+        if: runner.os == 'Linux'
+        run: |
+          # Ubuntu 24.04 restricts the user namespaces Chromium's sandbox needs; installed Folio packages
+          # ship an AppArmor profile for this, but the development Electron binary doesn't.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          xvfb-run -a npm run smoke
+      - name: Smoke test
+        if: runner.os != 'Linux'
+        run: npm run smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-${{ matrix.os }}
+          path: release/smoke/
+          if-no-files-found: ignore

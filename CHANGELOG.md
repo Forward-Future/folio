@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.0
+
+- **Folio now runs on macOS and Linux.** Download a universal DMG for Mac (Apple Silicon and Intel), or a `.deb`
+  (Ubuntu, Debian) or AppImage for Linux. Macs get native window buttons, ⌘ shortcuts, and "Open With" from Finder;
+  Linux gets a desktop entry and PDF file association. AppImages update themselves; Macs show when a new version is out.
+- Releases are now built and checked on GitHub Actions for all three platforms, and CI runs an end-to-end smoke test
+  on Windows, macOS, and Linux.
+
 ## 1.7.0
 
 - **Webpages look like the real site.** Converted pages keep their on-screen design (backgrounds, translucent and

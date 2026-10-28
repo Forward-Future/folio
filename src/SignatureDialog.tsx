@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy } from "./pdf";
 import type { PageViewport } from "pdfjs-dist";
 import { Modal } from "./Dialogs";
+import { keys } from "./platform";
 import { cleanSignature, fitSignature, readSignature, type SignatureImage, type SignatureTarget } from "./signatures";
 
 export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }: {
@@ -182,7 +183,7 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
       </fieldset>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="form-actions"><button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button><button className="btn primary" disabled={!signature || !rect || !preview || !!source || camera || busy} onClick={() => void approve()}>{busy ? "Adding signature..." : "Approve and add signature"}</button></div>
-      <p className="search-hint">Only approval adds the signature. Use Ctrl+Z to undo; Save copy exports the signed PDF. Changes can affect existing digital signatures. Remembered signatures are unencrypted in this Windows profile; use Forget to remove them.</p>
+      <p className="search-hint">Only approval adds the signature. Use {keys("Ctrl+Z")} to undo; Save copy exports the signed PDF. Changes can affect existing digital signatures. Remembered signatures are stored unencrypted on this computer; use Forget to remove them.</p>
     </div>
   </Modal>;
 }

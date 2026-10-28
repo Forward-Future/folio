@@ -1,17 +1,29 @@
 # Folio
 
-A simple, clean PDF reader for Windows. Free and open source.
+A simple, clean PDF reader for Windows, macOS, and Linux. Free and open source.
 
-**[Download Folio for Windows](https://github.com/Forward-Future/folio-releases/releases/latest/download/Folio-Setup.exe)**
-· [All releases](https://github.com/Forward-Future/folio-releases/releases) · [Changelog](CHANGELOG.md)
+## Download
 
-Installed copies update themselves. Prefer not to install? Download **Folio-Portable.exe** from the
-[latest release](https://github.com/Forward-Future/folio-releases/releases/latest); it runs as-is but doesn't auto-update.
+| Platform | Download | Updates |
+| --- | --- | --- |
+| **Windows** 10/11 (64-bit) | [Folio-Setup.exe](https://github.com/Forward-Future/folio-releases/releases/latest/download/Folio-Setup.exe) | Automatic |
+| **macOS** 12 or later (Apple Silicon and Intel) | [Folio-mac.dmg](https://github.com/Forward-Future/folio-releases/releases/latest/download/Folio-mac.dmg) | Folio tells you when a new version is out |
+| **Linux**: Ubuntu, Debian, and derivatives (64-bit) | [Folio-linux-amd64.deb](https://github.com/Forward-Future/folio-releases/releases/latest/download/Folio-linux-amd64.deb) | Download the new .deb |
+| **Linux**: other distributions (64-bit) | [Folio-linux-x86_64.AppImage](https://github.com/Forward-Future/folio-releases/releases/latest/download/Folio-linux-x86_64.AppImage) | Automatic |
 
-Requires 64-bit Windows 10 or 11.
+[All releases](https://github.com/Forward-Future/folio-releases/releases) · [Changelog](CHANGELOG.md) · Prefer not to
+install on Windows? **Folio-Portable.exe** on the release page runs as-is (it doesn't auto-update).
 
-> Folio's builds aren't code-signed yet, so Windows SmartScreen may warn the first time you run the installer.
-> Choose **More info → Run anyway**, or build Folio yourself from source (below).
+Folio's builds aren't signed with paid developer certificates yet, so the first launch needs one extra step:
+
+- **Windows:** if SmartScreen warns, choose **More info → Run anyway**.
+- **macOS:** open the DMG and drag Folio to Applications. The first time you open it, macOS says it can't verify the
+  developer: click **Done**, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
+- **Linux (.deb):** `sudo apt install ./Folio-linux-amd64.deb`, then open Folio from your applications menu.
+- **Linux (AppImage):** make it executable (`chmod +x Folio-linux-x86_64.AppImage`) and run it. AppImages need FUSE 2:
+  `sudo apt install libfuse2t64` on Ubuntu 24.04 or later, `libfuse2` on older releases.
+
+Or build Folio yourself from source (below).
 
 ## Features
 
@@ -19,8 +31,8 @@ Requires 64-bit Windows 10 or 11.
   per-page result snippets, zoom (fit width, fit page, presets, Ctrl+wheel/pinch), two-page view, rotate, focus mode
   (F; Esc to exit), light and dark themes, and night reading that dims bright pages while keeping images in their true
   colors.
-- **Opening:** drag in a PDF, open from Windows Explorer ("Open with → Folio"), or drop, paste, or enter a link
-  (Ctrl+Shift+O). PDF links open directly; **webpages are converted to a PDF** you can highlight, annotate, and ask AI
+- **Opening:** drag in a PDF, open one from your file manager ("Open with → Folio" in File Explorer, Finder, or your
+  Linux file manager), or drop, paste, or enter a link (Ctrl+Shift+O; ⌘⇧O on a Mac). PDF links open directly; **webpages are converted to a PDF** you can highlight, annotate, and ask AI
   about, keeping the site's on-screen look (backgrounds, transparency, colors, and layout) and selectable text.
 - **Images:** click an image to view it larger in Folio, or open it in your browser when it has a web address.
 - **Highlights and notes:** select text and click a color (or press H) to highlight it, or type a note in the box that
@@ -34,7 +46,7 @@ Requires 64-bit Windows 10 or 11.
   detects or anywhere you choose. These are visual signatures, not cryptographic certificates.
 - **Library:** recent files with thumbnails, each reopening where you left off.
 
-Press `?` in the app for keyboard shortcuts.
+Press `?` in the app for keyboard shortcuts. On a Mac, use ⌘ wherever this README says Ctrl.
 
 ## Using Ask AI
 
@@ -62,16 +74,18 @@ only to:
   you selected, and the conversation go to the provider you chose: OpenAI for ChatGPT, or Anthropic through your
   installed Claude Code. Their privacy terms apply to that data.
 
-For ChatGPT, Folio stores its sign-in tokens in `%APPDATA%\Folio\ai`, encrypted with Windows' per-user data
-protection, and never exposes them to the page. For Claude, Folio runs your own Claude Code with every tool disabled;
+For ChatGPT, Folio stores its sign-in tokens in its data folder (below, under `ai`), encrypted with the system's
+credential protection (Windows data protection, the macOS Keychain, or the Linux secret store; if a Linux desktop has
+no secret store, you sign in again each time Folio starts), and never exposes them to the page. For Claude, Folio runs your own Claude Code with every tool disabled;
 it never sees or stores your Claude credentials. The question's context is written to a temporary file for Claude Code
 and deleted as soon as the answer finishes. Conversations aren't saved; they last until you close Folio.
 
-Stored locally in your Windows profile (`%APPDATA%\Folio`): recently opened PDFs and their thumbnails (up to 8,
+Stored locally in your user profile (`%APPDATA%\Folio` on Windows, `~/Library/Application Support/Folio` on macOS,
+`~/.config/Folio` on Linux): recently opened PDFs and their thumbnails (up to 8,
 removable from the home screen with **Clear all**; password-protected PDFs are never kept), highlights and notes for
 each document (except password-protected ones), reading positions, preferences, and, only if you choose to remember
 it, your signature image. Apart from the ChatGPT sign-in, this data isn't encrypted, so anyone with access to your
-Windows account can read it.
+user account can read it.
 
 ## Building from source
 
@@ -80,22 +94,29 @@ Requires [Node.js](https://nodejs.org/) 22 or newer.
 ```sh
 npm install
 npm run app        # build and run the desktop app
-npm run dist:win   # build release/Folio-Setup.exe and release/Folio-Portable.exe
+npm run smoke      # end-to-end check: launches the built app and exercises the basics
 npm run dev        # browser version with hot reload at http://localhost:5173
+
+npm run dist:win   # on Windows: release/Folio-Setup.exe and release/Folio-Portable.exe
+npm run dist:mac   # on macOS: release/Folio-mac.dmg (universal: Apple Silicon and Intel)
+npm run dist:linux # on Linux: release/Folio-linux-x86_64.AppImage and release/Folio-linux-amd64.deb
 ```
 
-If your terminal has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
+Each platform's installers are built on that platform; GitHub Actions builds all three for every release. If your
+terminal has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
 
 ### How it's put together
 
 - `src/`: the reader UI (React + TypeScript, built with Vite) on top of [pdf.js](https://github.com/mozilla/pdf.js).
   `markup.ts` saves and restores highlights and notes, `NotesPanel.tsx` and `Selection.tsx` are their UI, and
   `AiPanel.tsx` is the Ask AI panel.
-- `electron/`: the Windows desktop shell. `main.cjs` serves the built app from `dist/` over a custom `app://` protocol
-  with a strict Content Security Policy, runs the page sandboxed with context isolation, opens PDFs passed from
-  Explorer, keeps a single window, downloads PDF links, and handles automatic updates. `ai.cjs` runs Ask AI (ChatGPT
+- `electron/`: the desktop shell for Windows, macOS, and Linux. `main.cjs` serves the built app from `dist/` over a
+  custom `app://` protocol with a strict Content Security Policy, runs the page sandboxed with context isolation, opens
+  PDFs from the file manager, keeps a single window, downloads links, and handles updates. `webpage.cjs` converts
+  webpages to PDF. `ai.cjs` runs Ask AI (ChatGPT
   sign-in and requests, and Claude Code) so credentials never reach the page.
-- `scripts/release.mjs`: the maintainer release script (see [CONTRIBUTING.md](CONTRIBUTING.md#releasing)).
+- `scripts/release.mjs` and `.github/workflows/release-build.yml`: the release pipeline (see
+  [CONTRIBUTING.md](CONTRIBUTING.md#releasing)). `scripts/smoke-test.mjs` is the cross-platform smoke test CI runs.
 
 ## Contributing
 

@@ -1,5 +1,5 @@
 interface UpdateStatus {
-  state: "idle" | "unsupported" | "checking" | "latest" | "downloading" | "ready" | "error";
+  state: "idle" | "unsupported" | "checking" | "latest" | "available" | "downloading" | "ready" | "error";
   version?: string;
   percent?: number;
   message?: string;
@@ -11,7 +11,11 @@ interface FolioDesktop {
   onOpenFile(callback: (name: string, data: Uint8Array) => void): () => void;
   ready(): Promise<boolean>;
   fetchPdf(url: string): Promise<{ name: string; data: Uint8Array }>;
-  getAppInfo(): Promise<{ version: string; mode: "development" | "portable" | "installed"; location: string }>;
+  getAppInfo(): Promise<{ version: string; mode: "development" | "portable" | "installed" | "appimage" | "package"; location: string; platform: string }>;
+  /** "win32", "darwin", or "linux". */
+  platform: string;
+  /** Opens the releases page (macOS, where updates are downloaded manually). */
+  openDownload(): Promise<void>;
   openInstallation(): Promise<string>;
   setTheme(theme: string): void;
   getVersion(): Promise<string>;

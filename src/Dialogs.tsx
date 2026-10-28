@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { PDFDocumentProxy } from "./pdf";
 import { Icon } from "./icons";
+import { keys } from "./platform";
 
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   useEffect(() => {
@@ -30,6 +31,13 @@ export function formatBytes(n: number) {
   return `${(n / 1024 ** 2).toFixed(1)} MB`;
 }
 
+const EDITIONS: Record<string, string> = {
+  installed: "Installed",
+  portable: "Portable - update manually",
+  appimage: "AppImage",
+  package: "Linux package - update manually",
+};
+
 export function AboutDialog({ onClose }: { onClose: () => void }) {
   const desktop = window.folioDesktop;
   const [info, setInfo] = useState<Awaited<ReturnType<FolioDesktop["getAppInfo"]>> | null>(null);
@@ -51,18 +59,22 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
   const message = status.state === "checking" ? "Checking for updates..."
     : status.state === "downloading" ? "Downloading " + status.version + " (" + (status.percent ?? 0) + "%)"
     : status.state === "ready" ? "Version " + status.version + " is ready to install."
+    : status.state === "available" ? "Folio " + status.version + " is available to download."
     : status.state === "latest" ? "You're up to date."
     : status.state === "error" ? "Couldn't check for updates. " + (status.message ?? "Try again.")
     : status.state === "unsupported" ? "Automatic updates aren't available for this copy."
     : "Check for the latest release.";
+  // Installed Windows copies and Linux AppImages update themselves; Macs check and offer the download.
+  const updatable = info?.mode === "installed" || info?.mode === "appimage";
+  const notifyOnly = info?.platform === "darwin";
   return <Modal title="About Folio" onClose={onClose}>
     <dl className="info-list">
       <div><dt>Version</dt><dd>{info?.version ?? (desktop ? "Loading..." : "Browser edition")}</dd></div>
-      <div><dt>Edition</dt><dd>{info?.mode === "installed" ? "Installed" : info?.mode === "portable" ? "Portable - update manually" : desktop ? "Development" : "Web"}</dd></div>
+      <div><dt>Edition</dt><dd>{EDITIONS[info?.mode ?? ""] ?? (desktop ? "Development" : "Web")}</dd></div>
       {info && <div><dt>Location</dt><dd className="installation-path">{info.location}</dd></div>}
     </dl>
     <div className="about-update">
-      {desktop && info?.mode === "installed" && <>
+      {desktop && updatable && <>
         <label className="auto-update-setting">
           <input type="checkbox" checked={autoUpdate === true} disabled={autoUpdate === null || savingUpdate}
             onChange={async event => {
@@ -76,7 +88,9 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
         </label>
         <p className="search-hint">{autoUpdate === false
           ? "Disabled: no background checks, downloads, or installation on close. You can still check manually."
-          : "Enabled: download updates in the background and install silently when Folio closes, or choose Restart and update."}</p>
+          : notifyOnly
+            ? "Enabled: Folio checks for new versions and lets you know; download them from the releases page."
+            : "Enabled: download updates in the background and install silently when Folio closes, or choose Restart and update."}</p>
       </>}
       <p role="status">{desktop ? message : "Documents and reading preferences stay on this device."}</p>
       {status.checkedAt && <p className="search-hint">Last checked {new Date(status.checkedAt).toLocaleString()}</p>}
@@ -84,13 +98,14 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
         {desktop && <button className="btn ghost" onClick={() => {
           void desktop.openInstallation().then(message => setError(message || null)).catch(() => setError("Couldn't open the installation folder."));
         }}>Open installation folder</button>}
-        {desktop && info?.mode === "installed" && <button className="btn primary"
+        {desktop && updatable && <button className="btn primary"
           disabled={status.state === "checking" || status.state === "downloading"}
-          onClick={() => status.state === "ready" ? desktop.installUpdate() : desktop.checkForUpdates()}>
-          {status.state === "ready" ? "Restart and update" : "Check for updates"}
+          onClick={() => status.state === "ready" ? desktop.installUpdate() : status.state === "available" ? void desktop.openDownload() : desktop.checkForUpdates()}>
+          {status.state === "ready" ? "Restart and update" : status.state === "available" ? "Download " + status.version : "Check for updates"}
         </button>}
       </div>
       {info?.mode === "portable" && <p className="search-hint">Use the Setup installer for automatic updates and a single installed copy.</p>}
+      {info?.mode === "package" && <p className="search-hint">To update, download the newest .deb from the releases page, or use the AppImage, which updates itself.</p>}
       {error && <p className="form-error">{error}</p>}
     </div>
   </Modal>;
@@ -176,7 +191,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
           <div key={k}>
             <dt>{k}</dt>
             <dd>
-              {v.split(" ").map((key, i) => (key === "/" ? <span key={i}> / </span> : <kbd key={i}>{key}</kbd>))}
+              {keys(v).split(" ").map((key, i) => (key === "/" ? <span key={i}> / </span> : <kbd key={i}>{key}</kbd>))}
             </dd>
           </div>
         ))}
