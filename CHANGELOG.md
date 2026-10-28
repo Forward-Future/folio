@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.0
+
+- Selecting text shows a note box right away: type a note and press Enter to highlight with it (or click a color to
+  highlight without one).
+- Click any highlight to change its color, edit its note, ask AI about it, or **Remove** it in one click (or press Delete).
+- Night reading keeps photos, figures, and other images in their true colors, on pages and thumbnails alike.
+- A cleaner top bar: Notes, Ask AI, and Search stay visible; Save a copy, Print, Document info, Night reading, Focus
+  mode, Dark theme, Keyboard shortcuts, and About Folio moved into the **⋯** menu.
+
 ## 1.4.0
 
 - **Highlights and notes are first-class.** Select text and a toolbar pops up: click a color to highlight in one click

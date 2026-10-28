@@ -36,6 +36,7 @@ const paths = {
   check: <path d="m5 12.5 4.5 4.5L19 7.5" />,
   send: <><path d="M12 19V5M6 11l6-6 6 6" /></>,
   stop: <rect x="7" y="7" width="10" height="10" rx="2" />,
+  more: <><circle cx="5.5" cy="12" r="1.2" fill="currentColor" /><circle cx="12" cy="12" r="1.2" fill="currentColor" /><circle cx="18.5" cy="12" r="1.2" fill="currentColor" /></>,
   keyboard: <><rect x="2.5" y="6" width="19" height="12" rx="2.5" /><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14.5h8" /></>,
 } as const;
 

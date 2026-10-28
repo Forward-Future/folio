@@ -280,6 +280,45 @@ export class MarkupController {
     return this.#liveEditors().find((e) => e.__folioMark === markId);
   }
 
+  /** The highlight under a screen point (pdf.js highlights don't take clicks while reading), with its screen box. */
+  markAt(clientX: number, clientY: number): { id: string; rect: { left: number; top: number; right: number; bottom: number } } | null {
+    for (const editor of this.#liveEditors()) {
+      if (editor.constructor._type !== "highlight" || !editor.__folioMark) continue;
+      const view = this.#viewer.getPageView(editor.pageIndex) as unknown as
+        { div?: HTMLElement; viewport?: { convertToViewportPoint(x: number, y: number): number[] } } | undefined;
+      const surface = view?.div?.querySelector(".canvasWrapper") ?? view?.div;
+      if (!surface || !view?.viewport) continue;
+      const box = surface.getBoundingClientRect();
+      if (clientY < box.top || clientY > box.bottom || clientX < box.left || clientX > box.right) continue;
+      const quads = (this.#known.get(editor.__folioMark)?.data.quadPoints ?? editor.serialize(false)?.quadPoints) as ArrayLike<number> | undefined;
+      if (!quads) continue;
+      const q = Array.from(quads);
+      const hits: { left: number; top: number; right: number; bottom: number }[] = [];
+      for (let i = 0; i + 7 < q.length; i += 8) {
+        const corners = [0, 2, 4, 6].map((k) => view.viewport!.convertToViewportPoint(q[i + k], q[i + k + 1]));
+        const xs = corners.map((c) => box.left + c[0]);
+        const ys = corners.map((c) => box.top + c[1]);
+        hits.push({ left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) });
+      }
+      if (hits.some((r) => clientX >= r.left - 2 && clientX <= r.right + 2 && clientY >= r.top - 2 && clientY <= r.bottom + 2)) {
+        return {
+          id: editor.__folioMark,
+          rect: {
+            left: Math.min(...hits.map((r) => r.left)), right: Math.max(...hits.map((r) => r.right)),
+            top: Math.min(...hits.map((r) => r.top)), bottom: Math.max(...hits.map((r) => r.bottom)),
+          },
+        };
+      }
+    }
+    return null;
+  }
+
+  recolor(markId: string, hex: string) {
+    const editor = this.#editorFor(markId) as (Editor & { updateParams?: (type: number, value: string) => void }) | undefined;
+    editor?.updateParams?.(AnnotationEditorParamsType.HIGHLIGHT_COLOR, hex);
+    this.scheduleSync();
+  }
+
   markForEditorId(editorId: string) {
     const editor = this.#ui?.getEditor(editorId);
     return editor?.__folioMark ?? null;

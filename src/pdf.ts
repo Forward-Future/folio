@@ -1,6 +1,7 @@
 import * as pdfjs from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import { paintImageOverlay } from "./nightImages";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -45,7 +46,7 @@ export async function renderThumbnail(
   canvas.height = Math.floor(viewport.height);
   canvas.style.width = `${width}px`;
   canvas.style.height = `${(viewport.height / viewport.width) * width}px`;
-  const task = page.render({ canvas, viewport });
+  const task = page.render({ canvas, viewport, recordImages: true });
   const cancel = () => task.cancel();
   signal?.addEventListener("abort", cancel, { once: true });
   try {
@@ -53,6 +54,7 @@ export async function renderThumbnail(
   } finally {
     signal?.removeEventListener("abort", cancel);
   }
+  if (canvas.parentElement) paintImageOverlay(canvas.parentElement, canvas, page, viewport.rotation);
 }
 
 export async function thumbnailDataUrl(doc: PDFDocumentProxy) {

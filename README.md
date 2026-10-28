@@ -17,11 +17,12 @@ Requires 64-bit Windows 10 or 11.
 
 - **Reading:** continuous scroll, page thumbnails, outline/bookmarks, find with match case and whole word plus
   per-page result snippets, zoom (fit width, fit page, presets, Ctrl+wheel/pinch), two-page view, rotate, focus mode
-  (F; Esc to exit), light and dark themes, and night reading that dims bright pages.
+  (F; Esc to exit), light and dark themes, and night reading that dims bright pages while keeping images in their true
+  colors.
 - **Opening:** drag in a PDF, open from Windows Explorer ("Open with → Folio"), or drop, paste, or enter a link to a
   PDF on the web (Ctrl+Shift+O).
-- **Highlights and notes:** select text and click a color (or press H) to highlight it; choose Note (N) to attach a
-  note. The Notes tab lists every highlight with its note, plus a notes box for the whole document, and copies them all
+- **Highlights and notes:** select text and click a color (or press H) to highlight it, or type a note in the box that
+  appears under the colors and press Enter. Click any highlight to recolor it, edit its note, or remove it. The Notes tab lists every highlight with its note, plus a notes box for the whole document, and copies them all
   as Markdown. Everything saves automatically and comes back when you reopen the file. Ctrl+S saves a PDF copy with
   highlights and notes embedded as standard PDF annotations. Freehand drawing and text boxes are there too.
 - **Ask AI:** ask questions about the whole document, or select a passage and ask about just that part. Answers cite

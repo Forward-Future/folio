@@ -3,6 +3,8 @@ import { Icon } from "./icons";
 
 export interface SelectionInfo {
   text: string;
+  /** A copy of the selection, so it can be restored after the note field takes focus. */
+  range: Range;
   page: number;
   /** Center x and top/bottom of the selection, relative to the stage. */
   x: number;
@@ -10,7 +12,7 @@ export interface SelectionInfo {
   bottom: number;
 }
 
-const POPOVER_H = 44;
+const POPOVER_H = 86;
 
 /** Tracks the reader's text selection inside the document (hidden while the mouse is still dragging). */
 export function useTextSelection(container: HTMLElement | null, enabled: boolean) {
@@ -36,6 +38,7 @@ export function useTextSelection(container: HTMLElement | null, enabled: boolean
       const right = Math.max(...rects.map((r) => r.right));
       setInfo({
         text,
+        range: selection.getRangeAt(0).cloneRange(),
         page: Number((anchor.closest(".page") as HTMLElement | null)?.dataset.pageNumber) || 1,
         x: (left + right) / 2 - stage.left,
         top: Math.min(...rects.map((r) => r.top)) - stage.top,
@@ -75,52 +78,112 @@ interface PopoverProps {
   stageWidth: number;
   colors: { name: string; hex: string }[];
   current: string;
-  onHighlight: (hex: string) => void;
-  onNote: () => void;
+  /** Highlights the selection in a color, with the note typed so far (may be empty). */
+  onHighlight: (hex: string, note: string) => void;
   onAsk: () => void;
+  /** The note field took focus (which clears the page selection): keep the popover open. */
+  onPin: () => void;
+  onDismiss: () => void;
 }
 
-export function SelectionPopover({ info, stageWidth, colors, current, onHighlight, onNote, onAsk }: PopoverProps) {
+/** Shown as soon as text is selected: one-click colors, plus a note field that's ready to type in. */
+export function SelectionPopover({ info, stageWidth, colors, current, onHighlight, onAsk, onPin, onDismiss }: PopoverProps) {
   const [copied, setCopied] = useState(false);
-  const width = 30 * colors.length + 250;
+  const [note, setNote] = useState("");
+  const width = 30 * colors.length + 210;
   return (
     <div
       className="selection-popover"
-      role="toolbar"
+      role="dialog"
       aria-label="Selected text"
       style={place(info, width, POPOVER_H, stageWidth)}
-      // Keep the text selection alive while clicking these buttons.
-      onMouseDown={(e) => e.preventDefault()}
+      // Keep the text selection alive while clicking buttons (but let the note field take focus).
+      onMouseDown={(e) => { if (!(e.target as HTMLElement).closest("input")) e.preventDefault(); }}
     >
-      {colors.map((c) => (
+      <div className="pop-row" role="toolbar" aria-label="Highlight">
+        {colors.map((c) => (
+          <button
+            key={c.hex}
+            className={`swatch-btn ${c.hex === current ? "on" : ""}`}
+            style={{ "--swatch": c.hex } as React.CSSProperties}
+            title={`Highlight ${c.name.toLowerCase()}${c.hex === current ? " (H)" : ""}`}
+            aria-label={`Highlight ${c.name.toLowerCase()}`}
+            onClick={() => onHighlight(c.hex, note.trim())}
+          />
+        ))}
+        <span className="divider" />
+        <button className="pop-btn" onClick={onAsk} title="Ask AI about this passage">
+          <Icon name="sparkle" size={15} /> Ask AI
+        </button>
         <button
-          key={c.hex}
-          className={`swatch-btn ${c.hex === current ? "on" : ""}`}
-          style={{ "--swatch": c.hex } as React.CSSProperties}
-          title={`Highlight ${c.name.toLowerCase()}${c.hex === current ? " (H)" : ""}`}
-          aria-label={`Highlight ${c.name.toLowerCase()}`}
-          onClick={() => onHighlight(c.hex)}
-        />
-      ))}
-      <span className="divider" />
-      <button className="pop-btn" onClick={onNote} title="Highlight and add a note (N)">
-        <Icon name="note" size={15} /> Note
-      </button>
-      <button className="pop-btn" onClick={onAsk} title="Ask AI about this passage">
-        <Icon name="sparkle" size={15} /> Ask AI
-      </button>
-      <button
-        className="pop-btn icon-only"
-        title={copied ? "Copied" : "Copy"}
-        aria-label="Copy"
-        onClick={() => {
-          void navigator.clipboard.writeText(info.text);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1200);
+          className="pop-btn icon-only"
+          title={copied ? "Copied" : "Copy"}
+          aria-label="Copy"
+          onClick={() => {
+            void navigator.clipboard.writeText(info.text);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }}
+        >
+          <Icon name={copied ? "check" : "copy"} size={15} />
+        </button>
+      </div>
+      <input
+        className="pop-note"
+        value={note}
+        placeholder="Add a note… (Enter to highlight)"
+        aria-label="Note for this highlight"
+        onFocus={onPin}
+        onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); onHighlight(current, note.trim()); }
+          if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onDismiss(); }
         }}
-      >
-        <Icon name={copied ? "check" : "copy"} size={15} />
-      </button>
+      />
+    </div>
+  );
+}
+
+interface HighlightMenuProps {
+  rect: { left: number; top: number; right: number; bottom: number };
+  stageWidth: number;
+  colors: { name: string; hex: string }[];
+  current: string;
+  hasNote: boolean;
+  onRecolor: (hex: string) => void;
+  onNote: () => void;
+  onAsk: () => void;
+  onRemove: () => void;
+}
+
+/** Shown when clicking an existing highlight. */
+export function HighlightMenu({ rect, stageWidth, colors, current, hasNote, onRecolor, onNote, onAsk, onRemove }: HighlightMenuProps) {
+  const width = 30 * colors.length + 300;
+  const anchor = { x: (rect.left + rect.right) / 2, top: rect.top, bottom: rect.bottom };
+  return (
+    <div className="selection-popover" role="toolbar" aria-label="Highlight" style={place(anchor, width, 44, stageWidth)}>
+      <div className="pop-row">
+        {colors.map((c) => (
+          <button
+            key={c.hex}
+            className={`swatch-btn ${c.hex.toLowerCase() === current.toLowerCase() ? "on" : ""}`}
+            style={{ "--swatch": c.hex } as React.CSSProperties}
+            title={`Change to ${c.name.toLowerCase()}`}
+            aria-label={`Change to ${c.name.toLowerCase()}`}
+            onClick={() => onRecolor(c.hex)}
+          />
+        ))}
+        <span className="divider" />
+        <button className="pop-btn" onClick={onNote} title={hasNote ? "Edit note" : "Add a note"}>
+          <Icon name="note" size={15} /> {hasNote ? "Edit note" : "Note"}
+        </button>
+        <button className="pop-btn" onClick={onAsk} title="Ask AI about this highlight">
+          <Icon name="sparkle" size={15} /> Ask AI
+        </button>
+        <button className="pop-btn danger" onClick={onRemove} title="Remove highlight (Delete)">
+          <Icon name="trash" size={15} /> Remove
+        </button>
+      </div>
     </div>
   );
 }

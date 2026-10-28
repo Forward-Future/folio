@@ -16,8 +16,10 @@ import { Icon, type IconName } from "./icons";
 import { Welcome } from "./Welcome";
 import { Sidebar, type SidebarTab } from "./Sidebar";
 import { MarkupController, type Mark, type MarkupState } from "./markup";
-import { NoteBox, SelectionPopover, useTextSelection } from "./Selection";
+import { HighlightMenu, NoteBox, SelectionPopover, useTextSelection, type SelectionInfo } from "./Selection";
 import { NotesPanel } from "./NotesPanel";
+import { trackPageImages } from "./nightImages";
+import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { AiPanel, type AiContext } from "./AiPanel";
 import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
@@ -140,6 +142,8 @@ export default function App() {
   const [noteBox, setNoteBox] = useState<{ markId: string; anchor: { x: number; top: number; bottom: number }; quote: string; initial: string } | null>(null);
   const [stageWidth, setStageWidth] = useState(800);
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  const [pinned, setPinned] = useState<SelectionInfo | null>(null);
+  const [highlightMenu, setHighlightMenu] = useState<{ id: string; rect: { left: number; top: number; right: number; bottom: number } } | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiContext, setAiContext] = useState<AiContext | null>(null);
 
@@ -179,7 +183,11 @@ export default function App() {
       findController,
       annotationEditorMode: AnnotationEditorType.NONE,
       annotationEditorHighlightColors: HIGHLIGHTS.map((c) => `${c.name.toLowerCase()}=${c.hex}`).join(","),
+      // Records where images are drawn (used to keep them true to color in night reading). The huge
+      // minimum size turns off pdf.js's own right-click image targets, which Folio doesn't use.
+      imagesRightClickMinSize: 1e9,
     });
+    trackPageImages(eventBus);
     linkService.setViewer(viewer);
     viewerRef.current = viewer;
     markupRef.current = new MarkupController(eventBus, viewer, setMarkup);
@@ -279,6 +287,7 @@ export default function App() {
         persistRef.current = !password;
         void markupRef.current!.load(key, !password);
         setNoteBox(null);
+        setPinned(null);
         setAiContext(null);
         viewer.setDocument(pdf);
         linkRef.current!.setDocument(pdf, null);
@@ -468,19 +477,68 @@ export default function App() {
   };
 
   // ── Highlights and notes ────────────────────────────────────────────
-  const selection = useTextSelection(container, !!doc && tool === "select" && !signing && !noteBox);
+  const liveSelection = useTextSelection(container, !!doc && tool === "select" && !signing && !noteBox);
+  // Typing in the popover's note field clears the page selection, so the popover keeps its own copy.
+  const selection = pinned ?? liveSelection;
   const highlightColor = colors.highlight ?? HIGHLIGHTS[0].hex;
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
 
-  const quickHighlight = async (hex: string, withNote = false) => {
+  const quickHighlight = async (hex: string, note = "") => {
     const info = selection;
     if (!info) return;
     setColors((c) => ({ ...c, highlight: hex }));
+    if (pinned) {
+      const current = document.getSelection();
+      current?.removeAllRanges();
+      current?.addRange(info.range);
+    }
+    setPinned(null);
     const id = await markupRef.current!.highlightSelection(hex);
     if (!id) {
       flash("Couldn't highlight that selection");
       return;
     }
-    if (withNote) setNoteBox({ markId: id, anchor: info, quote: info.text, initial: "" });
+    if (note) markupRef.current!.setNote(id, note);
+  };
+
+  const dismissSelection = () => {
+    setPinned(null);
+    document.getSelection()?.removeAllRanges();
+  };
+
+  // Clicking an existing highlight offers recolor, note, Ask AI, and one-click removal.
+  useEffect(() => {
+    if (!container) return;
+    const onDown = () => setPinned(null);
+    const onClick = (e: MouseEvent) => {
+      if (toolRef.current !== "select" || e.button !== 0) return;
+      const current = document.getSelection();
+      if (current && !current.isCollapsed) return;
+      if ((e.target as HTMLElement).closest("a, .annotationCommentButton")) return;
+      const hit = markupRef.current?.markAt(e.clientX, e.clientY);
+      if (!hit) return setHighlightMenu(null);
+      const stage = container.parentElement!.getBoundingClientRect();
+      setHighlightMenu({ id: hit.id, rect: { left: hit.rect.left - stage.left, right: hit.rect.right - stage.left,
+        top: hit.rect.top - stage.top, bottom: hit.rect.bottom - stage.top } });
+    };
+    const onScroll = () => setHighlightMenu(null);
+    container.addEventListener("pointerdown", onDown);
+    container.addEventListener("click", onClick);
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      container.removeEventListener("pointerdown", onDown);
+      container.removeEventListener("click", onClick);
+      container.removeEventListener("scroll", onScroll);
+    };
+  }, [container]);
+  useEffect(() => setHighlightMenu(null), [doc, scale, tool]);
+  const menuMark = highlightMenu ? markup.marks.find((m) => m.id === highlightMenu.id) : undefined;
+
+  const removeHighlight = (id: string) => {
+    markupRef.current!.remove(id);
+    setHighlightMenu(null);
+    flash("Highlight removed");
   };
 
   const askAbout = (text: string, pageNumber: number) => {
@@ -695,11 +753,18 @@ export default function App() {
         setSidebar((s) => !s);
       } else if (typing || mod || e.altKey) {
         return;
-      } else if (selection && tool === "select" && /^[hn]$/i.test(e.key)) {
+      } else if (selection && tool === "select" && /^h$/i.test(e.key)) {
         e.preventDefault();
-        void quickHighlight(highlightColor, e.key.toLowerCase() === "n");
+        void quickHighlight(highlightColor);
+      } else if (selection && tool === "select" && /^n$/i.test(e.key)) {
+        e.preventDefault();
+        document.querySelector<HTMLInputElement>(".pop-note")?.focus();
+      } else if (highlightMenu && (e.key === "Delete" || e.key === "Backspace")) {
+        e.preventDefault();
+        removeHighlight(highlightMenu.id);
       } else if (e.key === "Escape") {
-        if (noteBox) setNoteBox(null);
+        if (highlightMenu) setHighlightMenu(null);
+        else if (noteBox) setNoteBox(null);
         else if (dialog) setDialog(null);
         else if (searchOpen) setSearchOpen(false);
         else if (tool !== "select") chooseTool("select");
@@ -853,25 +918,31 @@ export default function App() {
         </div>
 
         <div className="topbar-right">
-          <IconButton icon="info" label="About Folio" onClick={() => setDialog("about")} />
           {doc && (
             <>
               <IconButton icon="note" label="Highlights and notes" active={sidebar && sidebarTab === "notes"} onClick={toggleNotes} />
               <IconButton icon="sparkle" label="Ask AI" active={aiOpen} onClick={() => setAiOpen(!aiOpen)} />
               <IconButton icon="search" label="Search (Ctrl+F)" active={searchOpen} onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))} />
-              <IconButton icon="print" label="Print (Ctrl+P)" className="wide-only" onClick={print} />
-              <IconButton icon="download" label={dirty ? "Save copy with annotations (Ctrl+S)" : "Download (Ctrl+S)"} onClick={download} />
-              <span className="divider" />
-              <IconButton icon="eye" label="Night reading" className="wide-only" active={night} onClick={toggleNight} />
             </>
           )}
-          <IconButton icon={theme === "dark" ? "sun" : "moon"} label="Toggle theme" onClick={toggleTheme} />
-          {doc && (
-            <>
-              <IconButton icon="info" label="Document info" className="wide-only" onClick={() => setDialog("info")} />
-              <IconButton icon="expand" label="Focus mode (F)" onClick={toggleFocus} />
-            </>
-          )}
+          <MoreMenu
+            items={[
+              ...(doc
+                ? ([
+                    { kind: "action", icon: "download", label: "Save a copy", shortcut: "Ctrl S", onSelect: download },
+                    { kind: "action", icon: "print", label: "Print", shortcut: "Ctrl P", onSelect: print },
+                    { kind: "action", icon: "info", label: "Document info", onSelect: () => setDialog("info") },
+                    { kind: "divider" },
+                    { kind: "toggle", icon: "eye", label: "Night reading", checked: night, onSelect: toggleNight },
+                    { kind: "action", icon: "expand", label: "Focus mode", shortcut: "F", onSelect: toggleFocus },
+                  ] as MoreItem[])
+                : []),
+              { kind: "toggle", icon: "moon", label: "Dark theme", checked: theme === "dark", onSelect: toggleTheme },
+              { kind: "divider" },
+              { kind: "action", icon: "keyboard", label: "Keyboard shortcuts", shortcut: "?", onSelect: () => setDialog("shortcuts") },
+              { kind: "action", icon: "info", label: "About Folio", onSelect: () => setDialog("about") },
+            ]}
+          />
         </div>
       </header>
 
@@ -977,15 +1048,34 @@ export default function App() {
             </div>
           )}
 
-          {selection && !noteBox && (
+          {selection && !noteBox && !highlightMenu && (
             <SelectionPopover
+              key={`${selection.page}:${selection.top}:${selection.text.slice(0, 40)}`}
               info={selection}
               stageWidth={stageWidth}
               colors={HIGHLIGHTS}
               current={highlightColor}
-              onHighlight={(hex) => void quickHighlight(hex)}
-              onNote={() => void quickHighlight(highlightColor, true)}
-              onAsk={() => askAbout(selection.text, selection.page)}
+              onHighlight={(hex, note) => void quickHighlight(hex, note)}
+              onAsk={() => { setPinned(null); askAbout(selection.text, selection.page); }}
+              onPin={() => setPinned(selection)}
+              onDismiss={dismissSelection}
+            />
+          )}
+          {highlightMenu && menuMark && !noteBox && (
+            <HighlightMenu
+              rect={highlightMenu.rect}
+              stageWidth={stageWidth}
+              colors={HIGHLIGHTS}
+              current={menuMark.color}
+              hasNote={!!menuMark.note}
+              onRecolor={(hex) => markupRef.current!.recolor(menuMark.id, hex)}
+              onNote={() => {
+                const r = highlightMenu.rect;
+                setNoteBox({ markId: menuMark.id, anchor: { x: (r.left + r.right) / 2, top: r.top, bottom: r.bottom }, quote: menuMark.text, initial: menuMark.note });
+                setHighlightMenu(null);
+              }}
+              onAsk={() => { askAbout(menuMark.text, menuMark.page + 1); setHighlightMenu(null); }}
+              onRemove={() => removeHighlight(menuMark.id)}
             />
           )}
           {noteBox && (
