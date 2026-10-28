@@ -50,12 +50,13 @@ function UpdateLine({ status }: { status: UpdateStatus }) {
 
 interface Props {
   onPick: () => void;
+  onOpenUrl: () => void;
   onOpenBytes: (name: string, data: Uint8Array) => void;
   onSample: () => void;
   loading: boolean;
 }
 
-export function Welcome({ onPick, onOpenBytes, onSample, loading }: Props) {
+export function Welcome({ onPick, onOpenUrl, onOpenBytes, onSample, loading }: Props) {
   const [recent, setRecent] = useState<RecentFile[]>([]);
   const [version, setVersion] = useState<string | null>(null);
 
@@ -91,12 +92,15 @@ export function Welcome({ onPick, onOpenBytes, onSample, loading }: Props) {
           </div>
           <div className="dropzone-text">
             <strong>{loading ? "Opening…" : "Open a PDF"}</strong>
-            <span>Drop a file anywhere, or click to browse</span>
+            <span>Drop a file or PDF link anywhere, or click to browse</span>
           </div>
           <kbd>Ctrl O</kbd>
         </button>
 
         <div className="welcome-links">
+          <button className="link" onClick={onOpenUrl} disabled={loading}>
+            <Icon name="link" size={15} /> Open from URL
+          </button>
           <button className="link" onClick={onSample}>
             <Icon name="book" size={15} /> Try a sample document
           </button>

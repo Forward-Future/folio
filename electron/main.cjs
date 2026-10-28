@@ -1,9 +1,11 @@
 // Folio desktop shell: one window, PDFs opened from Explorer / "Open with", files served over app://.
-const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell } = require("electron");
+const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, screen } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const { pathToFileURL } = require("node:url");
 const { autoUpdater } = require("electron-updater");
+
+if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 
 const DIST = path.join(__dirname, "..", "dist");
 const DEV_URL = process.env.FOLIO_DEV_URL; // e.g. http://localhost:5173 while developing
@@ -45,7 +47,27 @@ function sendFile(file) {
 let updateReady = null;
 let updateStatus = { state: "idle" };
 let updatesEnabled = false;
+let automaticUpdates = true;
+let activeUpdate = null;
 const UPDATE_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
+function loadUpdatePreference() {
+  try {
+    automaticUpdates = JSON.parse(fs.readFileSync(path.join(app.getPath("userData"), "update-settings.json"), "utf8")).enabled !== false;
+  } catch { automaticUpdates = true; }
+}
+
+function saveUpdatePreference(enabled) {
+  if (typeof enabled !== "boolean") throw new Error("Invalid auto-update preference");
+  const filename = path.join(app.getPath("userData"), "update-settings.json");
+  fs.writeFileSync(filename + ".tmp", JSON.stringify({ enabled }));
+  fs.renameSync(filename + ".tmp", filename);
+  automaticUpdates = enabled;
+  autoUpdater.autoInstallOnAppQuit = enabled;
+  if (!enabled && activeUpdate && !activeUpdate.manual) activeUpdate.token?.cancel();
+  if (enabled) void checkForUpdates();
+  return enabled;
+}
 
 function logUpdate(msg) {
   try {
@@ -58,13 +80,27 @@ function setUpdateStatus(status) {
   win?.webContents.send("folio:update-status-changed", status);
 }
 
-function checkForUpdates() {
+async function checkForUpdates(manual = false) {
   if (!updatesEnabled) return setUpdateStatus({ state: "unsupported" });
-  if (updateReady || ["checking", "downloading"].includes(updateStatus.state)) return;
-  autoUpdater.checkForUpdates().catch(() => {}); // failures arrive via the "error" event
+  if ((!manual && !automaticUpdates) || updateReady || activeUpdate) return;
+  const operation = { manual, token: null };
+  activeUpdate = operation;
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    if (result?.isUpdateAvailable && (manual || automaticUpdates)) {
+      operation.token = result.cancellationToken;
+      setUpdateStatus({ state: "downloading", version: result.updateInfo.version, percent: 0 });
+      await autoUpdater.downloadUpdate(result.cancellationToken);
+      if (operation.token?.cancelled && !updateReady) setUpdateStatus({ state: "idle" });
+    } else if (result?.isUpdateAvailable) setUpdateStatus({ state: "idle" });
+  } catch (error) {
+    if (operation.token?.cancelled) setUpdateStatus({ state: "idle" });
+    else setUpdateStatus({ state: "error", message: String(error?.message || error).split("\n")[0] });
+  } finally { activeUpdate = null; }
 }
 
 function setupAutoUpdate() {
+  loadUpdatePreference();
   // Only real installs can update themselves; skip dev runs and the portable exe.
   // FOLIO_UPDATE_TEST lets the unpacked build be tested.
   const portable = !!process.env.PORTABLE_EXECUTABLE_FILE;
@@ -74,12 +110,11 @@ function setupAutoUpdate() {
   }
   updatesEnabled = true;
   if (!app.isPackaged) autoUpdater.forceDevUpdateConfig = true; // reads dev-app-update.yml
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = automaticUpdates;
   autoUpdater.logger = { info: logUpdate, warn: logUpdate, error: logUpdate, debug() {} };
   autoUpdater.on("checking-for-update", () => setUpdateStatus({ state: "checking" }));
   autoUpdater.on("update-not-available", () => setUpdateStatus({ state: "latest", checkedAt: Date.now() }));
-  autoUpdater.on("update-available", (info) => setUpdateStatus({ state: "downloading", version: info.version, percent: 0 }));
   autoUpdater.on("download-progress", (p) =>
     setUpdateStatus({ state: "downloading", version: updateStatus.version, percent: Math.round(p.percent) }),
   );
@@ -94,14 +129,27 @@ function setupAutoUpdate() {
   });
   logUpdate(`Folio ${app.getVersion()} (${process.arch}) starting update checks`);
   checkForUpdates();
-  setInterval(checkForUpdates, UPDATE_INTERVAL_MS);
+  setInterval(() => void checkForUpdates(), UPDATE_INTERVAL_MS);
 }
 
 function createWindow() {
+  let savedWindow = null;
+  const windowStatePath = path.join(app.getPath("userData"), "window-state.json");
+  try {
+    const saved = JSON.parse(fs.readFileSync(windowStatePath, "utf8"));
+    const bounds = saved.bounds;
+    if (bounds && [bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite) && bounds.width >= 600 && bounds.height >= 400) {
+      const area = screen.getDisplayMatching(bounds).workArea;
+      savedWindow = { bounds: { width: Math.min(bounds.width, area.width), height: Math.min(bounds.height, area.height),
+        x: Math.max(area.x, Math.min(bounds.x, area.x + area.width - Math.min(bounds.width, area.width))),
+        y: Math.max(area.y, Math.min(bounds.y, area.y + area.height - Math.min(bounds.height, area.height))) }, maximized: saved.maximized === true };
+    }
+  } catch {}
   const theme = "dark"; // the page reports its real theme on load via folio:theme
   win = new BrowserWindow({
     width: 1360,
     height: 900,
+    ...(savedWindow?.bounds ?? {}),
     minWidth: 420,
     minHeight: 480,
     show: false,
@@ -118,7 +166,37 @@ function createWindow() {
     },
   });
 
-  win.once("ready-to-show", () => win.show());
+  const cameraOwner = win.webContents;
+  const trustedCameraOrigin = (url) => {
+    try { const origin = new URL(url).origin; return url.startsWith("app://folio/") || !!DEV_URL && origin === new URL(DEV_URL).origin; }
+    catch { return false; }
+  };
+  cameraOwner.session.setPermissionCheckHandler((contents, permission, origin, details) =>
+    contents === cameraOwner && permission === "media" && trustedCameraOrigin(details.requestingUrl || origin) && details.mediaType !== "audio");
+  cameraOwner.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    if (contents !== cameraOwner || permission !== "media" || !details.isMainFrame
+      || !trustedCameraOrigin(details.requestingUrl) || !details.mediaTypes?.length
+      || details.mediaTypes.some(type => type !== "video")) return callback(false);
+    dialog.showMessageBox(win, { type: "question", title: "Use camera for signature?", message: "Allow Folio to use your camera to capture a signature?",
+      detail: "Camera images are processed on this device. No microphone is requested.", buttons: ["Allow camera", "Cancel"], defaultId: 1, cancelId: 1 })
+      .then(result => callback(result.response === 0)).catch(() => callback(false));
+  });
+
+  win.once("ready-to-show", () => {
+    if (savedWindow?.maximized) win.maximize();
+    win.show();
+  });
+  const saveWindow = () => {
+    if (!win || win.isDestroyed() || win.isMinimized() || win.isFullScreen()) return;
+    try {
+      fs.writeFileSync(windowStatePath, JSON.stringify({ bounds: win.getNormalBounds(), maximized: win.isMaximized() }));
+    } catch {}
+  };
+  let windowTimer;
+  const scheduleWindowSave = () => { clearTimeout(windowTimer); windowTimer = setTimeout(saveWindow, 300); };
+  win.on("resize", scheduleWindowSave);
+  win.on("move", scheduleWindowSave);
+  win.on("close", saveWindow);
   win.loadURL(DEV_URL || "app://folio/index.html");
 
   // Links inside PDFs open in the default browser, never in-app.
@@ -147,7 +225,70 @@ function createWindow() {
     if (choice === 0) e.preventDefault();
   });
 
-  win.on("closed", () => (win = null));
+  win.on("closed", () => { clearTimeout(windowTimer); win = null; });
+}
+
+const MAX_URL_PDF_BYTES = 500 * 1024 * 1024;
+
+function pdfNameFromResponse(url, disposition) {
+  const match = /filename\*=(?:UTF-8'')?([^;]+)|filename="?([^";]+)"?/i.exec(disposition || "");
+  let name = (match?.[1] || match?.[2] || "").trim();
+  try { name = decodeURIComponent(name || url.pathname.split("/").filter(Boolean).pop() || ""); } catch {}
+  name = name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").trim() || url.hostname;
+  return /\.pdf$/i.test(name) ? name : name + ".pdf";
+}
+
+// Downloads a PDF link in the main process, so cross-origin URLs work without CORS.
+// Resolves to { name, data } or { error } (error text is shown to the user as-is).
+function downloadPdf(rawUrl) {
+  let url;
+  try { url = new URL(String(rawUrl).trim()); } catch { return Promise.resolve({ error: "That isn't a valid web address." }); }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return Promise.resolve({ error: "Only http:// and https:// links can be opened." });
+  return new Promise((resolve) => {
+    let done = false;
+    const request = net.request({ url: url.toString(), redirect: "manual" });
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (result.error) request.abort();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish({ error: "The download timed out." }), 60_000);
+    let hops = 0;
+    request.setHeader("Accept", "application/pdf,*/*;q=0.8");
+    // Track redirects ourselves: the final address usually carries the real file name.
+    request.on("redirect", (_status, _method, redirectUrl) => {
+      const next = new URL(redirectUrl, url);
+      if (++hops > 10) return finish({ error: "That link redirects too many times." });
+      if (next.protocol !== "http:" && next.protocol !== "https:") return finish({ error: "That link redirects somewhere Folio can't open." });
+      url = next;
+      request.followRedirect();
+    });
+    request.on("error", () => finish({ error: `Couldn't reach ${url.hostname}.` }));
+    request.on("response", (response) => {
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return finish({ error: `The server responded with ${response.statusCode}${response.statusMessage ? " " + response.statusMessage : ""}.` });
+      }
+      const header = (key) => [].concat(response.headers[key] ?? [])[0];
+      const tooBig = { error: "That PDF is larger than 500 MB." };
+      if (Number(header("content-length")) > MAX_URL_PDF_BYTES) return finish(tooBig);
+      const chunks = [];
+      let size = 0;
+      response.on("data", (chunk) => {
+        size += chunk.byteLength;
+        if (size > MAX_URL_PDF_BYTES) finish(tooBig);
+        else chunks.push(chunk);
+      });
+      response.on("error", () => finish({ error: "The download was interrupted." }));
+      response.on("end", () => {
+        const data = Buffer.concat(chunks);
+        if (data.subarray(0, 1024).indexOf("%PDF-") < 0) return finish({ error: "That link doesn't point to a PDF." });
+        finish({ name: pdfNameFromResponse(url, header("content-disposition")), data });
+      });
+    });
+    request.end();
+  });
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -173,14 +314,21 @@ if (!app.requestSingleInstanceLock()) {
       const file = pendingFile;
       pendingFile = null;
       if (file) setTimeout(() => sendFile(file), 0);
-      return true;
+      return !!file;
     });
+    ipcMain.handle("folio:fetch-pdf", (_event, url) => downloadPdf(url));
     ipcMain.handle("folio:version", () => app.getVersion());
+    ipcMain.handle("folio:app-info", () => ({ version: app.getVersion(),
+      mode: !app.isPackaged ? "development" : process.env.PORTABLE_EXECUTABLE_FILE ? "portable" : "installed",
+      location: path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || app.getPath("exe")) }));
+    ipcMain.handle("folio:open-installation", () => shell.openPath(path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || app.getPath("exe"))));
     ipcMain.handle("folio:update-status", () => updateReady);
     ipcMain.handle("folio:update-state", () => updateStatus);
-    ipcMain.on("folio:check-update", () => checkForUpdates());
+    ipcMain.handle("folio:auto-update-setting", () => automaticUpdates);
+    ipcMain.handle("folio:set-auto-update-setting", (_event, enabled) => saveUpdatePreference(enabled));
+    ipcMain.on("folio:check-update", () => void checkForUpdates(true));
     ipcMain.on("folio:install-update", () => {
-      if (updateReady) autoUpdater.quitAndInstall(false, true);
+      if (updateReady) autoUpdater.quitAndInstall(true, true);
     });
     ipcMain.on("folio:theme", (_e, theme) => {
       if (win && TITLEBAR[theme]) {

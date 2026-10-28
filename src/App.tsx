@@ -10,12 +10,16 @@ import {
 import { AnnotationEditorParamsType, AnnotationEditorType } from "pdfjs-dist";
 import { loadPdf, thumbnailDataUrl, type PDFDocumentProxy } from "./pdf";
 import { fileId, getRecent, saveRecent, updateLastPage } from "./recent";
+import { activeDocument, readView, setActiveDocument, writeView, type ReadingView } from "./session";
+import { SearchResults } from "./SearchResults";
 import { Icon, type IconName } from "./icons";
 import { Welcome } from "./Welcome";
 import { Sidebar } from "./Sidebar";
 import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
-import { InfoDialog, PasswordDialog, ShortcutsDialog } from "./Dialogs";
+import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
+import { SignatureDialog } from "./SignatureDialog";
+import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
 
 type Tool = "select" | "highlight" | "ink" | "freetext";
 
@@ -76,6 +80,11 @@ export default function App() {
   const viewerRef = useRef<PDFViewer | null>(null);
   const busRef = useRef<EventBus | null>(null);
   const linkRef = useRef<PDFLinkService | null>(null);
+  const findRef = useRef<PDFFindController | null>(null);
+  const restoreRef = useRef<ReadingView | null>(null);
+  const restoringRef = useRef(false);
+  const preferencesRef = useRef({ sidebar: true, spread: false });
+  const openGeneration = useRef(0);
   const lastPageRef = useRef<number>(1);
   const docRef = useRef<OpenDoc | null>(null);
 
@@ -93,7 +102,10 @@ export default function App() {
   const [spread, setSpread] = useState(() => localStorage.getItem("folio:spread") === "1");
   const spreadRef = useRef(spread);
   spreadRef.current = spread;
-  const [night, setNight] = useState(() => localStorage.getItem("folio:night") === "1");
+  const [night, setNight] = useState(() => {
+    try { return localStorage.getItem("folio:night") === "1"; }
+    catch { return false; }
+  });
   const [tool, setTool] = useState<Tool>("select");
   const [colors, setColors] = useState<Partial<Record<Tool, string>>>({
     highlight: HIGHLIGHTS[0].hex,
@@ -107,13 +119,29 @@ export default function App() {
   const [dirty, setDirty] = useState(false);
   const [focus, setFocus] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [dialog, setDialog] = useState<"info" | "shortcuts" | null>(null);
+  const [dialog, setDialog] = useState<"info" | "shortcuts" | "about" | "url" | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [signing, setSigning] = useState(false);
+  const [signatureTargets, setSignatureTargets] = useState<SignatureTarget[]>([]);
+  const [signatureDismissed, setSignatureDismissed] = useState(false);
+
+  useEffect(() => {
+    setSigning(false); setSignatureTargets([]); setSignatureDismissed(false);
+    if (!doc) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void detectSignatureTargets(doc.pdf, page).then(targets => {
+        if (!cancelled) setSignatureTargets(targets);
+      }).catch(() => {});
+    }, 350);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [doc, page]);
 
   docRef.current = doc;
+  preferencesRef.current = { sidebar, spread };
 
   const flash = useCallback((msg: string) => {
     setToast(msg);
@@ -127,6 +155,7 @@ export default function App() {
     const eventBus = new EventBus();
     const linkService = new PDFLinkService({ eventBus, externalLinkTarget: LinkTarget.BLANK });
     const findController = new PDFFindController({ eventBus, linkService });
+    findRef.current = findController;
     const viewer = new PDFViewer({
       container,
       viewer: innerRef.current!,
@@ -142,9 +171,23 @@ export default function App() {
     linkRef.current = linkService;
 
     eventBus.on("pagesinit", () => {
-      viewer.spreadMode = spreadRef.current ? SpreadMode.ODD : SpreadMode.NONE;
-      viewer.currentScaleValue = window.innerWidth < 900 ? "page-width" : "auto";
-      if (lastPageRef.current > 1) viewer.currentPageNumber = lastPageRef.current;
+      restoringRef.current = true;
+      const saved = restoreRef.current;
+      viewer.spreadMode = (saved?.spread ?? spreadRef.current) ? SpreadMode.ODD : SpreadMode.NONE;
+      viewer.pagesRotation = saved?.rotation ?? 0;
+      viewer.currentScaleValue = saved?.scale ?? (window.innerWidth < 900 ? "page-width" : "auto");
+      const restoredPage = Math.min(lastPageRef.current, viewer.pagesCount);
+      viewer.currentPageNumber = restoredPage;
+      if (saved && Number.isFinite(saved.top) && Number.isFinite(saved.left)) {
+        viewer.scrollPageIntoView({ pageNumber: restoredPage, destArray: [null, { name: "XYZ" }, saved.left, saved.top, null] });
+      }
+      restoringRef.current = false;
+    });
+    eventBus.on("updateviewarea", ({ location }: { location: { pageNumber: number; top: number; left: number } }) => {
+      const current = docRef.current;
+      if (!current || restoringRef.current) return;
+      writeView(current.id, { page: location.pageNumber, scale: viewer.currentScaleValue,
+        rotation: viewer.pagesRotation, ...preferencesRef.current, top: location.top, left: location.left });
     });
     eventBus.on("pagechanging", ({ pageNumber }: { pageNumber: number }) => {
       pageRef.current = pageNumber;
@@ -189,6 +232,7 @@ export default function App() {
   // ── Opening documents ───────────────────────────────────────────────
   const openBytes = useCallback(
     async (name: string, data: Uint8Array, password?: string) => {
+      const generation = ++openGeneration.current;
       const viewer = viewerRef.current!;
       setLoading(true);
       setError(null);
@@ -196,9 +240,22 @@ export default function App() {
         const pdf = await loadPdf(data, password).promise;
         const id = fileId(name, data.byteLength);
         const existing = await getRecent(id);
-        lastPageRef.current = existing?.lastPage ?? 1;
+        if (generation !== openGeneration.current) {
+          void pdf.loadingTask.destroy();
+          return;
+        }
+        const saved = readView(id);
+        restoreRef.current = saved;
+        lastPageRef.current = Math.min(saved?.page ?? existing?.lastPage ?? 1, pdf.numPages);
+        if (saved) {
+          setSidebar(saved.sidebar);
+          setSpread(saved.spread);
+          spreadRef.current = saved.spread;
+          preferencesRef.current = { sidebar: saved.sidebar, spread: saved.spread };
+        }
 
         const prev = docRef.current;
+        docRef.current = { id, name, data, pdf };
         viewer.setDocument(pdf);
         linkRef.current!.setDocument(pdf, null);
         prev?.pdf.loadingTask.destroy();
@@ -218,17 +275,24 @@ export default function App() {
         setFind({ current: 0, total: 0, state: null });
         document.title = `${name} — Folio`;
 
-        saveRecent({
-          id,
-          name,
-          size: data.byteLength,
-          pages: pdf.numPages,
-          openedAt: Date.now(),
-          lastPage: lastPageRef.current,
-          thumb: existing?.thumb ?? (await thumbnailDataUrl(pdf).catch(() => "")),
-          data: new Blob([data.slice()], { type: "application/pdf" }),
-        });
+        setLoading(false);
+        setActiveDocument(id);
+        void (async () => {
+          const thumb = existing?.thumb ?? (await thumbnailDataUrl(pdf).catch(() => ""));
+          if (generation !== openGeneration.current) return;
+          await saveRecent({
+            id,
+            name,
+            size: data.byteLength,
+            pages: pdf.numPages,
+            openedAt: Date.now(),
+            lastPage: pageRef.current,
+            thumb,
+            data: new Blob([data.slice()], { type: "application/pdf" }),
+          });
+        })().catch(() => {});
       } catch (err) {
+        if (generation !== openGeneration.current) return;
         const e = err as { name?: string; code?: number; message?: string };
         if (e?.name === "PasswordException") {
           setPending({ name, data, error: e.code === 2 ? "Incorrect password. Try again." : undefined });
@@ -236,7 +300,7 @@ export default function App() {
           setError(`Couldn't open “${name}”. ${e?.message ?? "The file may be damaged."}`);
         }
       } finally {
-        setLoading(false);
+        if (generation === openGeneration.current) setLoading(false);
       }
     },
     [],
@@ -261,6 +325,39 @@ export default function App() {
     input.click();
   }, [openFile]);
 
+  const openUrl = useCallback(
+    async (url: string) => {
+      const generation = ++openGeneration.current;
+      const host = new URL(url).hostname;
+      setLoading(true);
+      setError(null);
+      setToast(`Downloading from ${host}…`);
+      try {
+        let file: { name: string; data: Uint8Array };
+        if (window.folioDesktop) {
+          file = await window.folioDesktop.fetchPdf(url);
+        } else {
+          // The browser edition can only read links whose server allows cross-origin requests.
+          const res = await fetch(url).catch(() => {
+            throw new Error(`Couldn't download from ${host}. The site may not allow it.`);
+          });
+          if (!res.ok) throw new Error(`The server responded with ${res.status}.`);
+          const name = decodeURIComponent(new URL(res.url || url).pathname.split("/").filter(Boolean).pop() || host);
+          file = { name: /\.pdf$/i.test(name) ? name : name + ".pdf", data: new Uint8Array(await res.arrayBuffer()) };
+        }
+        if (generation !== openGeneration.current) return;
+        setToast(null);
+        await openBytes(file.name, file.data);
+      } catch (e: any) {
+        if (generation !== openGeneration.current) return;
+        setToast(null);
+        setLoading(false);
+        setError(`Couldn't open that link. ${e?.message ?? ""}`.trim());
+      }
+    },
+    [openBytes],
+  );
+
   const openSample = useCallback(async () => {
     const res = await fetch(`${import.meta.env.BASE_URL}sample.pdf`);
     openBytes("TraceMonkey — Trace-based JIT.pdf", new Uint8Array(await res.arrayBuffer()));
@@ -268,9 +365,14 @@ export default function App() {
 
   const closeDoc = useCallback(() => {
     if (dirty && !confirm("You have unsaved annotations. Close anyway?")) return;
+    openGeneration.current++;
+    setActiveDocument(null);
+    setLoading(false);
+    setPending(null);
     viewerRef.current!.setDocument(null as unknown as PDFDocumentProxy);
     linkRef.current!.setDocument(null, null);
     docRef.current?.pdf.loadingTask.destroy();
+    docRef.current = null;
     setDoc(null);
     setDirty(false);
     setSearchOpen(false);
@@ -281,19 +383,24 @@ export default function App() {
   // Remember where the reader left off.
   useEffect(() => {
     if (!doc) return;
-    const t = window.setTimeout(() => updateLastPage(doc.id, page), 600);
-    return () => window.clearTimeout(t);
+    const saved = readView(doc.id);
+    if (saved) writeView(doc.id, { ...saved, sidebar, spread });
+  }, [doc, sidebar, spread]);
+  useEffect(() => {
+    if (!doc) return;
+    const timer = window.setTimeout(() => void updateLastPage(doc.id, page), 600);
+    return () => window.clearTimeout(timer);
   }, [doc, page]);
 
   // ── Actions ─────────────────────────────────────────────────────────
-  const goTo = (n: number) => {
+  const goTo = useCallback((n: number) => {
     const v = viewerRef.current!;
     if (!v.pdfDocument) return;
     v.currentPageNumber = Math.min(Math.max(1, n), v.pagesCount);
-  };
+  }, []);
   const zoom = (steps: number) => {
     const v = viewerRef.current!;
-    if (v.pdfDocument) v.updateScale({ steps, drawingDelay: 0, origin: undefined as unknown as number[] });
+    if (v.pdfDocument) v.updateScale({ steps, drawingDelay: 150, origin: undefined as unknown as number[] });
   };
   const setScaleValue = (value: string) => {
     const v = viewerRef.current!;
@@ -334,7 +441,7 @@ export default function App() {
 
   const currentBytes = async () => {
     if (!doc) return null;
-    return dirty ? await doc.pdf.saveDocument() : doc.data;
+    return doc.pdf.annotationStorage.size > 0 ? await doc.pdf.saveDocument() : doc.data;
   };
 
   const download = async () => {
@@ -374,7 +481,21 @@ export default function App() {
   };
 
   // Desktop app: PDFs opened from Explorer, and a title bar that matches the theme.
-  useEffect(() => window.folioDesktop?.onOpenFile((name, data) => openBytes(name, data)), [openBytes]);
+  useEffect(() => {
+    let cancelled = false;
+    const generation = openGeneration.current;
+    const unsubscribe = window.folioDesktop?.onOpenFile((name, data) => openBytes(name, data));
+    void (async () => {
+      const hasStartupFile = await window.folioDesktop?.ready();
+      if (hasStartupFile || cancelled || generation !== openGeneration.current) return;
+      const id = activeDocument();
+      const recent = id ? await getRecent(id) : undefined;
+      if (!recent || cancelled || generation !== openGeneration.current) return;
+      const data = new Uint8Array(await recent.data.arrayBuffer());
+      if (!cancelled && generation === openGeneration.current) void openBytes(recent.name, data);
+    })();
+    return () => { cancelled = true; unsubscribe?.(); };
+  }, [openBytes]);
   useEffect(() => window.folioDesktop?.setTheme(theme), [theme]);
   useEffect(() => window.folioDesktop?.onUpdateReady(setUpdateVersion), []);
 
@@ -403,7 +524,12 @@ export default function App() {
   }, []);
 
   useEffect(() => localStorage.setItem("folio:sidebar", sidebar ? "1" : "0"), [sidebar]);
-  useEffect(() => localStorage.setItem("folio:night", night ? "1" : "0"), [night]);
+  const toggleNight = () => {
+    const next = !night;
+    try { localStorage.setItem("folio:night", next ? "1" : "0"); }
+    catch { flash("Night reading changed, but couldn't save the preference."); }
+    setNight(next);
+  };
 
   // Keep the viewer's layout correct when the sidebar animates open/closed.
   useEffect(() => {
@@ -426,18 +552,24 @@ export default function App() {
   // ── Keyboard shortcuts ──────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (signing) return;
       const mod = e.ctrlKey || e.metaKey;
       const target = e.target as HTMLElement;
       const typing = target.closest("input, textarea, [contenteditable=true], .freeTextEditor");
 
       if (mod && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        pickFile();
+        if (e.shiftKey) setDialog("url");
+        else pickFile();
         return;
       }
       if (!docRef.current) return;
 
-      if (mod && e.key.toLowerCase() === "f") {
+      if (mod && !typing && Number(viewerRef.current?.annotationEditorMode) === AnnotationEditorType.NONE
+        && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")) {
+        e.preventDefault();
+        busRef.current?.dispatch("editingaction", { source: null, name: e.shiftKey || e.key.toLowerCase() === "y" ? "redo" : "undo" });
+      } else if (mod && e.key.toLowerCase() === "f") {
         e.preventDefault();
         setSearchOpen(true);
         requestAnimationFrame(() => document.getElementById("folio-search")?.focus());
@@ -488,7 +620,17 @@ export default function App() {
   // ── Drag & drop anywhere ────────────────────────────────────────────
   useEffect(() => {
     let depth = 0;
-    const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files");
+    let internal = false; // dragging text or images from inside Folio isn't an "open" gesture
+    const hasFiles = (e: DragEvent) => {
+      const types = e.dataTransfer?.types ?? [];
+      return !internal && (types.includes("Files") || types.includes("text/uri-list") || types.includes("text/plain"));
+    };
+    const droppedUrl = (data: DataTransfer) => {
+      const fromList = data.getData("text/uri-list").split(/\r?\n/).find((line) => line.trim() && !line.startsWith("#"));
+      return parseWebUrl(fromList) ?? parseWebUrl(data.getData("text/plain"));
+    };
+    const start = () => (internal = true);
+    const end = () => (internal = false);
     const enter = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
@@ -509,19 +651,37 @@ export default function App() {
       depth = 0;
       setDragging(false);
       const file = e.dataTransfer?.files[0];
+      const url = !file && e.dataTransfer ? droppedUrl(e.dataTransfer) : null;
       if (file) openFile(file);
+      else if (url) openUrl(url);
+      else setError("Drop a PDF file or a link to a PDF.");
     };
+    // Pasting a PDF link (outside text fields) opens it too.
+    const paste = (e: ClipboardEvent) => {
+      if (signing || (e.target as HTMLElement | null)?.closest?.("input, textarea, [contenteditable=true], .freeTextEditor")) return;
+      const url = parseWebUrl(e.clipboardData?.getData("text/plain"));
+      if (!url) return;
+      e.preventDefault();
+      setDialog(null);
+      openUrl(url);
+    };
+    window.addEventListener("dragstart", start);
+    window.addEventListener("dragend", end);
+    window.addEventListener("paste", paste);
     window.addEventListener("dragenter", enter);
     window.addEventListener("dragleave", leave);
     window.addEventListener("dragover", over);
     window.addEventListener("drop", drop);
     return () => {
+      window.removeEventListener("dragstart", start);
+      window.removeEventListener("dragend", end);
+      window.removeEventListener("paste", paste);
       window.removeEventListener("dragenter", enter);
       window.removeEventListener("dragleave", leave);
       window.removeEventListener("dragover", over);
       window.removeEventListener("drop", drop);
     };
-  }, [openFile]);
+  }, [openFile, openUrl, signing]);
 
   const runFind = (query: string, opts: { again?: boolean; previous?: boolean; caseSensitive?: boolean; entireWord?: boolean }) =>
     busRef.current!.dispatch("find", {
@@ -581,18 +741,20 @@ export default function App() {
                   <span>{t.label}</span>
                 </button>
               ))}
+              <button onClick={() => { chooseTool("select"); setSigning(true); }} title="Add a signature"><Icon name="pen" size={16} /><span>Sign</span></button>
             </div>
           )}
         </div>
 
         <div className="topbar-right">
+          <IconButton icon="info" label="About Folio" onClick={() => setDialog("about")} />
           {doc && (
             <>
               <IconButton icon="search" label="Search (Ctrl+F)" active={searchOpen} onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))} />
               <IconButton icon="print" label="Print (Ctrl+P)" className="wide-only" onClick={print} />
               <IconButton icon="download" label={dirty ? "Save copy with annotations (Ctrl+S)" : "Download (Ctrl+S)"} onClick={download} />
               <span className="divider" />
-              <IconButton icon="eye" label="Night reading" className="wide-only" active={night} onClick={() => setNight(!night)} />
+              <IconButton icon="eye" label="Night reading" className="wide-only" active={night} onClick={toggleNight} />
             </>
           )}
           <IconButton icon={theme === "dark" ? "sun" : "moon"} label="Toggle theme" onClick={toggleTheme} />
@@ -622,7 +784,10 @@ export default function App() {
           </div>
 
           {doc && searchOpen && (
-            <SearchBar result={find} onFind={runFind} onClose={closeSearch} />
+            <>
+              <SearchBar result={find} onFind={runFind} onClose={closeSearch} />
+              <SearchResults pdf={doc.pdf} controller={findRef.current!} bus={busRef.current!} onSelect={goTo} />
+            </>
           )}
 
           {doc && isEditing && PALETTE[tool] && (
@@ -697,7 +862,7 @@ export default function App() {
         </main>
       </div>
 
-      {!doc && <Welcome onPick={pickFile} onOpenBytes={openBytes} onSample={openSample} loading={loading} />}
+      {!doc && <Welcome onPick={pickFile} onOpenUrl={() => setDialog("url")} onOpenBytes={openBytes} onSample={openSample} loading={loading} />}
 
       {loading && doc && <div className="loading-bar" />}
 
@@ -705,7 +870,7 @@ export default function App() {
         <div className="drop-overlay">
           <div className="drop-card">
             <Icon name="upload" size={30} />
-            <p>Drop to open</p>
+            <p>Drop a PDF or link to open</p>
           </div>
         </div>
       )}
@@ -720,12 +885,24 @@ export default function App() {
       )}
       {dialog === "info" && doc && <InfoDialog pdf={doc.pdf} name={doc.name} size={doc.data.byteLength} onClose={() => setDialog(null)} />}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
+      {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} />}
+      {dialog === "url" && <OpenUrlDialog onClose={() => setDialog(null)} onSubmit={(url) => { setDialog(null); openUrl(url); }} />}
+      {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}
+        onClose={() => setSigning(false)} onApprove={async (signature, rect) => {
+          await placeSignature(viewerRef.current!, doc.pdf, page, signature, rect);
+          setDirty(true); setSignatureDismissed(true); flash("Signature added. Ctrl+Z to undo; Save copy to export.");
+        }} />}
+      {doc && !signing && signatureTargets.length > 0 && !signatureDismissed && <div className="signature-suggestion" role="status">
+        <span>{signatureTargets[0].kind === "field" ? "Signature field detected" : "Possible signature area"} on page {page}</span>
+        <button className="btn primary" onClick={() => { chooseTool("select"); setSigning(true); }}>Review signature</button>
+        <button className="pill-btn" aria-label="Dismiss signature suggestion" onClick={() => setSignatureDismissed(true)}><Icon name="close" size={14} /></button>
+      </div>}
 
       {updateVersion && (
         <div className="update-card" role="status">
           <div>
             <strong>Folio {updateVersion} is ready</strong>
-            <span>Restart to update — or it installs next time you close Folio.</span>
+            <span>Restart to update. Installation on close follows your auto-update setting.</span>
           </div>
           <button
             className="btn primary"

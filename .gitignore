@@ -3,4 +3,5 @@ dist
 public/pdfjs
 release
 release-test
+release-*/
 dev-app-update.yml

@@ -80,25 +80,56 @@ function OutlineNode({ item, onSelect, depth }: { item: OutlineItem; onSelect: (
 function Thumbnails({ pdf, page, rotation, onSelect }: { pdf: PDFDocumentProxy; page: number; rotation: number; onSelect: (n: number) => void }) {
   const listRef = useRef<HTMLDivElement>(null);
   const [ratio, setRatio] = useState(1.294);
+  const [range, setRange] = useState({ start: 0, end: 12 });
+  const rowHeight = Math.ceil(THUMB_W * ratio) + 48;
 
   useEffect(() => {
+    let cancelled = false;
     pdf.getPage(1).then((p) => {
       const vp = p.getViewport({ scale: 1, rotation: (p.rotate + rotation) % 360 });
-      setRatio(vp.height / vp.width);
-    });
+      if (!cancelled) setRatio(vp.height / vp.width);
+    }).catch(() => {});
+    return () => { cancelled = true; };
   }, [pdf, rotation]);
+
+  useEffect(() => {
+    const scroll = listRef.current!.parentElement!;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const start = Math.min(pdf.numPages - 1, Math.max(0, Math.floor(scroll.scrollTop / rowHeight) - 4));
+      const end = Math.min(pdf.numPages, Math.ceil((scroll.scrollTop + scroll.clientHeight) / rowHeight) + 4);
+      setRange(previous => previous.start === start && previous.end === end ? previous : { start, end });
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    const observer = new ResizeObserver(schedule);
+    observer.observe(scroll);
+    scroll.addEventListener("scroll", schedule, { passive: true });
+    measure();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      scroll.removeEventListener("scroll", schedule);
+    };
+  }, [pdf, rowHeight]);
 
   // Keep the active thumbnail in view as the reader scrolls.
   useEffect(() => {
-    const el = listRef.current?.querySelector<HTMLElement>(`[data-page="${page}"]`);
-    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [page]);
+    const scroll = listRef.current!.parentElement!;
+    const top = (page - 1) * rowHeight;
+    if (top < scroll.scrollTop || top + rowHeight > scroll.scrollTop + scroll.clientHeight) {
+      scroll.scrollTop = Math.max(0, top - (scroll.clientHeight - rowHeight) / 2);
+      scroll.dispatchEvent(new Event("scroll"));
+    }
+  }, [pdf, page, rowHeight]);
 
   return (
-    <div className="thumbs" ref={listRef}>
-      {Array.from({ length: pdf.numPages }, (_, i) => (
-        <Thumb key={`${i}-${rotation}`} pdf={pdf} n={i + 1} ratio={ratio} rotation={rotation} active={page === i + 1} onSelect={onSelect} />
+    <div className="thumbs" ref={listRef} style={{ gap: 0 }}>
+      <div aria-hidden="true" style={{ height: range.start * rowHeight, flexShrink: 0 }} />
+      {Array.from({ length: Math.max(0, range.end - range.start) }, (_, index) => (
+        <Thumb key={`${range.start + index}-${rotation}`} pdf={pdf} n={range.start + index + 1} ratio={ratio} rotation={rotation} active={page === range.start + index + 1} onSelect={onSelect} />
       ))}
+      <div aria-hidden="true" style={{ height: Math.max(0, pdf.numPages - range.end) * rowHeight, flexShrink: 0 }} />
     </div>
   );
 }
@@ -127,11 +158,12 @@ const Thumb = memo(function Thumb({
   useEffect(() => {
     const el = ref.current!;
     let cancelled = false;
+    const controller = new AbortController();
     const io = new IntersectionObserver(
       (entries) => {
         if (!entries[0].isIntersecting) return;
         io.disconnect();
-        renderThumbnail(pdf, n, canvasRef.current!, THUMB_W, rotation)
+        renderThumbnail(pdf, n, canvasRef.current!, THUMB_W, rotation, controller.signal)
           .then(() => !cancelled && setReady(true))
           .catch(() => {});
       },
@@ -140,13 +172,14 @@ const Thumb = memo(function Thumb({
     io.observe(el);
     return () => {
       cancelled = true;
+      controller.abort();
       io.disconnect();
     };
   }, [pdf, n, rotation]);
 
   return (
-    <button ref={ref} data-page={n} className={`thumb ${active ? "on" : ""}`} onClick={() => onSelect(n)} aria-label={`Page ${n}`}>
-      <div className="thumb-frame" style={{ width: THUMB_W, height: ready ? undefined : THUMB_W * ratio }}>
+    <button ref={ref} data-page={n} className={`thumb ${active ? "on" : ""}`} style={{ height: Math.ceil(THUMB_W * ratio) + 48, flexShrink: 0 }} onClick={() => onSelect(n)} aria-label={`Page ${n}`}>
+      <div className="thumb-frame" style={{ width: THUMB_W, height: THUMB_W * ratio, flexShrink: 0 }}>
         <canvas ref={canvasRef} style={{ opacity: ready ? 1 : 0 }} />
       </div>
       <span className="thumb-num">{n}</span>

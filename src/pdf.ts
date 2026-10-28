@@ -29,8 +29,10 @@ export async function renderThumbnail(
   canvas: HTMLCanvasElement,
   width: number,
   rotation = 0,
+  signal?: AbortSignal,
 ) {
   const page = await doc.getPage(pageNumber);
+  signal?.throwIfAborted();
   const base = page.getViewport({ scale: 1, rotation: (page.rotate + rotation) % 360 });
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const viewport = page.getViewport({
@@ -41,7 +43,14 @@ export async function renderThumbnail(
   canvas.height = Math.floor(viewport.height);
   canvas.style.width = `${width}px`;
   canvas.style.height = `${(viewport.height / viewport.width) * width}px`;
-  await page.render({ canvas, viewport }).promise;
+  const task = page.render({ canvas, viewport });
+  const cancel = () => task.cancel();
+  signal?.addEventListener("abort", cancel, { once: true });
+  try {
+    await task.promise;
+  } finally {
+    signal?.removeEventListener("abort", cancel);
+  }
 }
 
 export async function thumbnailDataUrl(doc: PDFDocumentProxy) {

@@ -14,21 +14,31 @@ export interface RecentFile {
 const DB_NAME = "folio";
 const STORE = "recent";
 const MAX_RECENT = 8;
+let connection: Promise<IDBDatabase> | null = null;
 
 function open(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (connection) return connection;
+  connection = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 1);
     req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: "id" });
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const database = req.result;
+      database.onversionchange = () => { database.close(); connection = null; };
+      database.onclose = () => { connection = null; };
+      resolve(database);
+    };
+    req.onerror = () => { connection = null; reject(req.error); };
   });
+  return connection;
 }
 
 async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const db = await open();
   return new Promise((resolve, reject) => {
-    const req = fn(db.transaction(STORE, mode).objectStore(STORE));
-    req.onsuccess = () => resolve(req.result);
+    const transaction = db.transaction(STORE, mode);
+    const req = fn(transaction.objectStore(STORE));
+    transaction.oncomplete = () => resolve(req.result);
+    transaction.onabort = () => reject(transaction.error);
     req.onerror = () => reject(req.error);
   });
 }
@@ -63,8 +73,20 @@ export async function saveRecent(file: RecentFile) {
 }
 
 export async function updateLastPage(id: string, lastPage: number) {
-  const file = await getRecent(id);
-  if (file) await saveRecent({ ...file, lastPage });
+  try {
+    const database = await open();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(STORE, "readwrite");
+      const store = transaction.objectStore(STORE);
+      const request = store.get(id);
+      request.onsuccess = () => {
+        const file = request.result as RecentFile | undefined;
+        if (file && file.lastPage !== lastPage) store.put({ ...file, lastPage });
+      };
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error);
+    });
+  } catch {}
 }
 
 export async function removeRecent(id: string) {

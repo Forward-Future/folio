@@ -355,6 +355,9 @@ kbd {
 }
 .thumb-frame canvas {
   display: block;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain;
   transition: opacity 0.25s;
 }
 .thumb:hover .thumb-frame {
@@ -683,6 +686,34 @@ kbd {
   opacity: 0.88;
 }
 
+.search-results {
+  position: absolute;
+  z-index: 9;
+  top: 66px;
+  right: 18px;
+  width: min(390px, calc(100% - 36px));
+  max-height: calc(100% - 170px);
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+.search-results h3 { margin: 0 0 12px; font-size: 13px; }
+.search-results h3 span { color: var(--text-3); margin-left: 8px; }
+.search-result-list { display: grid; gap: 6px; }
+.search-result-list button { padding: 12px; text-align: left; border-radius: 8px; background: var(--surface-2); }
+.search-result-list button:hover, .search-result-list button:focus-visible { background: var(--accent-soft); }
+.search-result-list strong { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; margin-bottom: 8px; }
+.search-result-list strong span { color: var(--text-3); font-weight: 400; }
+.search-result-list button > span { display: block; font-size: 12px; line-height: 1.65; color: var(--text-2); overflow-wrap: anywhere; }
+.search-result-list mark { color: var(--text); background: var(--accent-soft); font-weight: 600; }
+.search-hint { color: var(--text-2); font-size: 12px; line-height: 1.6; }
+.about-update { padding: 0 24px 24px; }
+.auto-update-setting { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-weight: 600; }
+.installation-path { overflow-wrap: anywhere; }
+
 .searchbar {
   top: 14px;
   right: 18px;
@@ -866,6 +897,8 @@ kbd {
 .welcome-links {
   display: flex;
   justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 20px;
   margin-top: 16px;
 }
 .link {
@@ -1130,6 +1163,27 @@ kbd {
   padding: 8px 8px 12px;
   animation: modal-in 0.22s var(--ease);
 }
+
+.modal:has(.signature-dialog) { width: min(620px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow-y: auto; }
+.signature-dialog { display: grid; gap: 14px; padding: 0 14px 4px; }
+.signature-dialog p { margin: 0; }
+.signature-dialog > .form-actions { position: sticky; bottom: -12px; background: var(--surface); padding: 12px 0; z-index: 1; margin-top: 0; flex-wrap: wrap; }
+.signature-controls .form-actions { margin-top: 0; flex-wrap: wrap; }
+.signature-controls { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 12px; }
+.signature-controls > label { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.signature-controls select { max-width: 100%; padding: 7px; background: var(--bg); color: var(--text); border: 1px solid var(--line-strong); border-radius: 6px; }
+.signature-controls input[type=file] { width: 1px; height: 1px; position: absolute; opacity: 0; }
+.signature-controls label.btn { cursor: pointer; }
+.signature-controls label.btn:focus-within { outline: 2px solid #2f6fed; }
+.signature-camera video, .signature-crop canvas { display: block; max-width: 100%; max-height: 300px; margin: 0 auto 10px; }
+.signature-crop canvas { touch-action: none; cursor: crosshair; }
+.signature-image { background: white; border: 1px solid var(--line-strong); border-radius: 8px; padding: 16px; text-align: center; }
+.signature-image img { max-width: 100%; max-height: 90px; }
+.signature-page { position: relative; max-width: 100%; margin: auto; cursor: crosshair; background: white; border: 1px solid #aaa; }
+.signature-page-background { display: block; width: 100%; height: 100%; pointer-events: none; }
+.signature-placement { position: absolute; outline: 2px dashed #2f6fed; outline-offset: 3px; pointer-events: none; }
+.signature-suggestion { position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--line-strong); padding: 12px 16px; border-radius: 12px; box-shadow: var(--shadow-lg); max-width: calc(100vw - 24px); font-size: 13px; }
+.signature-suggestion > span { min-width: 100px; }
 @keyframes modal-in {
   from {
     opacity: 0;

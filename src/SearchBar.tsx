@@ -40,6 +40,7 @@ export function SearchBar({
       <Icon name="search" size={16} />
       <input
         id="folio-search"
+        aria-label="Find in document"
         autoFocus
         placeholder="Find in document"
         value={query}
