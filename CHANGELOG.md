@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.9.0
+
+- **Linux .deb installs now update with the rest of your system.** The package adds Folio's signed apt repository,
+  so new versions arrive through your regular software updates (or `sudo apt update && sudo apt upgrade`). Install
+  this .deb once to switch over.
+- Every release is checked to make sure Windows, macOS, and Linux all get the same version, before and after it's
+  published and again every day.
+- Release builds are ready to be signed for macOS (Developer ID, notarized, self-updating) and Windows (Azure Trusted
+  Signing) as soon as the certificates are added.
+
 ## 1.8.2
 
 - **Ask AI conversations stay with each document.** Your questions and answers are saved with the document on this
