@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.8.1
+
+- A simpler toolbar without duplicate controls: highlighting happens by selecting text (or pressing H), so the separate
+  Highlight tool is gone; notes live in the sidebar's **Notes** tab, so the extra notes button is gone; and **Sign**
+  has its own icon instead of sharing Draw's pen.
+
 ## 1.8.0
 
 - **Folio now runs on macOS and Linux.** Download a universal DMG for Mac (Apple Silicon and Intel), or a `.deb`

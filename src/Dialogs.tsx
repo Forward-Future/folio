@@ -173,7 +173,6 @@ const SHORTCUTS: [string, string][] = [
   ["Reset zoom", "Ctrl 0"],
   ["Toggle sidebar", "Ctrl \\"],
   ["Select tool", "V"],
-  ["Highlight", "H"],
   ["Draw", "D"],
   ["Add text", "T"],
   ["Rotate pages", "R"],

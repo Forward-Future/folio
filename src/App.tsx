@@ -40,7 +40,6 @@ const TOOL_MODES: Record<Tool, number> = {
 
 const TOOLS: { id: Tool; icon: IconName; label: string; key: string }[] = [
   { id: "select", icon: "cursor", label: "Select", key: "V" },
-  { id: "highlight", icon: "highlight", label: "Highlight", key: "H" },
   { id: "ink", icon: "pen", label: "Draw", key: "D" },
   { id: "freetext", icon: "text", label: "Text", key: "T" },
 ];
@@ -595,14 +594,6 @@ export default function App() {
     document.getSelection()?.removeAllRanges();
   };
 
-  const toggleNotes = () => {
-    if (sidebar && sidebarTab === "notes") setSidebar(false);
-    else {
-      setSidebar(true);
-      setSidebarTab("notes");
-    }
-  };
-
   useEffect(() => setContainer(containerRef.current), []);
   // Panels change the space the page has: re-fit "auto"/"fit" zoom once they finish sliding.
   useEffect(() => {
@@ -960,7 +951,7 @@ export default function App() {
                   <span>{t.label}</span>
                 </button>
               ))}
-              <button onClick={() => { chooseTool("select"); setSigning(true); }} title="Add a signature"><Icon name="pen" size={16} /><span>Sign</span></button>
+              <button onClick={() => { chooseTool("select"); setSigning(true); }} title="Add a signature"><Icon name="signature" size={16} /><span>Sign</span></button>
             </div>
           )}
         </div>
@@ -968,7 +959,6 @@ export default function App() {
         <div className="topbar-right">
           {doc && (
             <>
-              <IconButton icon="note" label="Highlights and notes" active={sidebar && sidebarTab === "notes"} onClick={toggleNotes} />
               <IconButton icon="sparkle" label="Ask AI" active={aiOpen} onClick={() => setAiOpen(!aiOpen)} />
               <IconButton icon="search" label={keys("Search (Ctrl+F)")} active={searchOpen} onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))} />
             </>
