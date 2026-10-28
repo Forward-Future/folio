@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.1
+
+- The sidebar keeps one width on every tab, so Pages, Outline, and Notes no longer change size when you switch between them.
+
 ## 1.5.0
 
 - Selecting text shows a note box right away: type a note and press Enter to highlight with it (or click a color to

@@ -601,9 +601,10 @@
   }
 }
 
-/* The Notes tab needs room for quotes and notes. */
-.sidebar.tab-notes {
-  --sidebar-w: 300px;
+/* One sidebar width for every tab, so switching tabs never resizes anything. */
+.sidebar-tabs button {
+  flex: 1 1 0;
+  min-width: 0;
 }
 .sidebar-tabs button svg {
   display: none;
