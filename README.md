@@ -8,14 +8,16 @@ A simple, clean PDF reader for Windows. Free and open source.
 Installed copies update themselves. Prefer not to install? Download **Folio-Portable.exe** from the
 [latest release](https://github.com/Forward-Future/folio-releases/releases/latest); it runs as-is but doesn't auto-update.
 
+Requires 64-bit Windows 10 or 11.
+
 > Folio's builds aren't code-signed yet, so Windows SmartScreen may warn the first time you run the installer.
 > Choose **More info → Run anyway**, or build Folio yourself from source (below).
 
 ## Features
 
 - **Reading:** continuous scroll, page thumbnails, outline/bookmarks, find with match case and whole word plus
-  per-page result snippets, zoom (fit width, fit page, presets, Ctrl+wheel/pinch), two-page view, rotate, focus mode,
-  light and dark themes, and night reading that dims bright pages.
+  per-page result snippets, zoom (fit width, fit page, presets, Ctrl+wheel/pinch), two-page view, rotate, focus mode
+  (F; Esc to exit), light and dark themes, and night reading that dims bright pages.
 - **Opening:** drag in a PDF, open from Windows Explorer ("Open with → Folio"), or drop, paste, or enter a link to a
   PDF on the web (Ctrl+Shift+O).
 - **Highlights and notes:** select text and click a color (or press H) to highlight it; choose Note (N) to attach a
@@ -31,6 +33,19 @@ Installed copies update themselves. Prefer not to install? Download **Folio-Port
 
 Press `?` in the app for keyboard shortcuts.
 
+## Using Ask AI
+
+Open **Ask AI** with the sparkle button in the toolbar, or select text and choose **Ask AI** in the pop-up toolbar.
+Then pick a provider at the top of the panel:
+
+- **ChatGPT:** click **Continue with ChatGPT** and sign in in your browser. Questions use your ChatGPT plan (Go, Plus,
+  or Pro), and usage counts toward that plan's limits; manage it in
+  [ChatGPT settings](https://chatgpt.com/settings/usage). Sign out from the bottom of the panel.
+- **Claude:** install [Claude Code](https://claude.com/claude-code), run `claude` once in a terminal, and sign in with
+  your Claude account (Pro or Max). Then click **Check again** in Folio. Questions use your Claude subscription.
+
+Ask AI is available in the desktop app only, not the browser version.
+
 ## Privacy
 
 Folio has no accounts, analytics, or telemetry, and never uploads your documents on its own. It makes network requests
@@ -42,15 +57,16 @@ only to:
   you selected, and the conversation go to the provider you chose: OpenAI for ChatGPT, or Anthropic through your
   installed Claude Code. Their privacy terms apply to that data.
 
-For ChatGPT, Folio stores its sign-in tokens encrypted with Windows' per-user data protection and never shows them to
-the page. For Claude, Folio runs your own Claude Code with every tool disabled; it never sees or stores your Claude
-credentials.
+For ChatGPT, Folio stores its sign-in tokens in `%APPDATA%\Folio\ai`, encrypted with Windows' per-user data
+protection, and never exposes them to the page. For Claude, Folio runs your own Claude Code with every tool disabled;
+it never sees or stores your Claude credentials. The question's context is written to a temporary file for Claude Code
+and deleted as soon as the answer finishes. Conversations aren't saved; they last until you close Folio.
 
 Stored locally in your Windows profile (`%APPDATA%\Folio`): recently opened PDFs and their thumbnails (up to 8,
-removable from the home screen with **Clear all**; password-protected PDFs are never kept), highlights and
-notes for each document (except password-protected ones), reading positions, preferences, and, only if you choose to
-remember it, your signature image. This data isn't encrypted, so anyone with
-access to your Windows account can read it.
+removable from the home screen with **Clear all**; password-protected PDFs are never kept), highlights and notes for
+each document (except password-protected ones), reading positions, preferences, and, only if you choose to remember
+it, your signature image. Apart from the ChatGPT sign-in, this data isn't encrypted, so anyone with access to your
+Windows account can read it.
 
 ## Building from source
 
@@ -68,9 +84,12 @@ If your terminal has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
 ### How it's put together
 
 - `src/`: the reader UI (React + TypeScript, built with Vite) on top of [pdf.js](https://github.com/mozilla/pdf.js).
-- `electron/`: the Windows desktop shell. It serves the built app from `dist/` over a custom `app://` protocol with
-  a strict Content Security Policy, runs the page sandboxed with context isolation, opens PDFs passed from Explorer,
-  keeps a single window, downloads PDF links, and handles automatic updates.
+  `markup.ts` saves and restores highlights and notes, `NotesPanel.tsx` and `Selection.tsx` are their UI, and
+  `AiPanel.tsx` is the Ask AI panel.
+- `electron/`: the Windows desktop shell. `main.cjs` serves the built app from `dist/` over a custom `app://` protocol
+  with a strict Content Security Policy, runs the page sandboxed with context isolation, opens PDFs passed from
+  Explorer, keeps a single window, downloads PDF links, and handles automatic updates. `ai.cjs` runs Ask AI (ChatGPT
+  sign-in and requests, and Claude Code) so credentials never reach the page.
 - `scripts/release.mjs`: the maintainer release script (see [CONTRIBUTING.md](CONTRIBUTING.md#releasing)).
 
 ## Contributing
