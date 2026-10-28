@@ -14,17 +14,19 @@ export interface RecentFile {
 const DB_NAME = "folio";
 const STORE = "recent";
 const NOTES = "notes";
+const AI = "ai";
 const MAX_RECENT = 8;
 let connection: Promise<IDBDatabase> | null = null;
 
 function open(): Promise<IDBDatabase> {
   if (connection) return connection;
   connection = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 2);
+    const req = indexedDB.open(DB_NAME, 3);
     req.onupgradeneeded = () => {
       const database = req.result;
       if (!database.objectStoreNames.contains(STORE)) database.createObjectStore(STORE, { keyPath: "id" });
       if (!database.objectStoreNames.contains(NOTES)) database.createObjectStore(NOTES, { keyPath: "id" });
+      if (!database.objectStoreNames.contains(AI)) database.createObjectStore(AI, { keyPath: "id" });
     };
     req.onsuccess = () => {
       const database = req.result;
@@ -159,5 +161,32 @@ export async function saveNotes(notes: DocNotes) {
     else await tx("readwrite", (s) => s.put(notes), NOTES);
   } catch {
     /* best-effort, like Recent */
+  }
+}
+
+// ── Ask AI conversations ──────────────────────────────────────────────
+// One conversation per document (same content-based id as notes), so it's there when the document is reopened.
+
+export interface StoredAiMessage {
+  role: "user" | "assistant";
+  content: string;
+  context?: { text: string; page: number };
+}
+
+export async function getAiHistory(id: string): Promise<StoredAiMessage[]> {
+  try {
+    const record = await tx<{ id: string; messages: StoredAiMessage[] } | undefined>("readonly", (s) => s.get(id), AI);
+    return Array.isArray(record?.messages) ? record.messages : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveAiHistory(id: string, messages: StoredAiMessage[]) {
+  try {
+    if (messages.length === 0) await tx("readwrite", (s) => s.delete(id), AI);
+    else await tx("readwrite", (s) => s.put({ id, messages, updatedAt: Date.now() }), AI);
+  } catch {
+    /* best-effort, like notes */
   }
 }

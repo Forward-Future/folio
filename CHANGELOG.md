@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.2
+
+- **Ask AI conversations stay with each document.** Your questions and answers are saved with the document on this
+  computer, alongside its highlights and notes, and are there when you reopen it (even after restarting Folio). The **+**
+  button starts a fresh conversation. Password-protected documents are never stored.
+- Switching documents with the Ask AI panel open no longer carries the previous conversation over.
+
 ## 1.8.1
 
 - A simpler toolbar without duplicate controls: highlighting happens by selecting text (or pressing H), so the separate

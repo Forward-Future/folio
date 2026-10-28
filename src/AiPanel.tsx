@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./icons";
 import type { PDFDocumentProxy } from "./pdf";
+import { getAiHistory, saveAiHistory } from "./recent";
 
 export interface AiContext {
   text: string;
@@ -119,6 +120,8 @@ const conversations = new Map<string, Message[]>();
 interface Props {
   pdf: PDFDocumentProxy;
   docId: string;
+  /** Save the conversation with the document (off for password-protected documents). */
+  persist: boolean;
   docName: string;
   context: AiContext | null;
   onClearContext: () => void;
@@ -126,7 +129,7 @@ interface Props {
   onClose: () => void;
 }
 
-export function AiPanel({ pdf, docId, docName, context, onClearContext, onGoToPage, onClose }: Props) {
+export function AiPanel({ pdf, docId, persist, docName, context, onClearContext, onGoToPage, onClose }: Props) {
   const ai = window.folioDesktop?.ai;
   const [status, setStatus] = useState<AiStatus | null>(null);
   const [provider, setProviderState] = useState<Provider>(() => (localStorage.getItem("folio:ai-provider") as Provider) || "chatgpt");
@@ -141,8 +144,26 @@ export function AiPanel({ pdf, docId, docName, context, onClearContext, onGoToPa
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => { conversations.set(docId, messages); }, [docId, messages]);
-  useEffect(() => { setMessages(conversations.get(docId) ?? []); }, [docId]);
+  // The panel is mounted per document (keyed by docId in App), so this conversation always belongs to docId.
+  const [loaded, setLoaded] = useState(() => conversations.has(docId) || !persist);
+  useEffect(() => {
+    if (loaded) return;
+    let cancelled = false;
+    void getAiHistory(docId).then((saved) => {
+      if (cancelled) return;
+      if (saved.length) setMessages(saved);
+      setLoaded(true);
+    });
+    return () => { cancelled = true; };
+  }, [docId, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
+    conversations.set(docId, messages);
+    // Save once an answer has finished (not on every streamed word); failed answers aren't kept.
+    if (persist && !busy) {
+      void saveAiHistory(docId, messages.filter((m) => !m.error && m.content).map(({ role, content, context }) => ({ role, content, ...(context ? { context } : {}) })));
+    }
+  }, [docId, messages, busy, loaded, persist]);
   useEffect(() => { void ai?.status().then(setStatus); }, [ai]);
   useEffect(() => { if (context) inputRef.current?.focus(); }, [context]);
 

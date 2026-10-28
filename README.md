@@ -78,12 +78,13 @@ For ChatGPT, Folio stores its sign-in tokens in its data folder (below, under `a
 credential protection (Windows data protection, the macOS Keychain, or the Linux secret store; if a Linux desktop has
 no secret store, you sign in again each time Folio starts), and never exposes them to the page. For Claude, Folio runs your own Claude Code with every tool disabled;
 it never sees or stores your Claude credentials. The question's context is written to a temporary file for Claude Code
-and deleted as soon as the answer finishes. Conversations aren't saved; they last until you close Folio.
+and deleted as soon as the answer finishes. Each document's Ask AI conversation is saved with it on this computer (except for password-protected documents) and
+is there when you reopen the document; the **+** button in the panel starts over and deletes it.
 
 Stored locally in your user profile (`%APPDATA%\Folio` on Windows, `~/Library/Application Support/Folio` on macOS,
 `~/.config/Folio` on Linux): recently opened PDFs and their thumbnails (up to 8,
-removable from the home screen with **Clear all**; password-protected PDFs are never kept), highlights and notes for
-each document (except password-protected ones), reading positions, preferences, and, only if you choose to remember
+removable from the home screen with **Clear all**; password-protected PDFs are never kept), highlights, notes, and
+Ask AI conversations for each document (except password-protected ones), reading positions, preferences, and, only if you choose to remember
 it, your signature image. Apart from the ChatGPT sign-in, this data isn't encrypted, so anyone with access to your
 user account can read it.
 

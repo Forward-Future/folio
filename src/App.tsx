@@ -1147,8 +1147,10 @@ export default function App() {
 
         {doc && aiOpen && !focus && (
           <AiPanel
+            key={doc.key}
             pdf={doc.pdf}
             docId={doc.key}
+            persist={persistRef.current}
             docName={doc.name}
             context={aiContext}
             onClearContext={() => setAiContext(null)}
