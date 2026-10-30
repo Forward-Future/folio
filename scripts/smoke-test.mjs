@@ -15,7 +15,9 @@ const executablePath = require("electron"); // path to the Electron binary
 const shots = path.join(root, "release", "smoke");
 mkdirSync(shots, { recursive: true });
 
-const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir(), "folio-smoke-")) };
+// The window stays hidden so a local run doesn't pop up over other work; FOLIO_SMOKE_SHOW=1 shows it.
+const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir(), "folio-smoke-")),
+  FOLIO_TEST_HIDDEN: process.env.FOLIO_SMOKE_SHOW === "1" ? "0" : "1" };
 delete env.ELECTRON_RUN_AS_NODE;
 // Containers often run as root, where Chromium's sandbox can't start.
 const args = [root, ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])];
@@ -36,6 +38,43 @@ try {
   assert.match(await page.locator(".textLayer").first().innerText(), /A short tour of Folio/);
   console.log("ok  sample rendered with a text layer");
 
+  // Opening another document (here from the file manager) asks first when there's unsaved work, a placed signature,
+  // and keeps it if the reader says no.
+  const photo = await page.evaluate(() => {
+    const canvas = Object.assign(document.createElement("canvas"), { width: 600, height: 200 });
+    const g = canvas.getContext("2d");
+    g.fillStyle = "#fff";
+    g.fillRect(0, 0, 600, 200);
+    g.lineWidth = 10;
+    g.beginPath();
+    g.moveTo(40, 150);
+    g.bezierCurveTo(150, 10, 250, 190, 350, 60);
+    g.lineTo(560, 120);
+    g.stroke();
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  await page.getByTitle("Add a signature").click();
+  await page.locator('input[aria-label="Upload signature photo"]').setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(photo, "base64") });
+  await page.getByRole("button", { name: /Use this signature/ }).click();
+  await page.locator('select[aria-label="Signature placement"]').selectOption("manual");
+  await page.locator('[aria-label^="Place signature on page"]').click();
+  await page.getByRole("button", { name: /Approve and add signature/ }).click();
+  await page.locator(".dirty-dot").waitFor();
+  const sample = await page.evaluate(async () => Array.from(new Uint8Array(await (await fetch("sample.pdf")).arrayBuffer())));
+  const openFromFileManager = () => app.evaluate(({ BrowserWindow }, data) =>
+    BrowserWindow.getAllWindows()[0].webContents.send("folio:open-file", { name: "Another.pdf", data: Buffer.from(data) }), sample);
+  let prompt = page.waitForEvent("dialog");
+  await openFromFileManager();
+  await (await prompt).dismiss();
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator(".stampEditor").count(), 1);
+  prompt = page.waitForEvent("dialog");
+  await openFromFileManager();
+  await (await prompt).accept();
+  await page.waitForFunction(() => document.title.startsWith("Another.pdf"), null, { timeout: 15_000 });
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
+  console.log("ok  opening another document asks before discarding unsaved work");
+
   // Select a sentence and highlight it in one click.
   await page.evaluate(() => {
     const span = [...document.querySelectorAll(".textLayer span:not(.markedContent)")].find((s) => s.textContent.includes("A short tour"));
@@ -45,6 +84,21 @@ try {
     getSelection().addRange(range);
   });
   await page.locator(".selection-popover").waitFor();
+
+  // Copy puts the selection on the system clipboard (whose contents are put back afterwards). Clipboard writes
+  // need a focused window, which a CI desktop doesn't always give the app.
+  if (await page.evaluate(() => document.hasFocus())) {
+    const clipboardBefore = await app.evaluate(({ clipboard }) => clipboard.readText());
+    await page.locator(".selection-popover").getByRole("button", { name: "Copy" }).click();
+    await page.locator('.selection-popover button[title="Copied"]').waitFor({ timeout: 5_000 });
+    const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
+    await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), clipboardBefore);
+    assert.ok(/A short tour of Folio/.test(copied), "Copy didn't reach the clipboard");
+    console.log("ok  selection copied to the clipboard");
+  } else {
+    console.log("--  clipboard check skipped: the window isn't focused");
+  }
+
   await page.getByRole("button", { name: "Highlight yellow" }).click();
   await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 1, null, { timeout: 15_000 });
   console.log("ok  highlight created");
@@ -54,9 +108,20 @@ try {
   await page.getByRole("menuitem", { name: /About Folio/ }).waitFor();
   await page.keyboard.press("Escape");
 
+  // Settings links to the bundled changelog, and closing it returns to Settings.
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
+  await page.getByRole("button", { name: "View changelog" }).click();
+  await page.getByRole("dialog", { name: "What's new" }).locator("h3").first().waitFor();
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog", { name: "Settings" }).waitFor();
+  await page.keyboard.press("Escape");
+  console.log("ok  changelog opens from Settings");
+
   // A text box is saved automatically and comes back, text and all, when the document is opened again.
   await page.locator('button[title^="Text ("]').click();
-  await page.locator('.page[data-page-number="1"] .annotationEditorLayer').click({ position: { x: 360, y: 40 } });
+  // Clicked in the middle of the page's visible part: a fixed spot near the top lands under the toolbar's color
+  // picker in a small window, as on CI runners.
+  await page.locator('.page[data-page-number="1"] .annotationEditorLayer').click();
   // Filled in one go: pdf.js moves the caret while it focuses a new box, which can scramble key-by-key typing.
   await page.locator('.freeTextEditor .internal[contenteditable="true"]').fill("Saved text box");
   await page.getByRole("button", { name: "Done", exact: true }).click();

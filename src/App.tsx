@@ -9,7 +9,7 @@ import {
 } from "./viewer";
 import { AnnotationEditorParamsType, AnnotationEditorType } from "pdfjs-dist";
 import { loadPdf, thumbnailDataUrl, type PDFDocumentProxy } from "./pdf";
-import { contentKey, fileId, getRecent, saveRecent, updateLastPage } from "./recent";
+import { contentKey, fileId, getRecent, MAX_RECENT_FILE_BYTES, saveRecent, updateLastPage } from "./recent";
 import { activeDocument, readView, setActiveDocument, writeView, type ReadingView } from "./session";
 import { SearchResults } from "./SearchResults";
 import { Icon, type IconName } from "./icons";
@@ -28,6 +28,7 @@ import { SearchBar, type FindResult } from "./SearchBar";
 import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
 import { SignatureDialog } from "./SignatureDialog";
 import { SettingsDialog } from "./SettingsDialog";
+import { ChangelogDialog } from "./ChangelogDialog";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
 
@@ -100,6 +101,7 @@ export default function App() {
   const docRef = useRef<OpenDoc | null>(null);
   const markupRef = useRef<MarkupController | null>(null);
   const persistRef = useRef(false);
+  const dirtyRef = useRef(false);
 
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const [loading, setLoading] = useState(false);
@@ -132,7 +134,7 @@ export default function App() {
   const [dirty, setDirty] = useState(false);
   const [focus, setFocus] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [dialog, setDialog] = useState<"info" | "shortcuts" | "about" | "url" | "settings" | null>(null);
+  const [dialog, setDialog] = useState<"info" | "shortcuts" | "about" | "url" | "settings" | "changelog" | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -165,7 +167,11 @@ export default function App() {
   }, [doc, page]);
 
   docRef.current = doc;
+  dirtyRef.current = dirty;
   preferencesRef.current = { sidebar, spread };
+
+  /** Opening another document drops unsaved work (a placed signature, markup on a password-protected PDF), so ask first. */
+  const mayReplaceDocument = () => !dirtyRef.current || confirm("You have unsaved annotations. Open another document anyway?");
 
   const flash = useCallback((msg: string) => {
     setToast(msg);
@@ -317,8 +323,9 @@ export default function App() {
 
         setLoading(false);
         setActiveDocument(id);
-        // Password-protected documents stay out of Recent: it would keep their bytes and a page-1 thumbnail unprotected on disk.
-        if (!password) void (async () => {
+        // Password-protected documents stay out of Recent: it would keep their bytes and a page-1
+        // thumbnail unprotected on disk. Very large files are skipped too — see MAX_RECENT_FILE_BYTES.
+        if (!password && data.byteLength <= MAX_RECENT_FILE_BYTES) void (async () => {
           const thumb = existing?.thumb ?? (await thumbnailDataUrl(pdf).catch(() => ""));
           if (generation !== openGeneration.current) return;
           await saveRecent({
@@ -353,7 +360,12 @@ export default function App() {
         setError(`“${file.name}” isn't a PDF.`);
         return;
       }
-      openBytes(file.name, new Uint8Array(await file.arrayBuffer()));
+      if (!mayReplaceDocument()) return;
+      try {
+        await openBytes(file.name, new Uint8Array(await file.arrayBuffer()));
+      } catch {
+        setError(`Couldn't open “${file.name}”. The file may have been moved or deleted.`);
+      }
     },
     [openBytes],
   );
@@ -362,12 +374,13 @@ export default function App() {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "application/pdf,.pdf";
-    input.onchange = () => input.files?.[0] && openFile(input.files[0]);
+    input.onchange = () => { if (input.files?.[0]) void openFile(input.files[0]); };
     input.click();
   }, [openFile]);
 
   const openUrl = useCallback(
     async (url: string) => {
+      if (!mayReplaceDocument()) return;
       const generation = ++openGeneration.current;
       const host = new URL(url).hostname;
       setLoading(true);
@@ -383,8 +396,11 @@ export default function App() {
             throw new Error(`Couldn't download from ${host}. The site may not allow it.`);
           });
           if (!res.ok) throw new Error(`The server responded with ${res.status}.`);
+          const data = new Uint8Array(await res.arrayBuffer());
+          // Same cap the desktop app applies to URL downloads.
+          if (data.byteLength > 300 * 1024 * 1024) throw new Error("That PDF is larger than 300 MB.");
           const name = decodeURIComponent(new URL(res.url || url).pathname.split("/").filter(Boolean).pop() || host);
-          file = { name: /\.pdf$/i.test(name) ? name : name + ".pdf", data: new Uint8Array(await res.arrayBuffer()) };
+          file = { name: /\.pdf$/i.test(name) ? name : name + ".pdf", data };
         }
         if (generation !== openGeneration.current) return;
         setToast(null);
@@ -400,8 +416,12 @@ export default function App() {
   );
 
   const openSample = useCallback(async () => {
-    const res = await fetch(`${import.meta.env.BASE_URL}sample.pdf`);
-    openBytes("Folio sample.pdf", new Uint8Array(await res.arrayBuffer()));
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}sample.pdf`);
+      await openBytes("Folio sample.pdf", new Uint8Array(await res.arrayBuffer()));
+    } catch {
+      setError("Couldn't open the sample document.");
+    }
   }, [openBytes]);
 
   const closeDoc = useCallback(() => {
@@ -646,20 +666,36 @@ export default function App() {
     return doc.pdf.annotationStorage.size > 0 ? await doc.pdf.saveDocument() : doc.data;
   };
 
-  const download = async () => {
-    const bytes = await currentBytes();
-    if (!bytes || !doc) return;
+  const saveBytes = (bytes: Uint8Array) => {
     const url = URL.createObjectURL(new Blob([bytes.slice()], { type: "application/pdf" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = doc.name.toLowerCase().endsWith(".pdf") ? doc.name : `${doc.name}.pdf`;
+    a.download = doc ? (doc.name.toLowerCase().endsWith(".pdf") ? doc.name : `${doc.name}.pdf`) : "document.pdf";
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
+
+  const download = async () => {
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await currentBytes();
+    } catch {
+      setError("Couldn't save a copy of this document.");
+      return;
+    }
+    if (!bytes || !doc) return;
+    saveBytes(bytes);
     flash(doc.pdf.annotationStorage.size > 0 ? "Saved a copy with your highlights and notes" : "Download started");
   };
 
   const print = async () => {
-    const bytes = await currentBytes();
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await currentBytes();
+    } catch {
+      setError("Couldn't print this document.");
+      return;
+    }
     if (!bytes) return;
     const url = URL.createObjectURL(new Blob([bytes.slice()], { type: "application/pdf" }));
     const frame = document.createElement("iframe");
@@ -671,7 +707,9 @@ export default function App() {
           frame.contentWindow?.focus();
           frame.contentWindow?.print();
         } catch {
-          window.open(url, "_blank");
+          // The desktop shell denies blob: pop-ups, so a saved copy is the working fallback there.
+          if (window.folioDesktop) { saveBytes(bytes); flash("Couldn't print — saved a copy instead"); }
+          else window.open(url, "_blank");
         }
       }, 250);
     };
@@ -686,7 +724,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     const generation = openGeneration.current;
-    const unsubscribe = window.folioDesktop?.onOpenFile((name, data) => openBytes(name, data));
+    const unsubscribe = window.folioDesktop?.onOpenFile((name, data) => { if (mayReplaceDocument()) void openBytes(name, data); });
     void (async () => {
       const hasStartupFile = await window.folioDesktop?.ready();
       if (hasStartupFile || cancelled || generation !== openGeneration.current) return;
@@ -695,7 +733,7 @@ export default function App() {
       if (!recent || cancelled || generation !== openGeneration.current) return;
       const data = new Uint8Array(await recent.data.arrayBuffer());
       if (!cancelled && generation === openGeneration.current) void openBytes(recent.name, data);
-    })();
+    })().catch(() => {}); // restoring the last document is best-effort
     return () => { cancelled = true; unsubscribe?.(); };
   }, [openBytes]);
   useEffect(() => window.folioDesktop?.setTheme(theme), [theme]);
@@ -810,7 +848,8 @@ export default function App() {
       } else if (e.key === "Escape") {
         if (highlightMenu) setHighlightMenu(null);
         else if (noteBox) setNoteBox(null);
-        else if (dialog) setDialog(null);
+        // Each dialog's Modal closes itself on Escape (the changelog goes back to Settings); closing here too would override it.
+        else if (dialog) return;
         else if (searchOpen) setSearchOpen(false);
         else if (tool !== "select") chooseTool("select");
         else if (focus) toggleFocus();
@@ -868,8 +907,8 @@ export default function App() {
       setDragging(false);
       const file = e.dataTransfer?.files[0];
       const url = !file && e.dataTransfer ? droppedUrl(e.dataTransfer) : null;
-      if (file) openFile(file);
-      else if (url) openUrl(url);
+      if (file) void openFile(file);
+      else if (url) void openUrl(url);
       else setError("Drop a PDF file or a link to a PDF.");
     };
     // Pasting a PDF link (outside text fields) opens it too.
@@ -879,7 +918,7 @@ export default function App() {
       if (!url) return;
       e.preventDefault();
       setDialog(null);
-      openUrl(url);
+      void openUrl(url);
     };
     window.addEventListener("dragstart", start);
     window.addEventListener("dragend", end);
@@ -1164,7 +1203,7 @@ export default function App() {
         )}
       </div>
 
-      {!doc && <Welcome onPick={pickFile} onOpenUrl={() => setDialog("url")} onOpenBytes={openBytes} onSample={openSample} loading={loading} />}
+      {!doc && <Welcome onPick={pickFile} onOpenUrl={() => setDialog("url")} onOpenBytes={openBytes} onError={setError} onSample={openSample} loading={loading} />}
 
       {loading && doc && <div className="loading-bar" />}
 
@@ -1188,7 +1227,9 @@ export default function App() {
       {dialog === "info" && doc && <InfoDialog pdf={doc.pdf} name={doc.name} size={doc.data.byteLength} onClose={() => setDialog(null)} />}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} onOpenSettings={() => setDialog("settings")} />}
-      {dialog === "settings" && <SettingsDialog theme={theme} onTheme={setThemeTo} night={night} onNight={setNightTo} onClose={() => setDialog(null)} />}
+      {dialog === "settings" && <SettingsDialog theme={theme} onTheme={setThemeTo} night={night} onNight={setNightTo} onOpenChangelog={() => setDialog("changelog")} onClose={() => setDialog(null)} />}
+      {/* Closing goes back to Settings, where the changelog is opened from. */}
+      {dialog === "changelog" && <ChangelogDialog onClose={() => setDialog("settings")} />}
       {doc && imageView && <ImageViewer pdf={doc.pdf} target={imageView} onClose={() => setImageView(null)} />}
       {dialog === "url" && <OpenUrlDialog onClose={() => setDialog(null)} onSubmit={(url) => { setDialog(null); openUrl(url); }} />}
       {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}

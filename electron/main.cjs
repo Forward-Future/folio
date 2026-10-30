@@ -9,6 +9,8 @@ const ai = require("./ai.cjs");
 const { captureWebpage } = require("./webpage.cjs");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
+// Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
+const TEST_HIDDEN = !app.isPackaged && process.env.FOLIO_TEST_HIDDEN === "1";
 
 const DIST = path.join(__dirname, "..", "dist");
 // Development only (e.g. http://localhost:5173); ignored by installed builds.
@@ -67,7 +69,7 @@ app.on("open-file", (event, file) => {
   if (win && rendererReady) {
     if (win.isMinimized()) win.restore();
     win.focus();
-    sendFile(file);
+    void sendFile(file);
   } else {
     pendingFile = file;
     if (app.isReady() && !win) createWindow();
@@ -79,11 +81,18 @@ function pdfFromArgs(argv) {
   return file ? path.resolve(file) : null;
 }
 
-function sendFile(file) {
-  if (!file || !win) return;
+// The read is async and size-capped like URL downloads: a huge file or a slow network
+// share shouldn't freeze the main process or balloon memory in two processes.
+async function sendFile(file) {
+  const target = win;
+  if (!file || !target) return;
   try {
-    const data = fs.readFileSync(file);
-    win.webContents.send("folio:open-file", { name: path.basename(file), data });
+    if ((await fs.promises.stat(file)).size > MAX_URL_PDF_BYTES) {
+      dialog.showErrorBox("Couldn't open file", `${file}\n\nThat PDF is larger than 300 MB.`);
+      return;
+    }
+    const data = await fs.promises.readFile(file);
+    if (!target.isDestroyed()) target.webContents.send("folio:open-file", { name: path.basename(file), data });
   } catch (err) {
     dialog.showErrorBox("Couldn't open file", `${file}\n\n${err.message}`);
   }
@@ -93,7 +102,7 @@ function sendFile(file) {
 // Installed copies check GitHub Releases (Forward-Future/folio-releases, see "publish" in package.json)
 // on launch and every few hours, download new versions in the background, and install them on quit
 // or when the user clicks "Restart" in the update banner. Progress is shown on the home screen and
-// logged to %APPDATA%\Folio\update.log.
+// logged to update.log in the app's user-data folder.
 let updateReady = null;
 let updateStatus = { state: "idle" };
 let updatesEnabled = false;
@@ -161,7 +170,12 @@ function installKind() {
 }
 
 function installLocation() {
-  return path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || process.env.APPIMAGE || app.getPath("exe"));
+  if (process.env.PORTABLE_EXECUTABLE_FILE || process.env.APPIMAGE) {
+    return path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || process.env.APPIMAGE);
+  }
+  const exeDir = path.dirname(app.getPath("exe"));
+  // Inside a packaged .app the exe lives in Contents/MacOS; the install folder is where the .app sits.
+  return IS_MAC && /\.app[\/\\]Contents[\/\\]MacOS$/.test(exeDir) ? path.resolve(exeDir, "..", "..", "..") : exeDir;
 }
 
 // macOS only installs updates signed with an Apple Developer ID. Release builds made with the Developer ID
@@ -241,14 +255,20 @@ function createWindow() {
       contextIsolation: true,
       sandbox: true,
       plugins: true, // Chromium's PDF viewer, used for printing
+      // A hidden window is throttled like a background tab; tests need it to render at full speed.
+      ...(TEST_HIDDEN ? { backgroundThrottling: false } : {}),
     },
   });
 
   const cameraOwner = win.webContents;
   const trustedCameraOrigin = isAppUrl;
+  // Folio's own page may write (never read) the clipboard, for its Copy buttons.
+  const clipboardWrite = (contents, permission, url) =>
+    contents === cameraOwner && permission === "clipboard-sanitized-write" && isAppUrl(url ?? "");
   cameraOwner.session.setPermissionCheckHandler((contents, permission, origin, details) =>
-    contents === cameraOwner && permission === "media" && trustedCameraOrigin(details.requestingUrl || origin) && details.mediaType !== "audio");
+    contents === cameraOwner && permission === "media" && trustedCameraOrigin(details.requestingUrl || origin) && details.mediaType === "video");
   cameraOwner.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    if (clipboardWrite(contents, permission, details.requestingUrl)) return callback(true);
     if (contents !== cameraOwner || permission !== "media" || !details.isMainFrame
       || !trustedCameraOrigin(details.requestingUrl) || !details.mediaTypes?.length
       || details.mediaTypes.some(type => type !== "video")) return callback(false);
@@ -258,6 +278,14 @@ function createWindow() {
   });
 
   win.once("ready-to-show", () => {
+    // A never-shown window doesn't paint, so tests couldn't screenshot it. Show it off-screen instead,
+    // without taking focus or adding a taskbar button.
+    if (TEST_HIDDEN) {
+      win.setSkipTaskbar(true);
+      win.setPosition(-32000, -32000);
+      win.showInactive();
+      return;
+    }
     if (savedWindow?.maximized) win.maximize();
     win.show();
   });
@@ -328,11 +356,17 @@ function isLocalHost(hostname) {
   return false;
 }
 
+// Windows can't create files named after devices — "CON.pdf" included — so a server- or
+// page-supplied name needs that case broken too, not just the illegal characters.
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
 function pdfNameFromResponse(url, disposition) {
   const match = /filename\*=(?:UTF-8'')?([^;]+)|filename="?([^";]+)"?/i.exec(disposition || "");
   let name = (match?.[1] || match?.[2] || "").trim();
   try { name = decodeURIComponent(name || url.pathname.split("/").filter(Boolean).pop() || ""); } catch {}
   name = name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").trim() || url.hostname;
+  const stem = name.replace(/\.pdf$/i, "");
+  if (WINDOWS_DEVICE_NAME.test(stem)) name = stem + "_";
   return /\.pdf$/i.test(name) ? name : name + ".pdf";
 }
 
@@ -408,7 +442,7 @@ if (!app.requestSingleInstanceLock()) {
     if (!win) return;
     if (win.isMinimized()) win.restore();
     win.focus();
-    sendFile(pdfFromArgs(argv));
+    void sendFile(pdfFromArgs(argv));
   });
 
   app.whenReady().then(() => {
@@ -438,7 +472,7 @@ if (!app.requestSingleInstanceLock()) {
       rendererReady = true;
       const file = pendingFile;
       pendingFile = null;
-      if (file) setTimeout(() => sendFile(file), 0);
+      if (file) setTimeout(() => void sendFile(file), 0);
       return !!file;
     });
     // PDF links open directly; webpages are converted to a PDF first.
