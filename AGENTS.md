@@ -46,7 +46,7 @@ New code is grouped by layer, then by feature, so a feature's pieces sit beside 
 - `src/hooks/<feature>/` hooks,
 - `src/lib/<feature>/` everything that isn't UI: logic, storage, and the session or controller behind a feature.
 
-Each folder has an `index.ts` that exports what the rest of the app may use; import from there, not from deep paths.
+Each feature folder has an `index.ts` that exports what the rest of the app may use; import from there, not from deep paths.
 Tests sit next to the file they test (`Thing.ts` and `Thing.test.ts`). Text recognition (OCR) is the first feature laid out
 this way (`components/ocr`, `hooks/ocr`, `lib/ocr`); older files in `src/` can move over as they are touched.
 
