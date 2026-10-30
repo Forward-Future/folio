@@ -121,9 +121,10 @@ export function SelectionPopover({ info, stageWidth, colors, current, onHighligh
           title={copied ? "Copied" : "Copy"}
           aria-label="Copy"
           onClick={() => {
-            void navigator.clipboard.writeText(info.text);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
+            navigator.clipboard.writeText(info.text).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            }, () => {});
           }}
         >
           <Icon name={copied ? "check" : "copy"} size={15} />

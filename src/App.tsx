@@ -105,6 +105,7 @@ export default function App() {
   const markupRef = useRef<MarkupController | null>(null);
   const persistRef = useRef(false);
   const ocrRef = useRef<OcrSession | null>(null);
+  const dirtyRef = useRef(false);
 
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const [loading, setLoading] = useState(false);
@@ -172,7 +173,11 @@ export default function App() {
   }, [doc, page]);
 
   docRef.current = doc;
+  dirtyRef.current = dirty;
   preferencesRef.current = { sidebar, spread };
+
+  /** Opening another document drops unsaved work (a placed signature, markup on a password-protected PDF), so ask first. */
+  const mayReplaceDocument = () => !dirtyRef.current || confirm("You have unsaved annotations. Open another document anyway?");
 
   const flash = useCallback((msg: string, ms = 2200) => {
     setToast(msg);
@@ -375,6 +380,7 @@ export default function App() {
         setError(`“${file.name}” isn't a PDF.`);
         return;
       }
+      if (!mayReplaceDocument()) return;
       try {
         await openBytes(file.name, new Uint8Array(await file.arrayBuffer()));
       } catch {
@@ -394,6 +400,7 @@ export default function App() {
 
   const openUrl = useCallback(
     async (url: string) => {
+      if (!mayReplaceDocument()) return;
       const generation = ++openGeneration.current;
       const host = new URL(url).hostname;
       setLoading(true);
@@ -686,14 +693,27 @@ export default function App() {
 
   // Save notes and highlights before the window goes away.
   useEffect(() => {
-    const flush = () => markupRef.current?.flush();
+    const flush = () => { markupRef.current?.sync(); markupRef.current?.flush(); };
     window.addEventListener("pagehide", flush);
     return () => window.removeEventListener("pagehide", flush);
   }, []);
 
   const currentBytes = async () => {
     if (!doc) return null;
-    return doc.pdf.annotationStorage.size > 0 ? await doc.pdf.saveDocument() : doc.data;
+    // Marks on pages that haven't been drawn yet aren't in pdf.js's annotation storage; add them for this copy only.
+    // (pdf.js saves only entries keyed with its editor prefix.)
+    const storage = doc.pdf.annotationStorage;
+    const unrendered = (await markupRef.current?.unrenderedMarks(doc.pdf)) ?? [];
+    const keys = unrendered.map((data, i) => {
+      const key = `pdfjs_internal_editor_folio-unrendered-${i}`;
+      storage.setValue(key, data);
+      return key;
+    });
+    try {
+      return storage.size > 0 ? await doc.pdf.saveDocument() : doc.data;
+    } finally {
+      for (const key of keys) storage.remove(key);
+    }
   };
 
   const saveBytes = (bytes: Uint8Array) => {
@@ -717,8 +737,9 @@ export default function App() {
     // Text recognized on a scan goes into the copy, so it stays searchable in other readers too.
     const copy = await copyWithText(ocr, bytes);
     saveBytes(copy.bytes);
+    // (Marks are in `bytes` when it isn't the file as it was opened: they are added for this copy only.)
     // Longer when something was left out, because the reader needs time to read why.
-    flash(savedMessage({ markup: doc.pdf.annotationStorage.size > 0, ...copy }), copy.problem ? 6000 : undefined);
+    flash(savedMessage({ markup: bytes !== doc.data, ...copy }), copy.problem ? 6000 : undefined);
   };
 
   const print = async () => {
@@ -757,7 +778,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     const generation = openGeneration.current;
-    const unsubscribe = window.folioDesktop?.onOpenFile((name, data) => openBytes(name, data));
+    const unsubscribe = window.folioDesktop?.onOpenFile((name, data) => { if (mayReplaceDocument()) void openBytes(name, data); });
     void (async () => {
       const hasStartupFile = await window.folioDesktop?.ready();
       if (hasStartupFile || cancelled || generation !== openGeneration.current) return;

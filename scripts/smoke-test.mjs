@@ -1,11 +1,11 @@
 // End-to-end smoke test, run in CI on Windows, macOS, and Linux (and locally with `npm run smoke`):
 // launches the built app in Electron, opens the sample document, and checks that pages render, text is
-// selectable and highlightable, a scanned page can be recognized and saved with its text, and the window chrome
-// matches the platform.
+// selectable and highlightable, text boxes survive reopening, a scanned page can be recognized and saved with its text,
+// and the window chrome matches the platform.
 // Run `npm run build` first.
 import { _electron as electron } from "playwright-core";
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -16,7 +16,9 @@ const executablePath = require("electron"); // path to the Electron binary
 const shots = path.join(root, "release", "smoke");
 mkdirSync(shots, { recursive: true });
 
-const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir(), "folio-smoke-")) };
+// The window stays hidden so a local run doesn't pop up over other work; FOLIO_SMOKE_SHOW=1 shows it.
+const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir(), "folio-smoke-")),
+  FOLIO_TEST_HIDDEN: process.env.FOLIO_SMOKE_SHOW === "1" ? "0" : "1" };
 delete env.ELECTRON_RUN_AS_NODE;
 // Containers often run as root, where Chromium's sandbox can't start.
 const args = [root, ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])];
@@ -37,6 +39,43 @@ try {
   assert.match(await page.locator(".textLayer").first().innerText(), /A short tour of Folio/);
   console.log("ok  sample rendered with a text layer");
 
+  // Opening another document (here from the file manager) asks first when there's unsaved work, a placed signature,
+  // and keeps it if the reader says no.
+  const photo = await page.evaluate(() => {
+    const canvas = Object.assign(document.createElement("canvas"), { width: 600, height: 200 });
+    const g = canvas.getContext("2d");
+    g.fillStyle = "#fff";
+    g.fillRect(0, 0, 600, 200);
+    g.lineWidth = 10;
+    g.beginPath();
+    g.moveTo(40, 150);
+    g.bezierCurveTo(150, 10, 250, 190, 350, 60);
+    g.lineTo(560, 120);
+    g.stroke();
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  await page.getByTitle("Add a signature").click();
+  await page.locator('input[aria-label="Upload signature photo"]').setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(photo, "base64") });
+  await page.getByRole("button", { name: /Use this signature/ }).click();
+  await page.locator('select[aria-label="Signature placement"]').selectOption("manual");
+  await page.locator('[aria-label^="Place signature on page"]').click();
+  await page.getByRole("button", { name: /Approve and add signature/ }).click();
+  await page.locator(".dirty-dot").waitFor();
+  const sample = await page.evaluate(async () => Array.from(new Uint8Array(await (await fetch("sample.pdf")).arrayBuffer())));
+  const openFromFileManager = () => app.evaluate(({ BrowserWindow }, data) =>
+    BrowserWindow.getAllWindows()[0].webContents.send("folio:open-file", { name: "Another.pdf", data: Buffer.from(data) }), sample);
+  let prompt = page.waitForEvent("dialog");
+  await openFromFileManager();
+  await (await prompt).dismiss();
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator(".stampEditor").count(), 1);
+  prompt = page.waitForEvent("dialog");
+  await openFromFileManager();
+  await (await prompt).accept();
+  await page.waitForFunction(() => document.title.startsWith("Another.pdf"), null, { timeout: 15_000 });
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
+  console.log("ok  opening another document asks before discarding unsaved work");
+
   // Select a sentence and highlight it in one click.
   await page.evaluate(() => {
     const span = [...document.querySelectorAll(".textLayer span:not(.markedContent)")].find((s) => s.textContent.includes("A short tour"));
@@ -46,9 +85,53 @@ try {
     getSelection().addRange(range);
   });
   await page.locator(".selection-popover").waitFor();
+
+  // Copy puts the selection on the system clipboard (whose contents are put back afterwards). Clipboard writes
+  // need a focused window, which a CI desktop doesn't always give the app.
+  if (await page.evaluate(() => document.hasFocus())) {
+    const clipboardBefore = await app.evaluate(({ clipboard }) => clipboard.readText());
+    await page.locator(".selection-popover").getByRole("button", { name: "Copy" }).click();
+    await page.locator('.selection-popover button[title="Copied"]').waitFor({ timeout: 5_000 });
+    const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
+    await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), clipboardBefore);
+    assert.ok(/A short tour of Folio/.test(copied), "Copy didn't reach the clipboard");
+    console.log("ok  selection copied to the clipboard");
+  } else {
+    console.log("--  clipboard check skipped: the window isn't focused");
+  }
+
   await page.getByRole("button", { name: "Highlight yellow" }).click();
   await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 1, null, { timeout: 15_000 });
   console.log("ok  highlight created");
+
+  // A saved copy includes every saved mark, also on pages that haven't been drawn since the document was reopened.
+  const lastPage = await page.locator(".page").count();
+  await page.evaluate((n) => document.querySelector(`.page[data-page-number="${n}"]`).scrollIntoView(), lastPage);
+  await page.locator(`.page[data-page-number="${lastPage}"] .textLayer span:not(.markedContent)`).first().evaluate((span) => {
+    const range = document.createRange();
+    range.selectNodeContents(span);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
+  await page.locator(".selection-popover").waitFor();
+  await page.getByRole("button", { name: "Highlight yellow" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 2, null, { timeout: 15_000 });
+  await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
+  await page.waitForTimeout(800);
+  await page.getByTitle("Back to library").click();
+  await page.getByRole("button", { name: /Try a sample/ }).click();
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
+  const copy = path.join(env.FOLIO_TEST_USER_DATA, "copy.pdf");
+  await app.evaluate(({ session }, file) => {
+    globalThis.folioCopySaved = new Promise((resolve) => session.defaultSession.once("will-download", (_event, item) => {
+      item.setSavePath(file);
+      item.once("done", (_done, state) => resolve(state));
+    }));
+  }, copy);
+  await page.keyboard.press("ControlOrMeta+s");
+  assert.equal(await app.evaluate(() => globalThis.folioCopySaved), "completed");
+  assert.equal(readFileSync(copy, "latin1").match(/\/Subtype\s*\/Highlight\b/g)?.length, 2);
+  console.log("ok  saved copy includes marks on pages not drawn yet");
 
   // The More menu opens and closes.
   await page.getByRole("button", { name: "More" }).click();
@@ -64,6 +147,20 @@ try {
   await page.keyboard.press("Escape");
   console.log("ok  changelog opens from Settings");
 
+  // A text box is saved automatically and comes back, text and all, when the document is opened again.
+  await page.locator('button[title^="Text ("]').click();
+  // Clicked in the middle of the page's visible part: a fixed spot near the top lands under the toolbar's color
+  // picker in a small window, as on CI runners.
+  await page.locator('.page[data-page-number="1"] .annotationEditorLayer').click();
+  // Filled in one go: pdf.js moves the caret while it focuses a new box, which can scramble key-by-key typing.
+  await page.locator('.freeTextEditor .internal[contenteditable="true"]').fill("Saved text box");
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page.waitForTimeout(1000);
+  await page.getByTitle("Back to library").click();
+  await page.getByRole("button", { name: /Try a sample/ }).click();
+  await page.locator(".freeTextEditor", { hasText: "Saved text box" }).waitFor({ timeout: 15_000 });
+  console.log("ok  text box restored after reopening");
+
   // A scanned page (an image, no text) is offered text recognition; once read, its words can be searched and selected.
   const [chooser] = await Promise.all([
     page.waitForEvent("filechooser"),
@@ -78,27 +175,22 @@ try {
   console.log("ok  scanned page recognized");
 
   // Saving a copy puts the recognized text into the file: reopened, it has the text at once and is not offered again.
-  // The download is captured here rather than handed to the system's save dialog.
-  await page.evaluate(() => {
-    const create = URL.createObjectURL.bind(URL);
-    URL.createObjectURL = (blob) => { window.__savedCopy = blob; return create(blob); };
-    const click = HTMLElement.prototype.click;
-    HTMLAnchorElement.prototype.click = function () { if (!this.hasAttribute("download")) click.call(this); };
-  });
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+s" : "Control+s");
+  const scannedCopy = path.join(env.FOLIO_TEST_USER_DATA, "scanned-copy.pdf");
+  await app.evaluate(({ session }, file) => {
+    globalThis.folioScanSaved = new Promise((resolve) => session.defaultSession.once("will-download", (_event, item) => {
+      item.setSavePath(file);
+      item.once("done", (_done, state) => resolve(state));
+    }));
+  }, scannedCopy);
+  await page.keyboard.press("ControlOrMeta+s");
   await page.getByText("Saved a copy with the recognized text").waitFor({ timeout: 60_000 });
-  const copy = await page.evaluate(() => new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1]);
-    reader.readAsDataURL(window.__savedCopy);
-  }));
-  const copyPath = path.join(mkdtempSync(path.join(tmpdir(), "folio-copy-")), "scanned-copy.pdf");
-  writeFileSync(copyPath, Buffer.from(copy, "base64"));
+  assert.equal(await app.evaluate(() => globalThis.folioScanSaved), "completed");
+  assert.equal(readFileSync(scannedCopy).subarray(0, 5).toString("latin1"), "%PDF-");
   const [copyChooser] = await Promise.all([
     page.waitForEvent("filechooser"),
     page.keyboard.press(process.platform === "darwin" ? "Meta+o" : "Control+o"),
   ]);
-  await copyChooser.setFiles(copyPath);
+  await copyChooser.setFiles(scannedCopy);
   await page.waitForFunction(() => document.title.startsWith("scanned-copy.pdf"), null, { timeout: 30_000 });
   await page.waitForFunction(() => document.querySelectorAll(".textLayer span:not(.markedContent)").length > 60, null, { timeout: 30_000 });
   assert.match(await page.locator(".textLayer").first().innerText(), /Scanned\s+pages\s+become\s+searchable/);

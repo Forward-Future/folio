@@ -43,12 +43,20 @@ if (!publishOnly) {
     console.error("Commit or stash your changes first — a release is built from committed code.");
     process.exit(1);
   }
+  // Releases come from main as pushed. Compare commits rather than branch names, since a worktree's branch
+  // often isn't called "main".
+  run("git fetch --quiet origin main");
+  if (execSync("git rev-parse HEAD").toString().trim() !== execSync("git rev-parse origin/main").toString().trim()) {
+    console.error("This checkout isn't at the latest main. Merge your work into main, then release from it, for example:\n"
+      + "  git worktree add ../folio-release origin/main && cd ../folio-release && npm run release");
+    process.exit(1);
+  }
   run(`npm version ${bump} -m "Release v%s"`);
-  // Pushing the tag starts the cross-platform build.
-  run("git push --follow-tags");
 }
 const { version } = JSON.parse(readFileSync("package.json", "utf8"));
 const tag = `v${version}`;
+// Pushing the tag starts the cross-platform build. Name the target explicitly so this works from any local branch.
+if (!publishOnly) run(`git push origin HEAD:main refs/tags/${tag}`);
 
 // Find the build for this tag (it can take a few seconds to appear), then wait for it.
 console.log(`\nWaiting for the ${tag} build on GitHub Actions…`);

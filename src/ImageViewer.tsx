@@ -105,10 +105,10 @@ export function ImageViewer({ pdf, target, onClose }: { pdf: PDFDocumentProxy; t
   const copy = () => {
     image?.toBlob((blob) => {
       if (!blob) return;
-      void navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]).then(() => {
+      navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]).then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
-      });
+      }, () => {});
     }, "image/png");
   };
 

@@ -12,6 +12,9 @@ Folio ships for **Windows, macOS, and Linux from one codebase**. Every change an
   daily **Release check** workflow opens an issue when that happens.
 - If the release build fails, nothing is published. Fix the problem on `main`, then run
   `npm run release -- --publish-only` to publish the same tag.
+- The release must start at the latest `main` (the script checks). It pushes to `main` by name, so it works from a
+  worktree on any branch, e.g. `git worktree add ../folio-release origin/main`. If the run stops after the tag is
+  pushed (a closed terminal, a restarted session), run `npm run release -- --publish-only` to finish it.
 - **One release at a time.** Releases are built from committed, pushed code. If another session is working in the same
   checkout, coordinate: don't commit or release its uncommitted work, and use a separate `git worktree` for your own.
 
@@ -55,6 +58,18 @@ Keep logic out of the big files (`App.tsx` and the like) by putting it in a func
 left there is a call. Tests run in plain Node; a test of a component or hook starts with `// @vitest-environment jsdom`.
 When what matters is what pdf.js or pdf-lib really does (offsets, text positions, a rewritten file), test against the real
 libraries with `src/testing/pdfjs.ts` instead of a fake: the fakes in older tests only repeat our assumptions.
+
+## Pull requests
+
+- Open a pull request only when asked. One request is one pull request; fix one problem in each.
+- Title: what changes for the user, in plain words ("Keep text boxes when a document is reopened"). Pull requests are
+  squash-merged, so the title becomes the commit message on `main`.
+- The body follows `.github/pull_request_template.md`: the problem, the change, the issue or approval, and how you
+  checked it, including which platforms. End with the model and harness that did the work.
+- Visible changes need before/after screenshots attached to the pull request; never commit them.
+- Don't change the version or the changelog in a pull request; maintainers update both when releasing.
+- When reviewing an outside pull request, check for a duplicate open pull request or issue first, then whether it fixes
+  one problem, has the approval it needs (see CONTRIBUTING.md), and shows evidence on the platforms it touches.
 
 ## Code style
 
