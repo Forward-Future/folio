@@ -9,6 +9,8 @@ const ai = require("./ai.cjs");
 const { captureWebpage } = require("./webpage.cjs");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
+// Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
+const TEST_HIDDEN = !app.isPackaged && process.env.FOLIO_TEST_HIDDEN === "1";
 
 const DIST = path.join(__dirname, "..", "dist");
 // Development only (e.g. http://localhost:5173); ignored by installed builds.
@@ -253,6 +255,8 @@ function createWindow() {
       contextIsolation: true,
       sandbox: true,
       plugins: true, // Chromium's PDF viewer, used for printing
+      // A hidden window is throttled like a background tab; tests need it to render at full speed.
+      ...(TEST_HIDDEN ? { backgroundThrottling: false } : {}),
     },
   });
 
@@ -270,6 +274,14 @@ function createWindow() {
   });
 
   win.once("ready-to-show", () => {
+    // A never-shown window doesn't paint, so tests couldn't screenshot it. Show it off-screen instead,
+    // without taking focus or adding a taskbar button.
+    if (TEST_HIDDEN) {
+      win.setSkipTaskbar(true);
+      win.setPosition(-32000, -32000);
+      win.showInactive();
+      return;
+    }
     if (savedWindow?.maximized) win.maximize();
     win.show();
   });

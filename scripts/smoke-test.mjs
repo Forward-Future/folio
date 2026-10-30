@@ -14,7 +14,9 @@ const executablePath = require("electron"); // path to the Electron binary
 const shots = path.join(root, "release", "smoke");
 mkdirSync(shots, { recursive: true });
 
-const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir(), "folio-smoke-")) };
+// The window stays hidden so a local run doesn't pop up over other work; FOLIO_SMOKE_SHOW=1 shows it.
+const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir(), "folio-smoke-")),
+  FOLIO_TEST_HIDDEN: process.env.FOLIO_SMOKE_SHOW === "1" ? "0" : "1" };
 delete env.ELECTRON_RUN_AS_NODE;
 // Containers often run as root, where Chromium's sandbox can't start.
 const args = [root, ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])];
