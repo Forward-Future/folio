@@ -8,6 +8,9 @@ export interface ReadingView {
   left?: number;
 }
 
+/** Zoom settings pdf.js resolves against the window, so they're saved and restored by name. */
+export const FIT_SCALES = ["auto", "page-width", "page-fit"];
+
 const pendingViews = new Map<string, ReadingView>();
 let saveTimer = 0;
 
@@ -30,7 +33,7 @@ export function readView(id: string): ReadingView | null {
     if (!view || !Number.isInteger(view.page) || view.page < 1) return null;
     if (![0, 90, 180, 270].includes(view.rotation)) return null;
     if (typeof view.sidebar !== "boolean" || typeof view.spread !== "boolean") return null;
-    if (!["auto", "page-width", "page-fit"].includes(view.scale) &&
+    if (!FIT_SCALES.includes(view.scale) &&
         !(Number.isFinite(Number(view.scale)) && Number(view.scale) >= 0.1 && Number(view.scale) <= 10)) return null;
     return view;
   } catch {

@@ -24,7 +24,6 @@
 
   --topbar-h: 52px;
   --sidebar-w: 264px;
-  --radius: 10px;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   /* pdf.js viewer variables */
@@ -276,7 +275,6 @@ kbd {
   padding-right: 150px;
 }
 .desktop .topbar button,
-.desktop .topbar input,
 .desktop .segmented {
   -webkit-app-region: no-drag;
 }
@@ -304,8 +302,10 @@ kbd {
   gap: 2px;
   padding: 10px 10px 6px;
 }
+/* One sidebar width for every tab, so switching tabs never resizes anything. */
 .sidebar-tabs button {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -314,6 +314,7 @@ kbd {
   border-radius: 7px;
   font-size: 12.5px;
   font-weight: 520;
+  white-space: nowrap;
   color: var(--text-3);
 }
 .sidebar-tabs button:hover {
@@ -347,6 +348,7 @@ kbd {
   border-radius: 10px;
 }
 .thumb-frame {
+  position: relative;
   border-radius: 3px;
   overflow: hidden;
   background: #fff;
@@ -482,9 +484,6 @@ kbd {
 }
 .app[data-night] .pdfViewer .page {
   background-color: #1e1e1e;
-}
-.pdfViewer .page .loadingIcon::after {
-  display: none;
 }
 
 /* Selection colours inside the text layer */
@@ -712,7 +711,6 @@ kbd {
 .search-result-list mark { color: var(--text); background: var(--accent-soft); font-weight: 600; }
 .search-hint { color: var(--text-2); font-size: 12px; line-height: 1.6; }
 .about-update { padding: 0 24px 24px; }
-.auto-update-setting { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-weight: 600; }
 .installation-path { overflow-wrap: anywhere; }
 
 .searchbar {

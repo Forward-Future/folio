@@ -3,10 +3,9 @@ import { Icon, type IconName } from "./icons";
 
 export type MoreItem =
   | { kind: "action"; icon: IconName; label: string; shortcut?: string; onSelect: () => void }
-  | { kind: "toggle"; icon: IconName; label: string; shortcut?: string; checked: boolean; onSelect: () => void }
   | { kind: "divider" };
 
-/** The top bar's overflow menu: less-frequent actions and view settings. */
+/** The top bar's overflow menu: less-frequent actions. */
 export function MoreMenu({ items }: { items: MoreItem[] }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -48,8 +47,7 @@ export function MoreMenu({ items }: { items: MoreItem[] }) {
             ) : (
               <button
                 key={item.label}
-                role={item.kind === "toggle" ? "menuitemcheckbox" : "menuitem"}
-                aria-checked={item.kind === "toggle" ? item.checked : undefined}
+                role="menuitem"
                 onClick={() => {
                   setOpen(false);
                   item.onSelect();
@@ -57,7 +55,6 @@ export function MoreMenu({ items }: { items: MoreItem[] }) {
               >
                 <Icon name={item.icon} size={15} />
                 <span className="menu-label">{item.label}</span>
-                {item.kind === "toggle" && item.checked && <Icon name="check" size={14} />}
                 {item.shortcut && <kbd className="menu-kbd">{item.shortcut}</kbd>}
               </button>
             ),

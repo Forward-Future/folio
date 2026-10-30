@@ -7,6 +7,8 @@ const { isIP } = require("node:net");
 const { autoUpdater } = require("electron-updater");
 const ai = require("./ai.cjs");
 const { captureWebpage } = require("./webpage.cjs");
+const { safePdfName } = require("./filenames.cjs");
+const { csp } = require("./csp.cjs");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 // Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
@@ -19,22 +21,9 @@ const isAppUrl = (url) => {
   try { return url.startsWith("app://folio/") || (!!DEV_URL && new URL(url).origin === DEV_URL); } catch { return false; }
 };
 
-// The page only loads its own bundled code; PDFs can't bring in scripts or reach the network.
-// Inline styles are needed by pdf.js page layout; wasm by its image decoders; blob: frames for printing.
-const CSP = [
-  "default-src 'self'",
-  "script-src 'self' 'wasm-unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data: blob:",
-  "connect-src 'self' data: blob:",
-  "worker-src 'self' blob:",
-  "media-src 'self' blob: mediastream:",
-  "frame-src 'self' blob:",
-  "object-src 'self' blob:",
-  "base-uri 'none'",
-  "form-action 'none'",
-].join("; ");
+// Sent as a response header on app:// (see csp.cjs). The page never needs the network here: PDFs are
+// read from disk, and "Open a link" downloads happen in this process.
+const CSP = csp({ connect: "'self' data: blob:" });
 
 function isTrustedSender(event) {
   if (!win || event.sender !== win.webContents) return false;
@@ -211,7 +200,6 @@ function setupAutoUpdate() {
   autoUpdater.on("update-downloaded", (info) => {
     updateReady = info.version;
     setUpdateStatus({ state: "ready", version: info.version });
-    win?.webContents.send("folio:update-ready", info.version);
   });
   autoUpdater.on("error", (err) => {
     logUpdate(`error: ${err?.stack || err}`);
@@ -356,18 +344,12 @@ function isLocalHost(hostname) {
   return false;
 }
 
-// Windows can't create files named after devices — "CON.pdf" included — so a server- or
-// page-supplied name needs that case broken too, not just the illegal characters.
-const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
-
+// The name a download gets: from Content-Disposition when the server sends one, else the URL's last segment.
 function pdfNameFromResponse(url, disposition) {
   const match = /filename\*=(?:UTF-8'')?([^;]+)|filename="?([^";]+)"?/i.exec(disposition || "");
   let name = (match?.[1] || match?.[2] || "").trim();
   try { name = decodeURIComponent(name || url.pathname.split("/").filter(Boolean).pop() || ""); } catch {}
-  name = name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").trim() || url.hostname;
-  const stem = name.replace(/\.pdf$/i, "");
-  if (WINDOWS_DEVICE_NAME.test(stem)) name = stem + "_";
-  return /\.pdf$/i.test(name) ? name : name + ".pdf";
+  return safePdfName(name, url.hostname);
 }
 
 // Downloads a PDF link in the main process, so cross-origin URLs work without CORS.
@@ -480,12 +462,10 @@ if (!app.requestSingleInstanceLock()) {
       const result = await downloadPdf(url);
       return result.webpage ? captureWebpage(result.webpage, isLocalHost) : result;
     });
-    handle("folio:version", () => app.getVersion());
     handle("folio:app-info", () => ({ version: app.getVersion(), mode: installKind(), location: installLocation(), platform: process.platform,
       notifyOnly: NOTIFY_ONLY }));
     handle("folio:open-installation", () => shell.openPath(installLocation()));
     handle("folio:open-download", () => shell.openExternal(RELEASES_PAGE));
-    handle("folio:update-status", () => updateReady);
     handle("folio:update-state", () => updateStatus);
     handle("folio:auto-update-setting", () => automaticUpdates);
     handle("folio:set-auto-update-setting", (_event, enabled) => saveUpdatePreference(enabled));

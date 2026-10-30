@@ -3,6 +3,7 @@ import { clearRecent, listRecent, removeRecent, type RecentFile } from "./recent
 import { Icon } from "./icons";
 import { keys } from "./platform";
 import { formatBytes } from "./Dialogs";
+import { updateSummary } from "./updates";
 
 function timeAgo(t: number) {
   const s = (Date.now() - t) / 1000;
@@ -21,10 +22,6 @@ function UpdateLine({ status }: { status: UpdateStatus }) {
     </button>
   );
   switch (status.state) {
-    case "checking":
-      return <> · Checking for updates…</>;
-    case "downloading":
-      return <> · Downloading {status.version} ({status.percent ?? 0}%)…</>;
     case "ready":
       return (
         <>
@@ -51,10 +48,10 @@ function UpdateLine({ status }: { status: UpdateStatus }) {
           </button>
         </>
       );
-    case "unsupported":
-      return status.message === "system" ? <> · Updates arrive with your system updates</> : <> · This copy doesn't update itself</>;
-    default:
+    case "idle":
       return <> · {check}</>;
+    default:
+      return <> · {updateSummary(status)}</>;
   }
 }
 
@@ -74,7 +71,7 @@ export function Welcome({ onPick, onOpenUrl, onOpenBytes, onError, onSample, loa
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
 
   useEffect(() => {
-    window.folioDesktop?.getVersion().then(setVersion);
+    window.folioDesktop?.getAppInfo().then((info) => setVersion(info.version)).catch(() => {});
     return window.folioDesktop?.onUpdateStatus?.(setUpdate);
   }, []);
 

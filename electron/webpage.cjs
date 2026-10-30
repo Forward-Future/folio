@@ -3,6 +3,7 @@
 // captures), sandboxed, with no Node.js, no permissions, no pop-ups, and no downloads.
 const { BrowserWindow, session } = require("electron");
 const crypto = require("node:crypto");
+const { safePdfName } = require("./filenames.cjs");
 
 const TOTAL_TIMEOUT_MS = 60_000;
 // Pages are laid out like a desktop browser window: 1280 CSS px wide, no margins.
@@ -23,16 +24,6 @@ function withTimeout(promise, ms, message) {
   let timer;
   return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); })])
     .finally(() => clearTimeout(timer));
-}
-
-// Windows can't create files named after devices — "CON.pdf" included — so a page title
-// needs that case broken too, not just the illegal characters.
-const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
-
-function fileName(title, url) {
-  const clean = String(title || "").replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-  const base = clean || url.hostname;
-  return `${WINDOWS_DEVICE_NAME.test(base) ? base + "_" : base}.pdf`;
 }
 
 // Scrolls through the page so lazy-loaded images load, then back to the top.
@@ -149,7 +140,7 @@ async function captureWebpage(rawUrl, isLocalHost) {
         generateDocumentOutline: true,
         generateTaggedPDF: true,
       });
-      return { name: fileName(contents.getTitle(), new URL(contents.getURL() || url.toString())), data };
+      return { name: safePdfName(contents.getTitle(), new URL(contents.getURL() || url.toString()).hostname), data };
     })(), TOTAL_TIMEOUT_MS, "timeout");
   } catch (error) {
     if (error?.message === "timeout") return { error: "The webpage took too long to load." };
