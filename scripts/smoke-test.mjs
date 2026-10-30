@@ -46,6 +46,21 @@ try {
     getSelection().addRange(range);
   });
   await page.locator(".selection-popover").waitFor();
+
+  // Copy puts the selection on the system clipboard (whose contents are put back afterwards). Clipboard writes
+  // need a focused window, which a CI desktop doesn't always give the app.
+  if (await page.evaluate(() => document.hasFocus())) {
+    const clipboardBefore = await app.evaluate(({ clipboard }) => clipboard.readText());
+    await page.locator(".selection-popover").getByRole("button", { name: "Copy" }).click();
+    await page.locator('.selection-popover button[title="Copied"]').waitFor({ timeout: 5_000 });
+    const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
+    await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), clipboardBefore);
+    assert.ok(/A short tour of Folio/.test(copied), "Copy didn't reach the clipboard");
+    console.log("ok  selection copied to the clipboard");
+  } else {
+    console.log("--  clipboard check skipped: the window isn't focused");
+  }
+
   await page.getByRole("button", { name: "Highlight yellow" }).click();
   await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 1, null, { timeout: 15_000 });
   console.log("ok  highlight created");
