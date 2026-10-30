@@ -1,4 +1,6 @@
 const paths = {
+  camera: <><path d="M8 6.5 9.5 4h5L16 6.5h3A2 2 0 0 1 21 8.5v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-10a2 2 0 0 1 2-2Z" /><circle cx="12" cy="13" r="4" /></>,
+  lock: <><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" /></>,
   sidebar: <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></>,
   search: <><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4.2-4.2" /></>,
   plus: <path d="M12 5v14M5 12h14" />,

@@ -9,7 +9,7 @@ import {
 } from "./viewer";
 import { AnnotationEditorParamsType, AnnotationEditorType } from "pdfjs-dist";
 import { loadPdf, thumbnailDataUrl, type PDFDocumentProxy } from "./pdf";
-import { contentKey, fileId, getRecent, saveRecent, updateLastPage } from "./recent";
+import { contentKey, fileId, getRecent, MAX_RECENT_FILE_BYTES, saveRecent, updateLastPage } from "./recent";
 import { activeDocument, readView, setActiveDocument, writeView, type ReadingView } from "./session";
 import { SearchResults } from "./SearchResults";
 import { Icon, type IconName } from "./icons";
@@ -29,6 +29,7 @@ import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog
 import { SignatureDialog } from "./SignatureDialog";
 import { SettingsDialog } from "./SettingsDialog";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
+import { keepDrawingPointer } from "./drawing";
 
 type Tool = "select" | "highlight" | "ink" | "freetext";
 
@@ -192,6 +193,7 @@ export default function App() {
       imagesRightClickMinSize: 1e9,
     });
     trackPageImages(eventBus);
+    const stopDrawingPointer = keepDrawingPointer(container);
     linkService.setViewer(viewer);
     viewerRef.current = viewer;
     markupRef.current = new MarkupController(eventBus, viewer, setMarkup);
@@ -256,7 +258,7 @@ export default function App() {
       });
     };
     container.addEventListener("wheel", onWheel, { passive: false });
-    return () => container.removeEventListener("wheel", onWheel);
+    return () => { stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
   }, []);
 
   // ── Opening documents ───────────────────────────────────────────────
@@ -315,8 +317,9 @@ export default function App() {
 
         setLoading(false);
         setActiveDocument(id);
-        // Password-protected documents stay out of Recent: it would keep their bytes and a page-1 thumbnail unprotected on disk.
-        if (!password) void (async () => {
+        // Password-protected documents stay out of Recent: it would keep their bytes and a page-1
+        // thumbnail unprotected on disk. Very large files are skipped too — see MAX_RECENT_FILE_BYTES.
+        if (!password && data.byteLength <= MAX_RECENT_FILE_BYTES) void (async () => {
           const thumb = existing?.thumb ?? (await thumbnailDataUrl(pdf).catch(() => ""));
           if (generation !== openGeneration.current) return;
           await saveRecent({
@@ -351,7 +354,11 @@ export default function App() {
         setError(`“${file.name}” isn't a PDF.`);
         return;
       }
-      openBytes(file.name, new Uint8Array(await file.arrayBuffer()));
+      try {
+        await openBytes(file.name, new Uint8Array(await file.arrayBuffer()));
+      } catch {
+        setError(`Couldn't open “${file.name}”. The file may have been moved or deleted.`);
+      }
     },
     [openBytes],
   );
@@ -360,7 +367,7 @@ export default function App() {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "application/pdf,.pdf";
-    input.onchange = () => input.files?.[0] && openFile(input.files[0]);
+    input.onchange = () => { if (input.files?.[0]) void openFile(input.files[0]); };
     input.click();
   }, [openFile]);
 
@@ -401,8 +408,12 @@ export default function App() {
   );
 
   const openSample = useCallback(async () => {
-    const res = await fetch(`${import.meta.env.BASE_URL}sample.pdf`);
-    openBytes("Folio sample.pdf", new Uint8Array(await res.arrayBuffer()));
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}sample.pdf`);
+      await openBytes("Folio sample.pdf", new Uint8Array(await res.arrayBuffer()));
+    } catch {
+      setError("Couldn't open the sample document.");
+    }
   }, [openBytes]);
 
   const closeDoc = useCallback(() => {
@@ -647,20 +658,36 @@ export default function App() {
     return doc.pdf.annotationStorage.size > 0 ? await doc.pdf.saveDocument() : doc.data;
   };
 
-  const download = async () => {
-    const bytes = await currentBytes();
-    if (!bytes || !doc) return;
+  const saveBytes = (bytes: Uint8Array) => {
     const url = URL.createObjectURL(new Blob([bytes.slice()], { type: "application/pdf" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = doc.name.toLowerCase().endsWith(".pdf") ? doc.name : `${doc.name}.pdf`;
+    a.download = doc ? (doc.name.toLowerCase().endsWith(".pdf") ? doc.name : `${doc.name}.pdf`) : "document.pdf";
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
+
+  const download = async () => {
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await currentBytes();
+    } catch {
+      setError("Couldn't save a copy of this document.");
+      return;
+    }
+    if (!bytes || !doc) return;
+    saveBytes(bytes);
     flash(doc.pdf.annotationStorage.size > 0 ? "Saved a copy with your highlights and notes" : "Download started");
   };
 
   const print = async () => {
-    const bytes = await currentBytes();
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await currentBytes();
+    } catch {
+      setError("Couldn't print this document.");
+      return;
+    }
     if (!bytes) return;
     const url = URL.createObjectURL(new Blob([bytes.slice()], { type: "application/pdf" }));
     const frame = document.createElement("iframe");
@@ -672,7 +699,9 @@ export default function App() {
           frame.contentWindow?.focus();
           frame.contentWindow?.print();
         } catch {
-          window.open(url, "_blank");
+          // The desktop shell denies blob: pop-ups, so a saved copy is the working fallback there.
+          if (window.folioDesktop) { saveBytes(bytes); flash("Couldn't print — saved a copy instead"); }
+          else window.open(url, "_blank");
         }
       }, 250);
     };
@@ -696,7 +725,7 @@ export default function App() {
       if (!recent || cancelled || generation !== openGeneration.current) return;
       const data = new Uint8Array(await recent.data.arrayBuffer());
       if (!cancelled && generation === openGeneration.current) void openBytes(recent.name, data);
-    })();
+    })().catch(() => {}); // restoring the last document is best-effort
     return () => { cancelled = true; unsubscribe?.(); };
   }, [openBytes]);
   useEffect(() => window.folioDesktop?.setTheme(theme), [theme]);
@@ -869,8 +898,8 @@ export default function App() {
       setDragging(false);
       const file = e.dataTransfer?.files[0];
       const url = !file && e.dataTransfer ? droppedUrl(e.dataTransfer) : null;
-      if (file) openFile(file);
-      else if (url) openUrl(url);
+      if (file) void openFile(file);
+      else if (url) void openUrl(url);
       else setError("Drop a PDF file or a link to a PDF.");
     };
     // Pasting a PDF link (outside text fields) opens it too.
@@ -880,7 +909,7 @@ export default function App() {
       if (!url) return;
       e.preventDefault();
       setDialog(null);
-      openUrl(url);
+      void openUrl(url);
     };
     window.addEventListener("dragstart", start);
     window.addEventListener("dragend", end);
@@ -1165,7 +1194,7 @@ export default function App() {
         )}
       </div>
 
-      {!doc && <Welcome onPick={pickFile} onOpenUrl={() => setDialog("url")} onOpenBytes={openBytes} onSample={openSample} loading={loading} />}
+      {!doc && <Welcome onPick={pickFile} onOpenUrl={() => setDialog("url")} onOpenBytes={openBytes} onError={setError} onSample={openSample} loading={loading} />}
 
       {loading && doc && <div className="loading-bar" />}
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.10.1
+
+- Drawing keeps the pointer captured during a stroke, including when it crosses the page boundary, and recovers
+  cleanly when the window loses focus or a stroke is canceled.
+- A redesigned signature dialog separates adding a signature from placing it on the page, with clearer camera and
+  photo controls, a larger preview, keyboard placement, and an explicit approval footer that stays visible in small
+  windows.
+- The README now covers all current features, keyboard shortcuts, privacy, platform-specific updates, and limits,
+  including saving a PDF copy to keep placed signatures.
+
 ## 1.10.0
 
 - **Settings** in the ⋯ menu (Ctrl+,) gathers every preference in one place: theme, night reading, the default Ask AI
