@@ -37,6 +37,43 @@ try {
   assert.match(await page.locator(".textLayer").first().innerText(), /A short tour of Folio/);
   console.log("ok  sample rendered with a text layer");
 
+  // Opening another document (here from the file manager) asks first when there's unsaved work, a placed signature,
+  // and keeps it if the reader says no.
+  const photo = await page.evaluate(() => {
+    const canvas = Object.assign(document.createElement("canvas"), { width: 600, height: 200 });
+    const g = canvas.getContext("2d");
+    g.fillStyle = "#fff";
+    g.fillRect(0, 0, 600, 200);
+    g.lineWidth = 10;
+    g.beginPath();
+    g.moveTo(40, 150);
+    g.bezierCurveTo(150, 10, 250, 190, 350, 60);
+    g.lineTo(560, 120);
+    g.stroke();
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  await page.getByTitle("Add a signature").click();
+  await page.locator('input[aria-label="Upload signature photo"]').setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(photo, "base64") });
+  await page.getByRole("button", { name: /Use this signature/ }).click();
+  await page.locator('select[aria-label="Signature placement"]').selectOption("manual");
+  await page.locator('[aria-label^="Place signature on page"]').click();
+  await page.getByRole("button", { name: /Approve and add signature/ }).click();
+  await page.locator(".dirty-dot").waitFor();
+  const sample = await page.evaluate(async () => Array.from(new Uint8Array(await (await fetch("sample.pdf")).arrayBuffer())));
+  const openFromFileManager = () => app.evaluate(({ BrowserWindow }, data) =>
+    BrowserWindow.getAllWindows()[0].webContents.send("folio:open-file", { name: "Another.pdf", data: Buffer.from(data) }), sample);
+  let prompt = page.waitForEvent("dialog");
+  await openFromFileManager();
+  await (await prompt).dismiss();
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator(".stampEditor").count(), 1);
+  prompt = page.waitForEvent("dialog");
+  await openFromFileManager();
+  await (await prompt).accept();
+  await page.waitForFunction(() => document.title.startsWith("Another.pdf"), null, { timeout: 15_000 });
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
+  console.log("ok  opening another document asks before discarding unsaved work");
+
   // Select a sentence and highlight it in one click.
   await page.evaluate(() => {
     const span = [...document.querySelectorAll(".textLayer span:not(.markedContent)")].find((s) => s.textContent.includes("A short tour"));
