@@ -100,7 +100,7 @@ async function sendFile(file) {
 // Installed copies check GitHub Releases (Forward-Future/folio-releases, see "publish" in package.json)
 // on launch and every few hours, download new versions in the background, and install them on quit
 // or when the user clicks "Restart" in the update banner. Progress is shown on the home screen and
-// logged to %APPDATA%\Folio\update.log.
+// logged to update.log in the app's user-data folder.
 let updateReady = null;
 let updateStatus = { state: "idle" };
 let updatesEnabled = false;
@@ -168,7 +168,12 @@ function installKind() {
 }
 
 function installLocation() {
-  return path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || process.env.APPIMAGE || app.getPath("exe"));
+  if (process.env.PORTABLE_EXECUTABLE_FILE || process.env.APPIMAGE) {
+    return path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || process.env.APPIMAGE);
+  }
+  const exeDir = path.dirname(app.getPath("exe"));
+  // Inside a packaged .app the exe lives in Contents/MacOS; the install folder is where the .app sits.
+  return IS_MAC && /\.app[\/\\]Contents[\/\\]MacOS$/.test(exeDir) ? path.resolve(exeDir, "..", "..", "..") : exeDir;
 }
 
 // macOS only installs updates signed with an Apple Developer ID. Release builds made with the Developer ID
@@ -254,7 +259,7 @@ function createWindow() {
   const cameraOwner = win.webContents;
   const trustedCameraOrigin = isAppUrl;
   cameraOwner.session.setPermissionCheckHandler((contents, permission, origin, details) =>
-    contents === cameraOwner && permission === "media" && trustedCameraOrigin(details.requestingUrl || origin) && details.mediaType !== "audio");
+    contents === cameraOwner && permission === "media" && trustedCameraOrigin(details.requestingUrl || origin) && details.mediaType === "video");
   cameraOwner.session.setPermissionRequestHandler((contents, permission, callback, details) => {
     if (contents !== cameraOwner || permission !== "media" || !details.isMainFrame
       || !trustedCameraOrigin(details.requestingUrl) || !details.mediaTypes?.length
@@ -335,11 +340,17 @@ function isLocalHost(hostname) {
   return false;
 }
 
+// Windows can't create files named after devices — "CON.pdf" included — so a server- or
+// page-supplied name needs that case broken too, not just the illegal characters.
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
 function pdfNameFromResponse(url, disposition) {
   const match = /filename\*=(?:UTF-8'')?([^;]+)|filename="?([^";]+)"?/i.exec(disposition || "");
   let name = (match?.[1] || match?.[2] || "").trim();
   try { name = decodeURIComponent(name || url.pathname.split("/").filter(Boolean).pop() || ""); } catch {}
   name = name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").trim() || url.hostname;
+  const stem = name.replace(/\.pdf$/i, "");
+  if (WINDOWS_DEVICE_NAME.test(stem)) name = stem + "_";
   return /\.pdf$/i.test(name) ? name : name + ".pdf";
 }
 
