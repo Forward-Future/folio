@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.10.2
+
+- Opening, saving, or printing a document that fails now says so instead of doing nothing, and a Recent entry that
+  can no longer be read is removed with a message. On the desktop, if printing fails, Folio saves a copy instead.
+- Opening a PDF from your file manager no longer freezes Folio while it loads, and files over 300 MB are refused with
+  a message (the same limit as links).
+- PDFs over 50 MB still open normally but aren't kept in Recent, so it no longer stores gigabytes of copies on disk.
+- Smaller fixes: downloaded and converted files never get a name Windows reserves (like `CON.pdf`); on macOS, opening
+  the install folder shows the folder containing Folio rather than the inside of the app; the ChatGPT sign-in ignores
+  malformed requests instead of failing; and the browser edition gets the same content security policy and 300 MB
+  link limit as the desktop app.
+
 ## 1.10.1
 
 - Drawing keeps the pointer captured during a stroke, including when it crosses the page boundary, and recovers
