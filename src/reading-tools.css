@@ -1,14 +1,14 @@
-/* Highlights, notes, and Ask AI. Uses the design tokens from styles.css. */
+/* Reading tools: highlights, notes, Ask AI, images, the More menu, Settings. Uses the design tokens from styles.css. */
 
 /* ── Selection popover ──────────────────────────────────────────────── */
 .selection-popover {
   position: absolute;
   z-index: 12;
   display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 44px;
-  padding: 0 6px 0 9px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 6px 8px 9px;
   border-radius: 12px;
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   backdrop-filter: blur(16px) saturate(1.6);
@@ -37,12 +37,6 @@
 }
 .swatch-btn.on {
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12), 0 0 0 2px var(--surface), 0 0 0 3.5px var(--text-3);
-}
-.selection-popover .divider {
-  width: 1px;
-  height: 20px;
-  margin: 0 4px;
-  background: var(--line-strong);
 }
 .pop-btn {
   display: flex;
@@ -104,6 +98,11 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+/* These grow with their text (see GrowingTextarea), so they never scroll. */
+.doc-note,
+.mark-note {
+  overflow: hidden;
+}
 .note-actions {
   display: flex;
   align-items: center;
@@ -147,9 +146,6 @@
   line-height: 16px;
   background: var(--accent-soft);
   color: var(--accent-text);
-}
-.sidebar-tabs button {
-  white-space: nowrap;
 }
 .notes-panel {
   display: flex;
@@ -354,7 +350,7 @@
   border-radius: 4px;
   background: var(--hover);
 }
-.ai-card.welcome {
+.ai-card.ai-welcome {
   border-color: var(--accent-soft);
 }
 .ai-card-actions {
@@ -579,8 +575,7 @@
   border-radius: 6px;
   padding: 2px 4px;
 }
-.ai-meta a,
-.linkish {
+.ai-meta a {
   color: var(--text-2);
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -601,18 +596,6 @@
   }
 }
 
-/* One sidebar width for every tab, so switching tabs never resizes anything. */
-.sidebar-tabs button {
-  flex: 1 1 0;
-  min-width: 0;
-}
-.sidebar-tabs button svg {
-  display: none;
-}
-.mark-note,
-.doc-note {
-  overflow: hidden;
-}
 .ai-checking {
   margin: 0;
   font-size: 12.5px;
@@ -639,9 +622,6 @@
 .app[data-night] .canvasWrapper svg.highlight {
   --blend-mode: screen;
 }
-.thumb-frame {
-  position: relative;
-}
 
 /* ── Top bar: More menu ─────────────────────────────────────────────── */
 .more {
@@ -666,17 +646,7 @@
 .menu-label {
   flex: 1;
 }
-.menu.dropdown button[aria-checked="true"] > svg:not(:first-child) {
-  color: var(--accent-text);
-}
 /* Popover rows, note field, and the remove action. */
-.selection-popover {
-  flex-direction: column;
-  align-items: stretch;
-  height: auto;
-  padding: 6px 6px 8px 9px;
-  gap: 6px;
-}
 .pop-row {
   display: flex;
   align-items: center;
@@ -714,9 +684,6 @@
 }
 
 /* ── Images: click menu and full-window viewer ──────────────────────── */
-.image-menu {
-  width: auto;
-}
 .image-viewer {
   position: fixed;
   inset: 0;

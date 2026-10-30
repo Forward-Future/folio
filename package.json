@@ -1,7 +1,7 @@
 {
   "name": "folio-pdf-reader",
   "private": true,
-  "version": "1.10.3",
+  "version": "1.10.4",
   "type": "module",
   "scripts": {
     "assets": "node scripts/copy-pdfjs-assets.mjs",
@@ -51,6 +51,9 @@
   "build": {
     "appId": "app.folio.reader",
     "productName": "Folio",
+    "electronLanguages": [
+      "en-US"
+    ],
     "directories": {
       "output": "release",
       "buildResources": "build"

@@ -52,7 +52,7 @@ function GrowingTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement
   return <textarea ref={ref} {...props} onInput={autoGrow} />;
 }
 
-export function toMarkdown(docName: string, state: MarkupState) {
+function toMarkdown(docName: string, state: MarkupState) {
   const lines = [`# Notes: ${docName.replace(/\.pdf$/i, "")}`, ""];
   if (state.note.trim()) lines.push(state.note.trim(), "");
   for (const mark of state.marks) {

@@ -20,12 +20,6 @@ contextBridge.exposeInMainWorld("folioDesktop", {
   getAppInfo: () => ipcRenderer.invoke("folio:app-info"),
   openInstallation: () => ipcRenderer.invoke("folio:open-installation"),
   setTheme: (theme) => ipcRenderer.send("folio:theme", theme),
-  getVersion: () => ipcRenderer.invoke("folio:version"),
-  /** Called with the new version once an update has been downloaded and is ready to install. */
-  onUpdateReady(callback) {
-    ipcRenderer.on("folio:update-ready", (_e, version) => callback(version));
-    ipcRenderer.invoke("folio:update-status").then((version) => version && callback(version));
-  },
   installUpdate: () => ipcRenderer.send("folio:install-update"),
   /** Called with the updater state ({ state, version?, percent?, message? }) now and whenever it changes. */
   onUpdateStatus(callback) {

@@ -6,7 +6,7 @@ interface UpdateStatus {
   checkedAt?: number;
 }
 
-// Present only when Folio runs as the Windows desktop app (see electron/preload.cjs).
+// Present only when Folio runs as the desktop app (see electron/preload.cjs).
 interface FolioDesktop {
   onOpenFile(callback: (name: string, data: Uint8Array) => void): () => void;
   ready(): Promise<boolean>;
@@ -20,8 +20,6 @@ interface FolioDesktop {
   openDownload(): Promise<void>;
   openInstallation(): Promise<string>;
   setTheme(theme: string): void;
-  getVersion(): Promise<string>;
-  onUpdateReady(callback: (version: string) => void): void;
   installUpdate(): void;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   checkForUpdates(): void;

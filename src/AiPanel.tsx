@@ -3,21 +3,18 @@ import { Icon } from "./icons";
 import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
 import { ocrSession } from "./lib/ocr";
+import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
 
 export interface AiContext {
   text: string;
   page: number;
 }
 
-type Provider = "chatgpt" | "claude";
-
 interface Message extends AiMessage {
   context?: AiContext;
   error?: { message: string; code?: string; link?: string };
 }
 
-const USAGE_URL = "https://chatgpt.com/settings/usage";
-const CLAUDE_CODE_URL = "https://claude.com/claude-code";
 const MAX_DOC_CHARS = 400_000;
 const CLAUDE_MODELS = [
   { id: "", name: "Default model" },
@@ -139,7 +136,7 @@ interface Props {
 export function AiPanel({ pdf, docId, persist, docName, context, onClearContext, onGoToPage, onClose }: Props) {
   const ai = window.folioDesktop?.ai;
   const [status, setStatus] = useState<AiStatus | null>(null);
-  const [provider, setProviderState] = useState<Provider>(() => (localStorage.getItem("folio:ai-provider") as Provider) || "chatgpt");
+  const [provider, setProviderState] = useState<AiProvider>(() => (localStorage.getItem("folio:ai-provider") as AiProvider) || "chatgpt");
   const [models, setModels] = useState<{ id: string; name: string }[]>([]);
   const [model, setModelState] = useState(() => localStorage.getItem(`folio:ai-model:${provider}`) ?? "");
   const [messages, setMessages] = useState<Message[]>(() => conversations.get(docId) ?? []);
@@ -174,7 +171,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   useEffect(() => { void ai?.status().then(setStatus); }, [ai]);
   useEffect(() => { if (context) inputRef.current?.focus(); }, [context]);
 
-  const setProvider = (next: Provider) => {
+  const setProvider = (next: AiProvider) => {
     setProviderState(next);
     localStorage.setItem("folio:ai-provider", next);
     setModelState(localStorage.getItem(`folio:ai-model:${next}`) ?? "");
@@ -259,10 +256,10 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     if (!ai) return;
     setSigningIn(true);
     setSetupError(null);
-    const result = await ai.signInChatGPT();
+    const result = await signInChatGPT(ai);
     setSigningIn(false);
-    if (!result.ok) setSetupError(result.error ?? "ChatGPT sign-in failed.");
-    setStatus(await ai.status());
+    setSetupError(result.error);
+    setStatus(result.status);
   };
 
   const placeholder = !ready ? "Connect an AI provider to ask questions"
@@ -318,7 +315,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
         ) : (
           <>
             {provider === "chatgpt" && !status.chatgpt.welcomeSeen && (
-              <div className="ai-card welcome">
+              <div className="ai-card ai-welcome">
                 <p><strong>You're connected{status.chatgpt.email ? ` as ${status.chatgpt.email}` : ""}.</strong> Questions you ask in Folio use your ChatGPT plan. You can manage usage in ChatGPT settings.</p>
                 <div className="ai-card-actions">
                   <a className="btn ghost" href={USAGE_URL} target="_blank" rel="noreferrer">Manage usage</a>

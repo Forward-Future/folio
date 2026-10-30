@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.4
+
+- Opening a PDF uses less memory by avoiding an extra copy of the document.
+- Downloads include fewer unused resources without changing Folio's language or PDF support.
+- The Ask AI welcome card stays inside its panel instead of covering the document.
+
 ## 1.10.3
 
 - **Copy** buttons work in the desktop app. Copying selected text, **Copy all** in Notes, and **Copy image** said

@@ -508,4 +508,4 @@ function register(handle, send) {
   handle("folio:ai-cancel", (_event, id) => { active.get(id)?.abort(); return true; });
 }
 
-module.exports = { register, USAGE_URL };
+module.exports = { register };

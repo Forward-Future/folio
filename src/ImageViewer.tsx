@@ -54,7 +54,7 @@ export function ImageMenu({ x, y, stageWidth, href, onView, onOpen }: {
   const width = href ? 300 : 150;
   const left = Math.min(Math.max(8, x - width / 2), Math.max(8, stageWidth - width - 8));
   return (
-    <div className="selection-popover image-menu" role="toolbar" aria-label="Image" style={{ left, top: Math.max(8, y - 54) }}>
+    <div className="selection-popover" role="toolbar" aria-label="Image" style={{ left, top: Math.max(8, y - 54) }}>
       <div className="pop-row">
         <button className="pop-btn" onClick={onView} title="View larger in Folio">
           <Icon name="expand" size={15} /> View larger
