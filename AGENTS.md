@@ -75,3 +75,7 @@ libraries with `src/testing/pdfjs.ts` instead of a fake: the fakes in older test
 
 Match the surrounding code: comments explain why, not what; user-facing text is plain and short. Run
 `npx tsc --noEmit`, `npm test`, `npm run build`, and `npm run smoke` before committing.
+
+To check a change in the running app, use `npm run smoke` (extend it if it doesn't cover your change). It runs Folio
+off-screen and leaves the clipboard alone, so it doesn't interrupt whoever is using the computer. Don't open a
+visible window (`npm run app`, `electron .`, `FOLIO_SMOKE_SHOW=1`) unless the user asks to see the app.

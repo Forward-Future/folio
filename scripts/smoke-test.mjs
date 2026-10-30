@@ -87,8 +87,11 @@ try {
   await page.locator(".selection-popover").waitFor();
 
   // Copy puts the selection on the system clipboard (whose contents are put back afterwards). Clipboard writes
-  // need a focused window, which a CI desktop doesn't always give the app.
-  if (await page.evaluate(() => document.hasFocus())) {
+  // need a focused window, which a CI desktop doesn't always give the app. Only CI runs it: on someone's own
+  // computer it would briefly replace what they've copied (and anything but plain text wouldn't come back).
+  if (!process.env.CI) {
+    console.log("--  clipboard check skipped: it only runs in CI, to leave your clipboard alone");
+  } else if (await page.evaluate(() => document.hasFocus())) {
     const clipboardBefore = await app.evaluate(({ clipboard }) => clipboard.readText());
     await page.locator(".selection-popover").getByRole("button", { name: "Copy" }).click();
     await page.locator('.selection-popover button[title="Copied"]').waitFor({ timeout: 5_000 });
