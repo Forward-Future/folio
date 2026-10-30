@@ -408,7 +408,34 @@
   line-height: 1.55;
   color: var(--text);
   overflow-wrap: anywhere;
+  min-width: 0;
 }
+.msg.assistant { flex-shrink: 0; }
+.msg h1, .msg h2, .msg h3, .msg h4, .msg h5, .msg h6 {
+  margin: 12px 0 8px;
+  font-size: inherit;
+  line-height: inherit;
+}
+.msg pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--hover);
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.msg pre code { padding: 0; background: none; }
+.msg .katex { font-size: 1.08em; overflow-wrap: normal; }
+.msg .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 10px 0;
+  padding: 5px 0;
+}
+.msg .katex-display > .katex { text-align: left; }
+.msg .katex-error { color: var(--text-2) !important; white-space: pre-wrap; }
 .msg p {
   margin: 0 0 8px;
 }
