@@ -54,6 +54,15 @@ try {
   await page.getByRole("menuitem", { name: /About Folio/ }).waitFor();
   await page.keyboard.press("Escape");
 
+  // Settings links to the bundled changelog, and closing it returns to Settings.
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
+  await page.getByRole("button", { name: "View changelog" }).click();
+  await page.getByRole("dialog", { name: "What's new" }).locator("h3").first().waitFor();
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog", { name: "Settings" }).waitFor();
+  await page.keyboard.press("Escape");
+  console.log("ok  changelog opens from Settings");
+
   // A scanned page (an image, no text) is offered text recognition; once read, its words can be searched and selected.
   const [chooser] = await Promise.all([
     page.waitForEvent("filechooser"),

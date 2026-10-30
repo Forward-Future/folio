@@ -7,6 +7,7 @@ interface Props {
   onTheme: (theme: "light" | "dark") => void;
   night: boolean;
   onNight: (on: boolean) => void;
+  onOpenChangelog: () => void;
   onClose: () => void;
 }
 
@@ -62,7 +63,7 @@ function Choice<T extends string>({ value, options, onChange, label }: { value: 
   );
 }
 
-export function SettingsDialog({ theme, onTheme, night, onNight, onClose }: Props) {
+export function SettingsDialog({ theme, onTheme, night, onNight, onOpenChangelog, onClose }: Props) {
   const desktop = window.folioDesktop;
   const ai = desktop?.ai;
   const [error, setError] = useState<string | null>(null);
@@ -195,6 +196,12 @@ export function SettingsDialog({ theme, onTheme, night, onNight, onClose }: Prop
             </Row>
           </Section>
         )}
+
+        <Section title="About">
+          <Row label="What's new" hint="Changes in each version of Folio.">
+            <button className="btn ghost" onClick={onOpenChangelog}>View changelog</button>
+          </Row>
+        </Section>
 
         {error && <p className="form-error">{error}</p>}
       </div>

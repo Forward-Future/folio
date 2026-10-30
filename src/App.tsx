@@ -28,6 +28,7 @@ import { SearchBar, type FindResult } from "./SearchBar";
 import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
 import { SignatureDialog } from "./SignatureDialog";
 import { SettingsDialog } from "./SettingsDialog";
+import { ChangelogDialog } from "./ChangelogDialog";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
 import { OcrBanner } from "./components/ocr";
@@ -137,7 +138,7 @@ export default function App() {
   const [dirty, setDirty] = useState(false);
   const [focus, setFocus] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [dialog, setDialog] = useState<"info" | "shortcuts" | "about" | "url" | "settings" | null>(null);
+  const [dialog, setDialog] = useState<"info" | "shortcuts" | "about" | "url" | "settings" | "changelog" | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -883,7 +884,8 @@ export default function App() {
       } else if (e.key === "Escape") {
         if (highlightMenu) setHighlightMenu(null);
         else if (noteBox) setNoteBox(null);
-        else if (dialog) setDialog(null);
+        // Each dialog's Modal closes itself on Escape (the changelog goes back to Settings); closing here too would override it.
+        else if (dialog) return;
         else if (searchOpen) setSearchOpen(false);
         else if (tool !== "select") chooseTool("select");
         else if (focus) toggleFocus();
@@ -1263,7 +1265,9 @@ export default function App() {
       {dialog === "info" && doc && <InfoDialog pdf={doc.pdf} name={doc.name} size={doc.data.byteLength} onClose={() => setDialog(null)} />}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} onOpenSettings={() => setDialog("settings")} />}
-      {dialog === "settings" && <SettingsDialog theme={theme} onTheme={setThemeTo} night={night} onNight={setNightTo} onClose={() => setDialog(null)} />}
+      {dialog === "settings" && <SettingsDialog theme={theme} onTheme={setThemeTo} night={night} onNight={setNightTo} onOpenChangelog={() => setDialog("changelog")} onClose={() => setDialog(null)} />}
+      {/* Closing goes back to Settings, where the changelog is opened from. */}
+      {dialog === "changelog" && <ChangelogDialog onClose={() => setDialog("settings")} />}
       {doc && imageView && <ImageViewer pdf={doc.pdf} target={imageView} onClose={() => setImageView(null)} />}
       {dialog === "url" && <OpenUrlDialog onClose={() => setDialog(null)} onSubmit={(url) => { setDialog(null); openUrl(url); }} />}
       {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}

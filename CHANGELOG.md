@@ -2,6 +2,7 @@
 
 ## 1.10.2
 
+- **What's new** in Settings shows this changelog inside Folio.
 - Opening, saving, or printing a document that fails now says so instead of doing nothing, and a Recent entry that
   can no longer be read is removed with a message. On the desktop, if printing fails, Folio saves a copy instead.
 - Opening a PDF from your file manager no longer freezes Folio while it loads, and files over 300 MB are refused with
