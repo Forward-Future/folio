@@ -87,7 +87,7 @@ export function Welcome({ onPick, onOpenUrl, onOpenBytes, onError, onSample, loa
     try {
       onOpenBytes(f.name, new Uint8Array(await f.data.arrayBuffer()));
     } catch {
-      void forget(f.id);
+      await forget(f.id);
       onError(`Couldn't reopen “${f.name}”. It was removed from Recent.`);
     }
   };
