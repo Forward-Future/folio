@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { copyText } from "./clipboard";
 import { Icon } from "./icons";
 import { keys } from "./platform";
 
@@ -121,9 +122,11 @@ export function SelectionPopover({ info, stageWidth, colors, current, onHighligh
           title={copied ? "Copied" : "Copy"}
           aria-label="Copy"
           onClick={() => {
-            void navigator.clipboard.writeText(info.text);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
+            // Only report success once the clipboard actually took the text.
+            copyText(info.text).then(
+              () => { setCopied(true); setTimeout(() => setCopied(false), 1200); },
+              () => setCopied(false),
+            );
           }}
         >
           <Icon name={copied ? "check" : "copy"} size={15} />

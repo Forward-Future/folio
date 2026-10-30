@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld("folioDesktop", {
   openInstallation: () => ipcRenderer.invoke("folio:open-installation"),
   setTheme: (theme) => ipcRenderer.send("folio:theme", theme),
   getVersion: () => ipcRenderer.invoke("folio:version"),
+  /** Replaces the system clipboard with `text`. The renderer's Clipboard API is denied in the shell. */
+  copyText: (text) => ipcRenderer.invoke("folio:copy-text", text),
   /** Called with the new version once an update has been downloaded and is ready to install. */
   onUpdateReady(callback) {
     ipcRenderer.on("folio:update-ready", (_e, version) => callback(version));

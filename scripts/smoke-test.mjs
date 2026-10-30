@@ -53,6 +53,20 @@ try {
   await page.getByRole("menuitem", { name: /About Folio/ }).waitFor();
   await page.keyboard.press("Escape");
 
+  // "Copy all" must reach the real clipboard, not just relabel itself: read it back from the main
+  // process, where the renderer's own Clipboard API is denied.
+  await page.getByRole("tab", { name: /Notes/ }).click();
+  await page.getByLabel("Notes about this document").fill("SMOKE CLIPBOARD NOTE");
+  await page.keyboard.press("Tab");
+  await page.waitForTimeout(600);
+  await app.evaluate(({ clipboard }) => clipboard.writeText("folio-sentinel"));
+  assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), "folio-sentinel");
+  const copyButton = page.locator(".notes-head button.link");
+  await copyButton.click();
+  await page.waitForFunction(() => document.querySelector(".notes-head button.link")?.textContent?.includes("Copied"), null, { timeout: 10_000 });
+  assert.match(await app.evaluate(({ clipboard }) => clipboard.readText()), /SMOKE CLIPBOARD NOTE/);
+  console.log("ok  Copy all replaced the native clipboard");
+
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });
   assert.deepEqual(failures, []);

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { copyText } from "./clipboard";
 import { Icon } from "./icons";
 import { keys } from "./platform";
 import type { Mark, MarkupState } from "./markup";
@@ -69,7 +70,7 @@ export function toMarkdown(docName: string, state: MarkupState) {
 
 export function NotesPanel({ state, docName, persisted, onReveal, onNote, onRemove, onDocNote, onAsk }: Props) {
   const docNote = useDebouncedField(state.note, onDocNote);
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const highlights = state.marks.filter((m) => m.type === "highlight" || (m.type === "freetext" && m.text));
   const other = state.marks.length - highlights.length;
 
@@ -81,13 +82,16 @@ export function NotesPanel({ state, docName, persisted, onReveal, onNote, onRemo
           className="link small"
           disabled={!highlights.length && !state.note.trim()}
           onClick={() => {
-            void navigator.clipboard.writeText(toMarkdown(docName, state));
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
+            // Only report success once the clipboard actually took the text.
+            copyText(toMarkdown(docName, state)).then(
+              () => { setCopyState("copied"); setTimeout(() => setCopyState("idle"), 1500); },
+              () => { setCopyState("failed"); setTimeout(() => setCopyState("idle"), 2500); },
+            );
           }}
-          title="Copy all notes and highlights as Markdown"
+          title={copyState === "failed" ? "Could not copy to the clipboard" : "Copy all notes and highlights as Markdown"}
         >
-          <Icon name={copied ? "check" : "copy"} size={13} /> {copied ? "Copied" : "Copy all"}
+          <Icon name={copyState === "copied" ? "check" : "copy"} size={13} />{" "}
+          {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy all"}
         </button>
       </div>
 

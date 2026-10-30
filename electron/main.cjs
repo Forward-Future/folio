@@ -1,5 +1,5 @@
 // Folio desktop shell: one window, PDFs opened from Explorer / "Open with", files served over app://.
-const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, screen } = require("electron");
+const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, screen, clipboard } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const { pathToFileURL } = require("node:url");
@@ -445,6 +445,12 @@ if (!app.requestSingleInstanceLock()) {
     handle("folio:fetch-pdf", async (_event, url) => {
       const result = await downloadPdf(url);
       return result.webpage ? captureWebpage(result.webpage, isLocalHost) : result;
+    });
+    // The renderer's Clipboard API is denied by the permission handlers above; the page writes
+    // through the shell instead, so "Copy" only reports success once the clipboard really changed.
+    handle("folio:copy-text", (_event, text) => {
+      clipboard.writeText(typeof text === "string" ? text : "");
+      return true;
     });
     handle("folio:version", () => app.getVersion());
     handle("folio:app-info", () => ({ version: app.getVersion(), mode: installKind(), location: installLocation(), platform: process.platform,

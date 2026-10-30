@@ -21,6 +21,8 @@ interface FolioDesktop {
   openInstallation(): Promise<string>;
   setTheme(theme: string): void;
   getVersion(): Promise<string>;
+  /** Replaces the system clipboard with `text` (the renderer's Clipboard API is denied in the shell). */
+  copyText(text: string): Promise<boolean>;
   onUpdateReady(callback: (version: string) => void): void;
   installUpdate(): void;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
