@@ -67,7 +67,7 @@ app.on("open-file", (event, file) => {
   if (win && rendererReady) {
     if (win.isMinimized()) win.restore();
     win.focus();
-    sendFile(file);
+    void sendFile(file);
   } else {
     pendingFile = file;
     if (app.isReady() && !win) createWindow();
@@ -79,11 +79,18 @@ function pdfFromArgs(argv) {
   return file ? path.resolve(file) : null;
 }
 
-function sendFile(file) {
-  if (!file || !win) return;
+// The read is async and size-capped like URL downloads: a huge file or a slow network
+// share shouldn't freeze the main process or balloon memory in two processes.
+async function sendFile(file) {
+  const target = win;
+  if (!file || !target) return;
   try {
-    const data = fs.readFileSync(file);
-    win.webContents.send("folio:open-file", { name: path.basename(file), data });
+    if ((await fs.promises.stat(file)).size > MAX_URL_PDF_BYTES) {
+      dialog.showErrorBox("Couldn't open file", `${file}\n\nThat PDF is larger than 300 MB.`);
+      return;
+    }
+    const data = await fs.promises.readFile(file);
+    if (!target.isDestroyed()) target.webContents.send("folio:open-file", { name: path.basename(file), data });
   } catch (err) {
     dialog.showErrorBox("Couldn't open file", `${file}\n\n${err.message}`);
   }
@@ -408,7 +415,7 @@ if (!app.requestSingleInstanceLock()) {
     if (!win) return;
     if (win.isMinimized()) win.restore();
     win.focus();
-    sendFile(pdfFromArgs(argv));
+    void sendFile(pdfFromArgs(argv));
   });
 
   app.whenReady().then(() => {
@@ -438,7 +445,7 @@ if (!app.requestSingleInstanceLock()) {
       rendererReady = true;
       const file = pendingFile;
       pendingFile = null;
-      if (file) setTimeout(() => sendFile(file), 0);
+      if (file) setTimeout(() => void sendFile(file), 0);
       return !!file;
     });
     // PDF links open directly; webpages are converted to a PDF first.
