@@ -351,7 +351,11 @@ export default function App() {
         setError(`“${file.name}” isn't a PDF.`);
         return;
       }
-      openBytes(file.name, new Uint8Array(await file.arrayBuffer()));
+      try {
+        await openBytes(file.name, new Uint8Array(await file.arrayBuffer()));
+      } catch {
+        setError(`Couldn't open “${file.name}”. The file may have been moved or deleted.`);
+      }
     },
     [openBytes],
   );
@@ -360,7 +364,7 @@ export default function App() {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "application/pdf,.pdf";
-    input.onchange = () => input.files?.[0] && openFile(input.files[0]);
+    input.onchange = () => { if (input.files?.[0]) void openFile(input.files[0]); };
     input.click();
   }, [openFile]);
 
@@ -398,8 +402,12 @@ export default function App() {
   );
 
   const openSample = useCallback(async () => {
-    const res = await fetch(`${import.meta.env.BASE_URL}sample.pdf`);
-    openBytes("Folio sample.pdf", new Uint8Array(await res.arrayBuffer()));
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}sample.pdf`);
+      await openBytes("Folio sample.pdf", new Uint8Array(await res.arrayBuffer()));
+    } catch {
+      setError("Couldn't open the sample document.");
+    }
   }, [openBytes]);
 
   const closeDoc = useCallback(() => {
@@ -644,20 +652,36 @@ export default function App() {
     return doc.pdf.annotationStorage.size > 0 ? await doc.pdf.saveDocument() : doc.data;
   };
 
-  const download = async () => {
-    const bytes = await currentBytes();
-    if (!bytes || !doc) return;
+  const saveBytes = (bytes: Uint8Array) => {
     const url = URL.createObjectURL(new Blob([bytes.slice()], { type: "application/pdf" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = doc.name.toLowerCase().endsWith(".pdf") ? doc.name : `${doc.name}.pdf`;
+    a.download = doc ? (doc.name.toLowerCase().endsWith(".pdf") ? doc.name : `${doc.name}.pdf`) : "document.pdf";
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
+
+  const download = async () => {
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await currentBytes();
+    } catch {
+      setError("Couldn't save a copy of this document.");
+      return;
+    }
+    if (!bytes || !doc) return;
+    saveBytes(bytes);
     flash(doc.pdf.annotationStorage.size > 0 ? "Saved a copy with your highlights and notes" : "Download started");
   };
 
   const print = async () => {
-    const bytes = await currentBytes();
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await currentBytes();
+    } catch {
+      setError("Couldn't print this document.");
+      return;
+    }
     if (!bytes) return;
     const url = URL.createObjectURL(new Blob([bytes.slice()], { type: "application/pdf" }));
     const frame = document.createElement("iframe");
@@ -669,7 +693,9 @@ export default function App() {
           frame.contentWindow?.focus();
           frame.contentWindow?.print();
         } catch {
-          window.open(url, "_blank");
+          // The desktop shell denies blob: pop-ups, so a saved copy is the working fallback there.
+          if (window.folioDesktop) { saveBytes(bytes); flash("Couldn't print — saved a copy instead"); }
+          else window.open(url, "_blank");
         }
       }, 250);
     };
@@ -693,7 +719,7 @@ export default function App() {
       if (!recent || cancelled || generation !== openGeneration.current) return;
       const data = new Uint8Array(await recent.data.arrayBuffer());
       if (!cancelled && generation === openGeneration.current) void openBytes(recent.name, data);
-    })();
+    })().catch(() => {}); // restoring the last document is best-effort
     return () => { cancelled = true; unsubscribe?.(); };
   }, [openBytes]);
   useEffect(() => window.folioDesktop?.setTheme(theme), [theme]);
@@ -866,8 +892,8 @@ export default function App() {
       setDragging(false);
       const file = e.dataTransfer?.files[0];
       const url = !file && e.dataTransfer ? droppedUrl(e.dataTransfer) : null;
-      if (file) openFile(file);
-      else if (url) openUrl(url);
+      if (file) void openFile(file);
+      else if (url) void openUrl(url);
       else setError("Drop a PDF file or a link to a PDF.");
     };
     // Pasting a PDF link (outside text fields) opens it too.
@@ -877,7 +903,7 @@ export default function App() {
       if (!url) return;
       e.preventDefault();
       setDialog(null);
-      openUrl(url);
+      void openUrl(url);
     };
     window.addEventListener("dragstart", start);
     window.addEventListener("dragend", end);
@@ -1162,7 +1188,7 @@ export default function App() {
         )}
       </div>
 
-      {!doc && <Welcome onPick={pickFile} onOpenUrl={() => setDialog("url")} onOpenBytes={openBytes} onSample={openSample} loading={loading} />}
+      {!doc && <Welcome onPick={pickFile} onOpenUrl={() => setDialog("url")} onOpenBytes={openBytes} onError={setError} onSample={openSample} loading={loading} />}
 
       {loading && doc && <div className="loading-bar" />}
 

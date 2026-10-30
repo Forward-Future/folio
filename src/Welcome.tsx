@@ -62,11 +62,12 @@ interface Props {
   onPick: () => void;
   onOpenUrl: () => void;
   onOpenBytes: (name: string, data: Uint8Array) => void;
+  onError: (message: string) => void;
   onSample: () => void;
   loading: boolean;
 }
 
-export function Welcome({ onPick, onOpenUrl, onOpenBytes, onSample, loading }: Props) {
+export function Welcome({ onPick, onOpenUrl, onOpenBytes, onError, onSample, loading }: Props) {
   const [recent, setRecent] = useState<RecentFile[]>([]);
   const [version, setVersion] = useState<string | null>(null);
 
@@ -81,7 +82,15 @@ export function Welcome({ onPick, onOpenUrl, onOpenBytes, onSample, loading }: P
     listRecent().then(setRecent);
   }, []);
 
-  const reopen = async (f: RecentFile) => onOpenBytes(f.name, new Uint8Array(await f.data.arrayBuffer()));
+  // A stored blob that can't be read back is dead weight: drop the entry so it doesn't keep failing.
+  const reopen = async (f: RecentFile) => {
+    try {
+      onOpenBytes(f.name, new Uint8Array(await f.data.arrayBuffer()));
+    } catch {
+      void forget(f.id);
+      onError(`Couldn't reopen “${f.name}”. It was removed from Recent.`);
+    }
+  };
 
   const forget = async (id: string) => {
     await removeRecent(id);
@@ -133,7 +142,7 @@ export function Welcome({ onPick, onOpenUrl, onOpenBytes, onSample, loading }: P
             </div>
             <div className="recent-grid">
               {recent.map((f) => (
-                <div key={f.id} className="recent-card" onClick={() => reopen(f)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && reopen(f)}>
+                <div key={f.id} className="recent-card" onClick={() => void reopen(f)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && void reopen(f)}>
                   <div className="recent-thumb">
                     {f.thumb ? <img src={f.thumb} alt="" /> : <Icon name="file" size={28} />}
                     {f.lastPage > 1 && (
