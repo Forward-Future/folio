@@ -16,7 +16,8 @@
     "dist:mac": "npm run build && electron-builder --mac --publish never",
     "dist:linux": "npm run build && electron-builder --linux --publish never",
     "smoke": "node scripts/smoke-test.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:chat-math": "node scripts/test-chat-math.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.11"
@@ -30,11 +31,17 @@
     "electron-builder": "^26.18.0",
     "fake-indexeddb": "^6.2.7",
     "jsdom": "^29.1.1",
+    "katex": "^0.19.1",
+    "mdast-util-from-markdown": "^2.1.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.4.299",
     "playwright-core": "^1.64.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-breaks": "^4.0.0",
+    "remark-math": "^6.0.0",
     "tesseract.js": "^7.0.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
@@ -107,6 +114,10 @@
       {
         "from": "THIRD_PARTY_NOTICES.md",
         "to": "THIRD_PARTY_NOTICES.md"
+      },
+      {
+        "from": "dist/.vite/license.md",
+        "to": "licenses/THIRD_PARTY_LICENSES.md"
       }
     ],
     "electronFuses": {
@@ -176,5 +187,8 @@
     "url": "https://github.com/Forward-Future/folio.git"
   },
   "author": "Forward Future",
-  "desktopName": "folio-pdf-reader.desktop"
+  "desktopName": "folio-pdf-reader.desktop",
+  "overrides": {
+    "katex": "$katex"
+  }
 }

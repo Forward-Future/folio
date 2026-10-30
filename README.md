@@ -114,6 +114,8 @@ URL opening and webpage conversion require the desktop app. Failed downloads lea
 - **Whole-document or passage questions:** open the Ask AI panel from the toolbar, select text and choose **Ask AI**,
   or ask about an existing highlight.
 - **Streaming answers** with clickable page citations that jump back to the source page.
+- **Rendered mathematics:** inline and display LaTeX equations, with wide equations scrolling within the chat panel.
+  Supports `\( ... \)`, `\[ ... \]`, `$x$`, and `$$ ... $$`; existing saved answers render too.
 - **Provider and model selection**, a stop button for an in-progress answer, and a **+** button to start a fresh
   conversation.
 - **Per-document history:** conversations are saved on this computer and restored when you reopen that document,
