@@ -711,12 +711,16 @@ export default function App() {
   };
 
   const print = async () => {
+    // pdf.js marks the document as saved once it has written the bytes, but printing saves nothing.
+    const unsaved = dirtyRef.current;
     let copy: Awaited<ReturnType<typeof currentBytes>>;
     try {
       copy = await currentBytes();
     } catch {
       setError("Couldn't print this document.");
       return;
+    } finally {
+      if (unsaved) setDirty(true);
     }
     if (!copy) return;
     const { bytes } = copy;
