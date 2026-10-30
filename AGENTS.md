@@ -38,7 +38,19 @@ Folio ships for **Windows, macOS, and Linux from one codebase**. Every change an
 
 All of these files are produced by the release build and published together; `scripts/check-release.mjs` lists them.
 
+## Code layout
+
+New code is grouped by layer, then by feature, so a feature's pieces sit beside the others of their kind:
+
+- `src/components/<feature>/` React components (each in its own folder with its CSS and test),
+- `src/hooks/<feature>/` hooks,
+- `src/lib/<feature>/` everything that isn't UI: logic, storage, and the session or controller behind a feature.
+
+Each folder has an `index.ts` that exports what the rest of the app may use; import from there, not from deep paths.
+Tests sit next to the file they test (`Thing.ts` and `Thing.test.ts`). Text recognition (OCR) is the first feature laid out
+this way (`components/ocr`, `hooks/ocr`, `lib/ocr`); older files in `src/` can move over as they are touched.
+
 ## Code style
 
 Match the surrounding code: comments explain why, not what; user-facing text is plain and short. Run
-`npx tsc --noEmit`, `npm run build`, and `npm run smoke` before committing.
+`npx tsc --noEmit`, `npm test`, `npm run build`, and `npm run smoke` before committing.

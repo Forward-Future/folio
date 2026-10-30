@@ -30,6 +30,9 @@ import { SignatureDialog } from "./SignatureDialog";
 import { SettingsDialog } from "./SettingsDialog";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
+import { OcrBanner } from "./components/ocr";
+import { useOcrState } from "./hooks/ocr";
+import { OcrSession } from "./lib/ocr";
 
 type Tool = "select" | "highlight" | "ink" | "freetext";
 
@@ -100,6 +103,8 @@ export default function App() {
   const docRef = useRef<OpenDoc | null>(null);
   const markupRef = useRef<MarkupController | null>(null);
   const persistRef = useRef(false);
+  const ocrRef = useRef<OcrSession | null>(null);
+  const findVersionRef = useRef(0);
 
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const [loading, setLoading] = useState(false);
@@ -151,6 +156,8 @@ export default function App() {
   const [imageView, setImageView] = useState<ImageTarget | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiContext, setAiContext] = useState<AiContext | null>(null);
+  const [ocr, setOcr] = useState<OcrSession | null>(null);
+  const ocrState = useOcrState(ocr);
 
   useEffect(() => {
     setSigning(false); setSignatureTargets([]); setSignatureDismissed(false);
@@ -286,6 +293,21 @@ export default function App() {
           spreadRef.current = saved.spread;
           preferencesRef.current = { sidebar: saved.sidebar, spread: saved.spread };
         }
+
+        // Recognized text for scans plugs into pdf.js page by page; it must be in place before the viewer asks for text.
+        // Password-protected documents keep theirs in memory only, like everything else Folio doesn't store for them.
+        const session = new OcrSession(pdf, password ? null : key);
+        await session.restore();
+        if (generation !== openGeneration.current) {
+          session.destroy();
+          void pdf.loadingTask.destroy();
+          return;
+        }
+        ocrRef.current?.destroy();
+        ocrRef.current = session;
+        findVersionRef.current = session.version;
+        setOcr(session);
+        void session.detect().catch(() => {});
 
         const prev = docRef.current;
         docRef.current = { id, key, name, data, pdf };
@@ -428,12 +450,33 @@ export default function App() {
     linkRef.current!.setDocument(null, null);
     docRef.current?.pdf.loadingTask.destroy();
     docRef.current = null;
+    ocrRef.current?.destroy();
+    ocrRef.current = null;
+    setOcr(null);
     setDoc(null);
     setDirty(false);
     setSearchOpen(false);
     setFocus(false);
     document.title = "Folio";
   }, [dirty]);
+
+  // A page that has just been read gets its text layer rebuilt; pages not on screen yet pick the text up when drawn.
+  useEffect(() => {
+    if (!ocr) return;
+    return ocr.onPage((n) => {
+      const v = viewerRef.current;
+      const view = v?.getPageView(n - 1);
+      if (!v || !view || view.renderingState === 0) return;
+      view.reset({ keepAnnotationLayer: true, keepAnnotationEditorLayer: true, keepCanvasWrapper: true });
+      v.update();
+    });
+  }, [ocr]);
+  // The find controller reads every page's text once and keeps it, so it is refreshed (not mid-search) once new text exists.
+  useEffect(() => {
+    if (!ocr || !searchOpen || ocr.version === findVersionRef.current || ocrState.phase === "running") return;
+    findVersionRef.current = ocr.version;
+    findRef.current?.setDocument(ocr.pdf);
+  }, [ocr, searchOpen, ocrState.phase]);
 
   // Remember where the reader left off.
   useEffect(() => {
@@ -1197,6 +1240,8 @@ export default function App() {
       {!doc && <Welcome onPick={pickFile} onOpenUrl={() => setDialog("url")} onOpenBytes={openBytes} onError={setError} onSample={openSample} loading={loading} />}
 
       {loading && doc && <div className="loading-bar" />}
+
+      {doc && ocr && !signing && <OcrBanner session={ocr} state={ocrState} onStart={() => void ocr.start(() => pageRef.current)} />}
 
       {dragging && (
         <div className="drop-overlay">

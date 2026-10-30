@@ -1,6 +1,7 @@
 // End-to-end smoke test, run in CI on Windows, macOS, and Linux (and locally with `npm run smoke`):
 // launches the built app in Electron, opens the sample document, and checks that pages render, text is
-// selectable and highlightable, and the window chrome matches the platform. Run `npm run build` first.
+// selectable and highlightable, a scanned page can be recognized, and the window chrome matches the platform.
+// Run `npm run build` first.
 import { _electron as electron } from "playwright-core";
 import { createRequire } from "node:module";
 import { mkdtempSync, mkdirSync } from "node:fs";
@@ -52,6 +53,19 @@ try {
   await page.getByRole("button", { name: "More" }).click();
   await page.getByRole("menuitem", { name: /About Folio/ }).waitFor();
   await page.keyboard.press("Escape");
+
+  // A scanned page (an image, no text) is offered text recognition; once read, its words can be searched and selected.
+  const [chooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.keyboard.press(process.platform === "darwin" ? "Meta+o" : "Control+o"),
+  ]);
+  await chooser.setFiles(path.join(root, "scripts", "fixtures", "scanned-sample.pdf"));
+  await page.getByText("This looks like a scan").waitFor({ timeout: 30_000 });
+  assert.equal(await page.locator(".textLayer span:not(.markedContent)").count(), 0);
+  await page.getByRole("button", { name: "Recognize text" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".textLayer span:not(.markedContent)").length > 60, null, { timeout: 180_000 });
+  assert.match(await page.locator(".textLayer").first().innerText(), /Scanned\s+pages\s+become\s+searchable/);
+  console.log("ok  scanned page recognized");
 
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });

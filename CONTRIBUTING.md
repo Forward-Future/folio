@@ -14,7 +14,8 @@ attach it, or describe how to make one. For security issues, follow [SECURITY.md
 2. Run `npm run app` to build and launch the desktop app, or `npm run dev` for the browser version with hot reload.
    To develop the desktop shell against the dev server, start `npm run dev` and then run
    `FOLIO_DEV_URL=http://localhost:5173 npx electron .` (development builds only).
-3. Run `npm run build` before opening a pull request. It type-checks and builds, and CI runs the same check.
+3. Run `npm test` and `npm run build` before opening a pull request. The tests are fast (Vitest, next to the code they
+   cover); the build type-checks and builds. CI runs both.
 
 Keep changes focused, match the surrounding code style, and describe what you changed and how you tested it.
 Folio aims to stay simple, fast, and private: no telemetry, no accounts, and no network access beyond updates and
@@ -43,5 +44,5 @@ workflow repeats that check and opens an issue if anything is off.
 **Never publish any other way** (no hand-made `gh release` uploads or single-platform builds); see
 [AGENTS.md](AGENTS.md). Signing certificates are set up as repository secrets; see [SIGNING.md](SIGNING.md).
 
-CI (`.github/workflows/ci.yml`) type-checks, builds, and runs `npm run smoke` on all three platforms for every push to
+CI (`.github/workflows/ci.yml`) runs `npm test`, type-checks, builds, and runs `npm run smoke` on all three platforms for every push to
 `main` and every pull request.

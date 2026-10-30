@@ -42,6 +42,11 @@ Or build Folio yourself from source (below).
   transparency, colors, and images instead of switching to its print styles.
 - **Password-protected PDFs:** enter the password to read and annotate a protected document. These documents are not
   kept in the recent library, and their annotations and AI conversations are not persisted locally between sessions.
+- **Scanned PDFs:** when a document is a picture of pages with no text, Folio offers **Recognize text**. It reads the
+  pages on your device, starting with the one you're on, and you can keep reading meanwhile. Afterwards search, selection,
+  highlights, and Ask AI work on the scan. Recognition is English only for now, can make mistakes on poor scans (Ask AI
+  is told when text came from recognition), and is saved with the document so it only runs once. Folio's own copy of the
+  PDF isn't changed; **Save a copy** doesn't add the recognized text.
 - **Sample document:** try the built-in tour from the home screen without finding a PDF first.
 
 URL opening and webpage conversion require the desktop app. Failed downloads leave your current document open.
@@ -206,6 +211,10 @@ network requests only to:
 - answer a question you ask in **Ask AI**. Only then, the document's text (up to about 400,000 characters), any passage
   you selected, and the conversation go to the provider you chose: OpenAI for ChatGPT, or Anthropic through your
   installed Claude Code. Their privacy terms apply to that data.
+
+Recognizing text in scanned PDFs happens entirely on your device: the recognition engine and its English model ship
+inside Folio and make no network requests. Recognized text is stored with the document on this computer, except for
+password-protected PDFs, which are never stored.
 
 For ChatGPT, Folio stores its sign-in tokens in its data folder (below, under `ai`), encrypted with the system's
 credential protection (Windows data protection, the macOS Keychain, or the Linux secret store; if a Linux desktop has
