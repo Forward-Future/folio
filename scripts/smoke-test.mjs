@@ -222,7 +222,15 @@ try {
     const chooser = page.waitForEvent("filechooser");
     await page.getByRole("button", { name: /Open a PDF/ }).click();
     await (await chooser).setFiles(docx);
-    await page.waitForFunction(() => document.title.startsWith("Quarterly report.pdf"), null, { timeout: 150_000 });
+    // Stops at a conversion error too, and shows what each converter said.
+    const settled = await page.waitForFunction(() => document.title.startsWith("Quarterly report.pdf")
+      || document.querySelector(".toast.error")?.textContent, null, { timeout: 150_000 }).catch((error) => error);
+    if (settled instanceof Error || !(await page.title()).startsWith("Quarterly report.pdf")) {
+      const log = path.join(env.FOLIO_TEST_USER_DATA, "convert.log");
+      console.log(await page.locator(".toast").textContent().catch(() => "(no message)"));
+      console.log(existsSync(log) ? readFileSync(log, "utf8") : "(no convert.log)");
+      throw settled instanceof Error ? settled : new Error("the Word document didn't convert");
+    }
     await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
     assert.match(await page.locator(".textLayer").first().innerText(), /Quarterly report from Word/);
   };

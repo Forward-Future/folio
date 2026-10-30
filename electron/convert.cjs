@@ -135,9 +135,9 @@ async function builtIn(source, dir, title) {
 
 /**
  * Converts the Word document `file` to PDF and resolves to its bytes. Rejects with an error whose `userMessage`
- * (when present) says what the user can do about it.
+ * (when present) says what the user can do about it. `log` hears about each converter that didn't work.
  */
-async function convertToPdf(file) {
+async function convertToPdf(file, log = () => {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "folio-convert-"));
   try {
     // Converters work on a copy: Word may have the original open, and odd file names can't confuse them.
@@ -146,23 +146,28 @@ async function convertToPdf(file) {
     const title = path.basename(file).replace(/\.[^.]+$/, "");
     const only = !app.isPackaged ? process.env.FOLIO_TEST_CONVERTER : undefined; // tests pick one: word, libreoffice, builtin
     const failures = [];
+    const started = Date.now();
+    const fail = (converter, error) => {
+      failures.push(`${converter}: ${error.stderr || error.message}`);
+      log(`${converter} failed after ${Date.now() - started} ms: ${error.stderr || error.message}`);
+    };
     if (process.platform === "win32" && (!only || only === "word")) {
       const target = path.join(dir, "word.pdf");
       try {
         await withWord(source, target);
         return fs.readFileSync(target);
-      } catch (error) { failures.push(`Word: ${error.stderr || error.message}`); }
+      } catch (error) { fail("Word", error); }
     }
     const soffice = (!only || only === "libreoffice") && libreOffice();
     if (soffice) {
       try { return fs.readFileSync(await withLibreOffice(soffice, source, dir)); }
-      catch (error) { failures.push(`LibreOffice: ${error.stderr || error.message}`); }
+      catch (error) { fail("LibreOffice", error); }
     }
     if (!only || only === "builtin") {
       try { return await builtIn(source, dir, title); }
       catch (error) {
         if (error.userMessage) throw error;
-        failures.push(`Folio: ${error.message}`);
+        fail("Folio", error);
       }
     }
     throw Object.assign(new Error(failures.join("\n")), { userMessage: "The document may be damaged or protected with a password." });

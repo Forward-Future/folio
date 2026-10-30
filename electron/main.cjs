@@ -104,7 +104,7 @@ async function sendWordFile(file, target) {
       const data = await fs.promises.readFile(output.file);
       return send("folio:open-file", { name: path.basename(output.file), data });
     }
-    const data = await convertToPdf(file);
+    const data = await convertToPdf(file, (msg) => logConvert(`${file}: ${msg}`));
     let name = original.replace(/\.[^.]+$/, ".pdf");
     let note = null;
     if (output) {
