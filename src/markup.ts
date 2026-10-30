@@ -16,7 +16,14 @@ interface Editor {
   div?: HTMLElement | null;
   deleted?: boolean;
   annotationElementId?: string | null;
+  isClone?: boolean;
+  x: number;
+  y: number;
+  pageDimensions: [number, number];
   comment: { text?: string; deleted?: boolean } | null;
+  getPDFRect(): number[];
+  getRectInCurrentCoords(rect: number[], pageHeight: number): number[];
+  fixAndSetPosition(): void;
   isEmpty(): boolean;
   serialize(isForCopying?: boolean): Record<string, unknown> | null;
   remove(): void;
@@ -24,6 +31,7 @@ interface Editor {
   __folioMark?: string;
 }
 interface EditorLayer {
+  div: HTMLElement;
   deserialize(data: Record<string, unknown>): Promise<Editor | null>;
   add(editor: Editor): void;
 }
@@ -118,6 +126,9 @@ export class MarkupController {
   }
 
   unload() {
+    // Read the live editors first: an edit committed in place (retyping a text box, then Escape) fires no event
+    // that schedules a sync, so it would otherwise be lost.
+    this.sync();
     this.flush();
     this.#docId = null;
     this.#pending.clear();
@@ -133,18 +144,58 @@ export class MarkupController {
     this.#restoring.add(page);
     const docId = this.#docId;
     try {
+      let added = false;
+      // Marks pdf.js couldn't bring back stay pending, which keeps their saved records (and Notes entries) intact.
+      const missed: Mark[] = [];
       for (const mark of marks) {
-        const editor = await layer.deserialize({ ...mark.data, deleted: false, annotationElementId: null }).catch(() => null);
-        if (!editor || this.#docId !== docId) continue;
+        // pdf.js only puts a text box's saved text on the page when the box is recreated as a copy; without it
+        // the box comes back empty and the next sync drops it. isClone stops the copy being offset like a paste
+        // (the same steps pdf.js takes when it duplicates a page).
+        const textBox = mark.type === "freetext";
+        const editor = await layer.deserialize({ ...mark.data, deleted: false, annotationElementId: null, isCopy: textBox }).catch(() => null);
+        if (this.#docId !== docId) continue;
+        if (!editor) {
+          missed.push(mark);
+          continue;
+        }
         editor.__folioMark = mark.id;
+        if (textBox) editor.isClone = true;
         layer.add(editor);
+        // An empty editor would be thrown away by pdf.js (and its mark with it) at the next tool change.
+        if (editor.isEmpty()) {
+          editor.remove();
+          missed.push(mark);
+          continue;
+        }
+        if (textBox) this.#moveTo(editor, mark.data.rect);
         if (mark.note) this.#setEditorNote(editor, mark.note);
+        added = true;
       }
-      if (this.#docId === docId) this.#pending.delete(page);
+      // pdf.js hides an editor layer that was empty when its page rendered, and saved marks arrive after that.
+      if (added) layer.div.hidden = false;
+      if (this.#docId === docId) {
+        if (missed.length) this.#pending.set(page, missed);
+        else this.#pending.delete(page);
+      }
     } finally {
       this.#restoring.delete(page);
     }
     this.scheduleSync();
+  }
+
+  /** Puts a restored text box back on its saved rectangle: pdf.js nudges a new box by its font size when it's first drawn. */
+  #moveTo(editor: Editor, rect: unknown) {
+    if (!Array.isArray(rect)) return;
+    try {
+      const [pageWidth, pageHeight] = editor.pageDimensions;
+      const [wantX, wantY] = editor.getRectInCurrentCoords(rect, pageHeight);
+      const [haveX, haveY] = editor.getRectInCurrentCoords(editor.getPDFRect(), pageHeight);
+      editor.x += (wantX - haveX) / pageWidth;
+      editor.y += (wantY - haveY) / pageHeight;
+      editor.fixAndSetPosition();
+    } catch {
+      /* the text is restored either way */
+    }
   }
 
   #setEditorNote(editor: Editor, note: string) {
@@ -181,7 +232,13 @@ export class MarkupController {
     const fresh: string[] = [];
     const live = new Map<string, Mark>();
     for (const editor of this.#liveEditors()) {
-      if (editor.isEmpty()) continue;
+      if (editor.isEmpty()) {
+        // A saved mark whose editor reads empty (a text box cleared but not yet committed) keeps its record until
+        // the edit is committed. Removing a mark removes its editor, so deletes still work.
+        const previous = editor.__folioMark ? this.#known.get(editor.__folioMark) : undefined;
+        if (previous) live.set(previous.id, previous);
+        continue;
+      }
       let data: Record<string, unknown> | null = null;
       try { data = editor.serialize(false); } catch { data = null; }
       if (!data) continue;

@@ -1,6 +1,7 @@
 // End-to-end smoke test, run in CI on Windows, macOS, and Linux (and locally with `npm run smoke`):
 // launches the built app in Electron, opens the sample document, and checks that pages render, text is
-// selectable and highlightable, and the window chrome matches the platform. Run `npm run build` first.
+// selectable and highlightable, text boxes survive reopening, and the window chrome matches the platform.
+// Run `npm run build` first.
 import { _electron as electron } from "playwright-core";
 import { createRequire } from "node:module";
 import { mkdtempSync, mkdirSync } from "node:fs";
@@ -115,6 +116,20 @@ try {
   await page.getByRole("dialog", { name: "Settings" }).waitFor();
   await page.keyboard.press("Escape");
   console.log("ok  changelog opens from Settings");
+
+  // A text box is saved automatically and comes back, text and all, when the document is opened again.
+  await page.locator('button[title^="Text ("]').click();
+  // Clicked in the middle of the page's visible part: a fixed spot near the top lands under the toolbar's color
+  // picker in a small window, as on CI runners.
+  await page.locator('.page[data-page-number="1"] .annotationEditorLayer').click();
+  // Filled in one go: pdf.js moves the caret while it focuses a new box, which can scramble key-by-key typing.
+  await page.locator('.freeTextEditor .internal[contenteditable="true"]').fill("Saved text box");
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page.waitForTimeout(1000);
+  await page.getByTitle("Back to library").click();
+  await page.getByRole("button", { name: /Try a sample/ }).click();
+  await page.locator(".freeTextEditor", { hasText: "Saved text box" }).waitFor({ timeout: 15_000 });
+  console.log("ok  text box restored after reopening");
 
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });

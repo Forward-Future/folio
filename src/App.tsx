@@ -656,7 +656,7 @@ export default function App() {
 
   // Save notes and highlights before the window goes away.
   useEffect(() => {
-    const flush = () => markupRef.current?.flush();
+    const flush = () => { markupRef.current?.sync(); markupRef.current?.flush(); };
     window.addEventListener("pagehide", flush);
     return () => window.removeEventListener("pagehide", flush);
   }, []);
