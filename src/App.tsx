@@ -363,6 +363,11 @@ export default function App() {
 
   const openFile = useCallback(
     async (file: File) => {
+      // The desktop app converts Word documents; the PDF arrives like one opened from the file manager.
+      if (window.folioDesktop && /\.docx?$/i.test(file.name)) {
+        window.folioDesktop.openDocument(file).catch(() => setError(`Couldn't open “${file.name}”.`));
+        return;
+      }
       if (file.type && file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
         setError(`“${file.name}” isn't a PDF.`);
         return;
@@ -380,7 +385,7 @@ export default function App() {
   const pickFile = useCallback(() => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = "application/pdf,.pdf";
+    input.accept = window.folioDesktop ? "application/pdf,.pdf,.doc,.docx" : "application/pdf,.pdf";
     input.onchange = () => { if (input.files?.[0]) void openFile(input.files[0]); };
     input.click();
   }, [openFile]);
@@ -747,11 +752,25 @@ export default function App() {
     }, 60_000);
   };
 
-  // Desktop app: PDFs opened from Explorer, and a title bar that matches the theme.
+  // Desktop app: PDFs (and converted Word documents) opened from Explorer, and a title bar that matches the theme.
   useEffect(() => {
     let cancelled = false;
     const generation = openGeneration.current;
-    const unsubscribe = window.folioDesktop?.onOpenFile((name, data) => { if (mayReplaceDocument()) void openBytes(name, data); });
+    const unsubscribe = window.folioDesktop?.onOpenFile((name, data, note) => {
+      setToast(null);
+      if (!mayReplaceDocument()) return setLoading(false);
+      void openBytes(name, data).then(() => { if (note && docRef.current?.name === name) flash(note); });
+    });
+    const unsubscribeConverting = window.folioDesktop?.onConverting((name) => {
+      setLoading(true);
+      setError(null);
+      setToast(`Converting ${name} to PDF…`);
+    });
+    const unsubscribeFailed = window.folioDesktop?.onOpenFailed((message) => {
+      setToast(null);
+      setLoading(false);
+      setError(message);
+    });
     void (async () => {
       const hasStartupFile = await window.folioDesktop?.ready();
       if (hasStartupFile || cancelled || generation !== openGeneration.current) return;
@@ -761,7 +780,7 @@ export default function App() {
       const data = new Uint8Array(await recent.data.arrayBuffer());
       if (!cancelled && generation === openGeneration.current) void openBytes(recent.name, data);
     })().catch(() => {}); // restoring the last document is best-effort
-    return () => { cancelled = true; unsubscribe?.(); };
+    return () => { cancelled = true; unsubscribe?.(); unsubscribeConverting?.(); unsubscribeFailed?.(); };
   }, [openBytes]);
   useEffect(() => window.folioDesktop?.setTheme(theme), [theme]);
   // The update banner appears once a new version has been downloaded (the status reports that right away too).

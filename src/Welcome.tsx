@@ -108,7 +108,8 @@ export function Welcome({ onPick, onOpenUrl, onOpenBytes, onError, onSample, loa
           </div>
           <div className="dropzone-text">
             <strong>{loading ? "Opening…" : "Open a PDF"}</strong>
-            <span>Drop a PDF, a link, or a webpage anywhere, or click to browse</span>
+            <span>{window.folioDesktop ? "Drop a PDF, a Word document, a link, or a webpage anywhere, or click to browse"
+              : "Drop a PDF, a link, or a webpage anywhere, or click to browse"}</span>
           </div>
           <kbd>{keys("Ctrl O")}</kbd>
         </button>
