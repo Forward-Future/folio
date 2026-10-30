@@ -3,6 +3,12 @@
 A fast, clean PDF reader for Windows, macOS, and Linux. Read, highlight, annotate, sign, and ask AI about your
 documents. Free and open source, with no Folio account required.
 
+![Folio with the Ask AI panel open, answering a question about the document with page citations](docs/screenshots/ask-ai.png)
+
+| Highlights and notes | Search |
+| --- | --- |
+| ![Color highlights in a document, with their notes in the sidebar](docs/screenshots/highlights-and-notes.png) | ![Searching a document in the dark theme, with every match highlighted and a list of matching pages](docs/screenshots/search.png) |
+
 ## Download
 
 | Platform | Download | Updates |
@@ -251,6 +257,7 @@ terminal has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
   sign-in and requests, and Claude Code) so credentials never reach the page.
 - `scripts/release.mjs` and `.github/workflows/release-build.yml`: the release pipeline (see
   [CONTRIBUTING.md](CONTRIBUTING.md#releasing)). `scripts/smoke-test.mjs` is the cross-platform smoke test CI runs.
+  `scripts/screenshots.mjs` retakes the screenshots in this README (`npm run build`, then `node scripts/screenshots.mjs`).
 
 ## Contributing
 
