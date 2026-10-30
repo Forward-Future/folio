@@ -13,6 +13,9 @@ const SAVED_TYPES: Record<string, Mark["type"]> = { highlight: "highlight", ink:
 interface Editor {
   id: string;
   pageIndex: number;
+  /** Normalised top-left position inside the page, 0..1. */
+  x: number;
+  y: number;
   div?: HTMLElement | null;
   deleted?: boolean;
   annotationElementId?: string | null;
@@ -24,6 +27,7 @@ interface Editor {
   __folioMark?: string;
 }
 interface EditorLayer {
+  div?: HTMLElement | null;
   deserialize(data: Record<string, unknown>): Promise<Editor | null>;
   add(editor: Editor): void;
 }
@@ -118,6 +122,9 @@ export class MarkupController {
   }
 
   unload() {
+    // Read the live editors one last time: an edit committed in place (a text box typed into
+    // again, say) only reaches the saved record through sync, and the editors are gone after this.
+    this.sync();
     this.flush();
     this.#docId = null;
     this.#pending.clear();
@@ -134,12 +141,33 @@ export class MarkupController {
     const docId = this.#docId;
     try {
       for (const mark of marks) {
-        const editor = await layer.deserialize({ ...mark.data, deleted: false, annotationElementId: null }).catch(() => null);
+        // pdf.js only fills a text box's editable div when it is rendering a copy or a real PDF
+        // annotation. A restored mark is neither, so without `isCopy` the box comes back empty,
+        // drops out of the saved marks, and the next save writes the document's notes away.
+        const data: Record<string, unknown> = { ...mark.data, deleted: false, annotationElementId: null };
+        if (mark.type === "freetext") data.isCopy = true;
+        const editor = await layer.deserialize(data).catch(() => null);
         if (!editor || this.#docId !== docId) continue;
         editor.__folioMark = mark.id;
+        // Deserialize has already put the editor where the saved rectangle says. Adding a copy
+        // nudges it by its own width and height, as pasting does, so put the saved spot back.
+        const { x, y } = editor;
         layer.add(editor);
+        if (mark.type === "freetext") {
+          const textBox = editor as unknown as { x: number; y: number; setDims?(): void; fixAndSetPosition?(): void };
+          textBox.x = x;
+          textBox.y = y;
+          // A text box sized itself from its content while it was being typed; a restored one has
+          // the saved rectangle, so apply it or the box collapses to nothing on the page.
+          textBox.setDims?.();
+          textBox.fixAndSetPosition?.();
+        }
         if (mark.note) this.#setEditorNote(editor, mark.note);
       }
+      // pdf.js hides an editor layer that rendered while it was empty, and only un-hides it when
+      // the reader switches tools. Restored marks live in that layer, so show it or they stay
+      // invisible (and unpickable) until the reader touches the toolbar.
+      if (layer.div && marks.length) layer.div.hidden = false;
       if (this.#docId === docId) this.#pending.delete(page);
     } finally {
       this.#restoring.delete(page);
@@ -181,7 +209,14 @@ export class MarkupController {
     const fresh: string[] = [];
     const live = new Map<string, Mark>();
     for (const editor of this.#liveEditors()) {
-      if (editor.isEmpty()) continue;
+      if (editor.isEmpty()) {
+        // A restored editor that reports no content keeps its saved record: dropping it would
+        // delete the user's annotation from disk on the next save. Deleting a mark removes the
+        // editor itself, so this only catches a restore that failed to come back with its text.
+        const previous = editor.__folioMark ? this.#known.get(editor.__folioMark) : undefined;
+        if (previous) live.set(previous.id, previous);
+        continue;
+      }
       let data: Record<string, unknown> | null = null;
       try { data = editor.serialize(false); } catch { data = null; }
       if (!data) continue;
