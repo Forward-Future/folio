@@ -41,6 +41,18 @@ Folio ships for **Windows, macOS, and Linux from one codebase**. Every change an
 
 All of these files are produced by the release build and published together; `scripts/check-release.mjs` lists them.
 
+## Pull requests
+
+- Open a pull request only when asked. One request is one pull request; fix one problem in each.
+- Title: what changes for the user, in plain words ("Keep text boxes when a document is reopened"). Pull requests are
+  squash-merged, so the title becomes the commit message on `main`.
+- The body follows `.github/pull_request_template.md`: the problem, the change, the issue or approval, and how you
+  checked it, including which platforms. End with the model and harness that did the work.
+- Visible changes need before/after screenshots attached to the pull request; never commit them.
+- Don't change the version or the changelog in a pull request; maintainers update both when releasing.
+- When reviewing an outside pull request, check for a duplicate open pull request or issue first, then whether it fixes
+  one problem, has the approval it needs (see CONTRIBUTING.md), and shows evidence on the platforms it touches.
+
 ## Code style
 
 Match the surrounding code: comments explain why, not what; user-facing text is plain and short. Run
