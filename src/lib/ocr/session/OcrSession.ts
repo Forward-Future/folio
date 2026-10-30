@@ -12,6 +12,7 @@ import { STYLES, toItems, type Line } from "../text/words";
 import type { Box, OcrState, TextItem } from "../types";
 
 type Page = Awaited<ReturnType<PDFDocumentProxy["getPage"]>>;
+type Worker = { terminate(): Promise<unknown> };
 
 // Pages are drawn at 300 dpi, but no side longer than 3,300 px: Letter is read at 300 dpi, A4 at about 282, A3 at about
 // 200, and an A1 sheet at about 100. A bigger picture costs memory and time out of proportion. On a synthetic A1
@@ -60,8 +61,11 @@ export class OcrSession {
   #key: string | null;
   #listeners = new Set<() => void>();
   #pageListeners = new Set<(page: number) => void>();
-  #cancelled = false;
-  #workers: { terminate(): Promise<unknown> }[] = [];
+  #destroyed = false;
+  /** Bumped by cancel() and destroy(): a run belongs to the number it started with and stops when that is no longer current. */
+  #generation = 0;
+  /** The workers of the current run. Each run stops only its own, so an old run can't take down a new one's. */
+  #workers: Worker[] = [];
 
   /** `key` is the document's content id; without one (password-protected files) results stay in memory only. */
   constructor(pdf: PDFDocumentProxy, key: string | null) {
@@ -135,7 +139,7 @@ export class OcrSession {
     for (const n of sample) {
       if (this.#recognized().has(n) || (await looksScanned(await this.pdf.getPage(n)))) empty++;
     }
-    if (this.#cancelled || empty * 2 < sample.length) return;
+    if (this.#destroyed || empty * 2 < sample.length) return;
     const recognized = this.#recognized().size;
     const finished = recognized >= total;
     this.#set({ phase: finished ? "done" : "offer", total, done: finished ? total : recognized });
@@ -144,7 +148,10 @@ export class OcrSession {
   /** Recognizes every page that has no text, starting near the page being read. */
   async start(focus: () => number) {
     if (this.state.phase === "running") return;
-    this.#cancelled = false;
+    const run = ++this.#generation;
+    const live = () => run === this.#generation;
+    const mine: Worker[] = [];
+    this.#workers = mine;
     const total = this.pdf.numPages;
     const queued = this.#recognized();
     this.#set({ phase: "running", total, done: queued.size, error: undefined });
@@ -164,32 +171,32 @@ export class OcrSession {
           // the browser cache: the model is a local file, not a download.
           workerBlobURL: false, cacheMethod: "none", gzip: true,
         });
-        this.#workers.push(worker);
+        mine.push(worker);
         return worker;
       }));
-      if (this.#cancelled) return;
-      let failures = 0;
+      if (!live()) return;
+      // Pages that already have text are skipped, so only the pages sent to the recognizer count towards failing.
+      let sent = 0, failures = 0;
       await Promise.all(workers.map(async (worker) => {
-        for (let n = next(); n && !this.#cancelled; n = next()) {
-          try { await this.#recognize(worker, n); } catch { if (!this.#cancelled) failures++; }
-          if (!this.#cancelled) this.#set({ done: this.state.done + 1 });
+        for (let n = next(); n && live(); n = next()) {
+          try { if (await this.#recognize(worker, n, live)) sent++; } catch { sent++; if (live()) failures++; }
+          if (live()) this.#set({ done: this.state.done + 1 });
         }
       }));
-      if (this.#cancelled) return;
-      this.#set(failures === total
-        ? { phase: "error", error: "Couldn't read this document's pages." }
-        : { phase: "done", done: total });
+      if (!live()) return;
+      this.#set(failures === 0 ? { phase: "done", done: total }
+        : { phase: "error", done: total, error: failures === sent ? "Couldn't read this document's pages." : `Couldn't read ${failures} of ${sent} scanned pages.` });
     } catch {
-      if (!this.#cancelled) this.#set({ phase: "error", error: "Couldn't start text recognition." });
+      if (live()) this.#set({ phase: "error", error: "Couldn't start text recognition." });
     } finally {
-      await this.#stopWorkers();
+      await this.#stop(mine);
     }
   }
 
-  async #recognize(worker: { recognize(image: HTMLCanvasElement, options: object, output: object): Promise<{ data: { blocks: { paragraphs: { lines: Line[] }[] }[] | null } }> }, n: number) {
+  async #recognize(worker: { recognize(image: HTMLCanvasElement, options: object, output: object): Promise<{ data: { blocks: { paragraphs: { lines: Line[] }[] }[] | null } }> }, n: number, live: () => boolean) {
     const page = await this.pdf.getPage(n);
     // Pages that already have text (mixed documents) are left alone.
-    if (this.pages.has(n) || !(await looksScanned(page))) return;
+    if (this.pages.has(n) || !(await looksScanned(page))) return false;
     const embeddedBoxes = (await embeddedText(page)).items.map(boxOf);
     const natural = page.getViewport({ scale: 1 });
     const scale = Math.min(OCR_DPI / 72, MAX_EDGE_PX / Math.max(natural.width, natural.height));
@@ -200,31 +207,31 @@ export class OcrSession {
     try {
       await page.render({ canvas, viewport, background: "#ffffff" }).promise;
       const { data } = await worker.recognize(canvas, {}, { blocks: true });
-      if (this.#cancelled) return;
+      if (!live()) return true;
       const lines = (data.blocks ?? []).flatMap((b) => b.paragraphs.flatMap((p) => p.lines));
       const items = dropDuplicates(toItems(lines, viewport), embeddedBoxes);
       // Pages with nothing new are remembered too (as empty), so they aren't read again next time.
       this.pages.set(n, items);
       if (this.#key) void saveOcrPage(this.#key, n, items);
-      if (!items.length) return;
+      if (!items.length) return true;
       this.version++;
       for (const listener of this.#pageListeners) listener(n);
+      return true;
     } finally {
       canvas.width = canvas.height = 0; // frees the pixels now rather than at the next garbage collection
       page.cleanup();
     }
   }
 
-  async #stopWorkers() {
-    const workers = this.#workers.splice(0);
-    await Promise.all(workers.map((w) => w.terminate().catch(() => {})));
+  async #stop(workers: Worker[]) {
+    await Promise.all(workers.splice(0).map((w) => w.terminate().catch(() => {})));
   }
 
   /** Stops recognition; pages already done keep their text. */
   cancel() {
-    this.#cancelled = true;
+    this.#generation++;
     if (this.state.phase === "running") this.#set({ phase: "offer" });
-    void this.#stopWorkers();
+    void this.#stop(this.#workers);
   }
 
   dismiss() {
@@ -232,8 +239,9 @@ export class OcrSession {
   }
 
   destroy() {
-    this.#cancelled = true;
-    void this.#stopWorkers();
+    this.#destroyed = true;
+    this.#generation++;
+    void this.#stop(this.#workers);
     this.#listeners.clear();
     this.#pageListeners.clear();
   }

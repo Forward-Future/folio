@@ -517,8 +517,46 @@ describe("start", () => {
     second.recognize.mockRejectedValueOnce(new Error("bad page")).mockResolvedValue(recognized(["ok", 20, 60]));
     const some = new OcrSession(makePdf([makePage({ image: true }), makePage({ image: true }), makePage({ image: true })]), "k");
     await some.start(() => 1);
-    expect(some.state).toMatchObject({ phase: "done", done: 3 });
+    // The pages that were read keep their text, and the one that failed is reported, so it can be tried again.
+    expect(some.state).toMatchObject({ phase: "error", error: "Couldn't read 1 of 3 scanned pages." });
     expect(some.pages.size).toBe(2);
+  });
+
+  it("a failed scanned page in a mixed document reports failure", async () => {
+    const worker = makeWorker();
+    worker.recognize.mockRejectedValue(new Error("bad scanned page"));
+    const session = new OcrSession(makePdf([makePage({ image: true }), makePage({ items: TYPED })]), "k");
+    await session.start(() => 1);
+    expect(session.pages.size).toBe(0);
+    expect(session.state.phase).toBe("error");
+    expect(session.state.error).toBe("Couldn't read this document's pages.");
+  });
+
+  it("restarting during startup does not let an old run stop the new worker", async () => {
+    const oldStartup = deferred();
+    const newRecognition = deferred();
+    const oldWorker = { recognize: vi.fn(async () => nothing), terminate: vi.fn(async () => {}) };
+    const newWorker = { recognize: vi.fn(async () => { await newRecognition.promise; return nothing; }), terminate: vi.fn(async () => {}) };
+    mocks.createWorker
+      .mockImplementationOnce(async () => { await oldStartup.promise; return oldWorker; })
+      .mockResolvedValueOnce(newWorker);
+    const session = new OcrSession(makePdf([makePage({ image: true })]), "k");
+    const oldRun = session.start(() => 1);
+    await vi.waitFor(() => expect(mocks.createWorker).toHaveBeenCalledTimes(1));
+    session.cancel();
+    const newRun = session.start(() => 1);
+    await vi.waitFor(() => expect(newWorker.recognize).toHaveBeenCalledTimes(1));
+    oldStartup.resolve();
+    await oldRun;
+    const terminatedByOldRun = newWorker.terminate.mock.calls.length;
+    const phaseDuringNewRun = session.state.phase;
+    newRecognition.resolve();
+    await newRun;
+    expect(terminatedByOldRun).toBe(0);
+    expect(phaseDuringNewRun).toBe("running");
+    expect(oldWorker.recognize).not.toHaveBeenCalled(); // the old run stayed stopped
+    expect(oldWorker.terminate).toHaveBeenCalled(); // and shut down the worker it had made
+    expect(session.state.phase).toBe("done");
   });
 
   it("can be tried again after an error", async () => {

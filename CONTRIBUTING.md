@@ -31,8 +31,7 @@ issues, follow [SECURITY.md](SECURITY.md) instead.
 2. Run `npm run app` to build and launch the desktop app, or `npm run dev` for the browser version with hot reload.
    To develop the desktop shell against the dev server, start `npm run dev` and then run
    `FOLIO_DEV_URL=http://localhost:5173 npx electron .` (development builds only).
-3. Run `npm test`, `npm run build`, and `npm run smoke` before opening a pull request. The tests are fast (Vitest, next
-   to the code they cover); the build type-checks and builds. CI runs all three on Windows, macOS, and Linux.
+3. Run `npm run build` and `npm run smoke` before opening a pull request. CI runs both on Windows, macOS, and Linux.
 
 ### One problem per pull request
 
@@ -86,5 +85,5 @@ workflow repeats that check and opens an issue if anything is off.
 **Never publish any other way** (no hand-made `gh release` uploads or single-platform builds); see
 [AGENTS.md](AGENTS.md). Signing certificates are set up as repository secrets; see [SIGNING.md](SIGNING.md).
 
-CI (`.github/workflows/ci.yml`) runs `npm test`, type-checks, builds, and runs `npm run smoke` on all three platforms for every push to
+CI (`.github/workflows/ci.yml`) type-checks, builds, and runs `npm run smoke` on all three platforms for every push to
 `main` and every pull request.

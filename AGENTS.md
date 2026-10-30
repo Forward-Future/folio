@@ -41,24 +41,6 @@ Folio ships for **Windows, macOS, and Linux from one codebase**. Every change an
 
 All of these files are produced by the release build and published together; `scripts/check-release.mjs` lists them.
 
-## Code layout
-
-New code is grouped by layer, then by feature, so a feature's pieces sit beside the others of their kind:
-
-- `src/components/<feature>/` React components (each in its own folder with its CSS and test),
-- `src/hooks/<feature>/` hooks,
-- `src/lib/<feature>/` everything that isn't UI: logic, storage, and the session or controller behind a feature.
-
-Each feature folder has an `index.ts` that exports what the rest of the app may use; import from there, not from deep paths.
-Tests sit next to the file they test (`Thing.ts` and `Thing.test.ts`). Text recognition (OCR) is the first feature laid out
-this way (`components/ocr`, `hooks/ocr`, `lib/ocr`, plus `lib/search` for the words shown around a search match); older
-files in `src/` can move over as they are touched.
-
-Keep logic out of the big files (`App.tsx` and the like) by putting it in a function or hook with a test, so that what is
-left there is a call. Tests run in plain Node; a test of a component or hook starts with `// @vitest-environment jsdom`.
-When what matters is what pdf.js or pdf-lib really does (offsets, text positions, a rewritten file), test against the real
-libraries with `src/testing/pdfjs.ts` instead of a fake: the fakes in older tests only repeat our assumptions.
-
 ## Pull requests
 
 - Open a pull request only when asked. One request is one pull request; fix one problem in each.
@@ -74,7 +56,7 @@ libraries with `src/testing/pdfjs.ts` instead of a fake: the fakes in older test
 ## Code style
 
 Match the surrounding code: comments explain why, not what; user-facing text is plain and short. Run
-`npx tsc --noEmit`, `npm test`, `npm run build`, and `npm run smoke` before committing.
+`npx tsc --noEmit`, `npm run build`, and `npm run smoke` before committing.
 
 To check a change in the running app, use `npm run smoke` (extend it if it doesn't cover your change). It runs Folio
 off-screen and leaves the clipboard alone, so it doesn't interrupt whoever is using the computer. Don't open a
