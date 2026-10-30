@@ -8,7 +8,12 @@ interface UpdateStatus {
 
 // Present only when Folio runs as the desktop app (see electron/preload.cjs).
 interface FolioDesktop {
-  onOpenFile(callback: (name: string, data: Uint8Array) => void): () => void;
+  /** `note` says where a converted Word document's PDF was saved. */
+  onOpenFile(callback: (name: string, data: Uint8Array, note?: string) => void): () => void;
+  onConverting(callback: (name: string) => void): () => void;
+  onOpenFailed(callback: (message: string) => void): () => void;
+  /** Converts a Word document (.doc, .docx) to PDF; the result arrives through onOpenFile. */
+  openDocument(file: File): Promise<void>;
   ready(): Promise<boolean>;
   fetchPdf(url: string): Promise<{ name: string; data: Uint8Array }>;
   getAppInfo(): Promise<{ version: string; mode: "development" | "portable" | "installed" | "appimage" | "package"; location: string; platform: string;

@@ -46,6 +46,12 @@ Or build Folio yourself from source (below).
 - **Webpage to PDF:** use the same URL workflow for a webpage. Folio converts it into a PDF with selectable text,
   ready for highlights, notes, and Ask AI. The conversion preserves the site's on-screen layout, backgrounds,
   transparency, colors, and images instead of switching to its print styles.
+- **Word documents to PDF:** open a `.docx` or `.doc` file the same ways as a PDF (**Open with → Folio**, the file
+  picker, or drag and drop). Folio converts it, saves the PDF next to the original ("Report.docx" gets "Report.pdf"),
+  and opens it. An existing PDF is never replaced; one that's newer than the document opens as is. Folio converts with
+  Microsoft Word on Windows when it's installed, otherwise with LibreOffice, otherwise with its own converter for
+  `.docx` (text, headings, lists, tables, and images, in a simpler layout). `.doc` files need Word or LibreOffice,
+  except on macOS. Installing Folio adds it to **Open with** for Word documents without making it their default app.
 - **Password-protected PDFs:** enter the password to read and annotate a protected document. These documents are not
   kept in the recent library, and their annotations and AI conversations are not persisted locally between sessions.
 - **Scanned PDFs:** when a document is a picture of pages with no text, Folio offers **Recognize text**. It reads the
@@ -59,7 +65,7 @@ Or build Folio yourself from source (below).
   European text may be saved as `?`. The PDF you opened isn't changed.
 - **Sample document:** try the built-in tour from the home screen without finding a PDF first.
 
-URL opening and webpage conversion require the desktop app. Failed downloads leave your current document open.
+URL opening, webpage conversion, and Word conversion require the desktop app. Failed downloads leave your current document open.
 
 ### Read and navigate
 

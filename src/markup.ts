@@ -331,6 +331,12 @@ export class MarkupController {
     const ui = this.#ui;
     const selection = document.getSelection();
     if (!ui || !selection || selection.isCollapsed) return null;
+    // A page's text can be selected before pdf.js has finished drawing the page, but its highlight layer only exists
+    // afterwards, and pdf.js drops a highlight (and the selection) on a page without one. Wait for the layer.
+    const anchor = selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode?.parentElement;
+    const page = Number((anchor?.closest(".page") as HTMLElement | null)?.dataset.pageNumber);
+    for (let i = 0; i < 200 && page && !ui.getLayer(page - 1); i++) await new Promise((r) => setTimeout(r, 25));
+    if (selection.isCollapsed) return null;
     this.sync();
     const before = new Set(this.#liveEditors().map((e) => e.id));
     this.#lastSelection = { text: selection.toString().replace(/\s+/g, " ").trim(), at: Date.now() };

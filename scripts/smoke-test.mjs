@@ -5,7 +5,7 @@
 // Run `npm run build` first.
 import { _electron as electron } from "playwright-core";
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -22,6 +22,21 @@ const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir
 delete env.ELECTRON_RUN_AS_NODE;
 // Containers often run as root, where Chromium's sandbox can't start.
 const args = [root, ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])];
+
+// The smallest .docx Word opens: one paragraph of `text`.
+async function wordDocument(text) {
+  const JSZip = require("jszip"); // comes with mammoth
+  const xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", `${xml}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
+    + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
+    + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+  zip.file("_rels/.rels", `${xml}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
+    + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  zip.file("word/document.xml", `${xml}<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">`
+    + `<w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p><w:sectPr/></w:body></w:document>`);
+  return zip.generateAsync({ type: "nodebuffer" });
+}
 
 const app = await electron.launch({ executablePath, args, env, timeout: 60_000 });
 const failures = [];
@@ -128,6 +143,17 @@ try {
 
   // A saved copy includes every saved mark, also on pages that haven't been drawn since the document was reopened.
   const lastPage = await page.locator(".page").count();
+  // A page's text can be selected before pdf.js has built its highlight layer: it first waits for the page's links
+  // and form fields from its worker, which can take a while on a busy computer. Hold that reply back so this
+  // highlight always lands in the gap.
+  await page.evaluate(() => {
+    const post = Worker.prototype.postMessage;
+    window.folioPostMessage = post;
+    Worker.prototype.postMessage = function (message, ...rest) {
+      if (message?.action !== "GetAnnotations") return post.call(this, message, ...rest);
+      setTimeout(() => post.call(this, message, ...rest), 1000);
+    };
+  });
   await page.evaluate((n) => document.querySelector(`.page[data-page-number="${n}"]`).scrollIntoView(), lastPage);
   await page.locator(`.page[data-page-number="${lastPage}"] .textLayer span:not(.markedContent)`).first().evaluate((span) => {
     const range = document.createRange();
@@ -138,6 +164,7 @@ try {
   await page.locator(".selection-popover").waitFor();
   await page.getByRole("button", { name: "Highlight yellow" }).click();
   await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 2, null, { timeout: 15_000 });
+  await page.evaluate(() => { Worker.prototype.postMessage = window.folioPostMessage; });
   await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
   await page.waitForTimeout(800);
   await page.getByTitle("Back to library").click();
@@ -225,6 +252,35 @@ try {
 
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });
+
+  // A Word document opens converted to PDF (by Word, LibreOffice, or Folio itself, whichever the computer has),
+  // and the PDF is saved next to it. Opening the document again reuses that PDF.
+  const folder = mkdtempSync(path.join(tmpdir(), "folio-word-"));
+  const docx = path.join(folder, "Quarterly report.docx");
+  writeFileSync(docx, await wordDocument("Quarterly report from Word"));
+  const openWordDocument = async () => {
+    await page.getByTitle("Back to library").click();
+    const chooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: /Open a PDF/ }).click();
+    await (await chooser).setFiles(docx);
+    // Stops at a conversion error too, and shows what each converter said.
+    const settled = await page.waitForFunction(() => document.title.startsWith("Quarterly report.pdf")
+      || document.querySelector(".toast.error")?.textContent, null, { timeout: 150_000 }).catch((error) => error);
+    if (settled instanceof Error || !(await page.title()).startsWith("Quarterly report.pdf")) {
+      const log = path.join(env.FOLIO_TEST_USER_DATA, "convert.log");
+      console.log(await page.locator(".toast").textContent().catch(() => "(no message)"));
+      console.log(existsSync(log) ? readFileSync(log, "utf8") : "(no convert.log)");
+      throw settled instanceof Error ? settled : new Error("the Word document didn't convert");
+    }
+    await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
+    assert.match(await page.locator(".textLayer").first().innerText(), /Quarterly report from Word/);
+  };
+  await openWordDocument();
+  assert.ok(existsSync(path.join(folder, "Quarterly report.pdf")), "the converted PDF wasn't saved next to the document");
+  await openWordDocument();
+  assert.deepEqual(readdirSync(folder).sort(), ["Quarterly report.docx", "Quarterly report.pdf"]);
+  console.log("ok  Word document converted to PDF, saved next to it, and reused");
+
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {

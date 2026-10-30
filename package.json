@@ -1,7 +1,7 @@
 {
   "name": "folio-pdf-reader",
   "private": true,
-  "version": "1.10.4",
+  "version": "1.10.6",
   "type": "module",
   "scripts": {
     "assets": "node scripts/copy-pdfjs-assets.mjs",
@@ -20,7 +20,8 @@
     "test:chat-math": "node scripts/test-chat-math.mjs"
   },
   "dependencies": {
-    "electron-updater": "^6.8.11"
+    "electron-updater": "^6.8.11",
+    "mammoth": "^1.13.0"
   },
   "devDependencies": {
     "@tesseract.js-data/eng": "^1.0.0",
@@ -68,7 +69,8 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/mammoth/mammoth.browser*.js"
     ],
     "win": {
       "target": [
@@ -145,6 +147,17 @@
       ],
       "category": "public.app-category.productivity",
       "icon": "build/icon.png",
+      "fileAssociations": [
+        {
+          "ext": [
+            "docx",
+            "doc"
+          ],
+          "name": "Word Document",
+          "role": "Viewer",
+          "rank": "Alternate"
+        }
+      ],
       "identity": "-",
       "hardenedRuntime": false,
       "artifactName": "Folio-mac.${ext}"
@@ -162,7 +175,9 @@
       "synopsis": "A simple, clean PDF reader",
       "maintainer": "Forward Future <748450+mberman84@users.noreply.github.com>",
       "mimeTypes": [
-        "application/pdf"
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword"
       ],
       "executableName": "folio",
       "syncDesktopName": true,
