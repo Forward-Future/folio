@@ -165,9 +165,11 @@ try {
   console.log("ok  text box restored after reopening");
 
   // A scanned page (an image, no text) is offered text recognition; once read, its words can be searched and selected.
+  // (Opened from the library by clicking, not with Ctrl+O: where the keyboard focus is after a text box was restored differs by platform.)
+  await page.getByTitle("Back to library").click();
   const [chooser] = await Promise.all([
     page.waitForEvent("filechooser"),
-    page.keyboard.press(process.platform === "darwin" ? "Meta+o" : "Control+o"),
+    page.getByRole("button", { name: /Open a PDF/ }).click(),
   ]);
   await chooser.setFiles(path.join(root, "scripts", "fixtures", "scanned-sample.pdf"));
   await page.getByText("This looks like a scan").waitFor({ timeout: 30_000 });
@@ -189,9 +191,10 @@ try {
   await page.getByText("Saved a copy with the recognized text").waitFor({ timeout: 60_000 });
   assert.equal(await app.evaluate(() => globalThis.folioScanSaved), "completed");
   assert.equal(readFileSync(scannedCopy).subarray(0, 5).toString("latin1"), "%PDF-");
+  await page.getByTitle("Back to library").click();
   const [copyChooser] = await Promise.all([
     page.waitForEvent("filechooser"),
-    page.keyboard.press(process.platform === "darwin" ? "Meta+o" : "Control+o"),
+    page.getByRole("button", { name: /Open a PDF/ }).click(),
   ]);
   await copyChooser.setFiles(scannedCopy);
   await page.waitForFunction(() => document.title.startsWith("scanned-copy.pdf"), null, { timeout: 30_000 });

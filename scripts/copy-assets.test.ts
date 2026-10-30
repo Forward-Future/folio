@@ -34,7 +34,8 @@ describe("the OCR runtime that ships with the app", () => {
   });
 
   it("is kept out of version control, like the other copied assets", () => {
-    expect(readFileSync(resolve(root, ".gitignore"), "utf8").split("\n")).toContain("public/ocr");
+    // (Windows checks files out with CRLF line endings.)
+    expect(readFileSync(resolve(root, ".gitignore"), "utf8").split(/\r?\n/)).toContain("public/ocr");
   });
 
   it("is where the app looks for it", () => {
