@@ -12,6 +12,9 @@ Folio ships for **Windows, macOS, and Linux from one codebase**. Every change an
   daily **Release check** workflow opens an issue when that happens.
 - If the release build fails, nothing is published. Fix the problem on `main`, then run
   `npm run release -- --publish-only` to publish the same tag.
+- The release must start at the latest `main` (the script checks). It pushes to `main` by name, so it works from a
+  worktree on any branch, e.g. `git worktree add ../folio-release origin/main`. If the run stops after the tag is
+  pushed (a closed terminal, a restarted session), run `npm run release -- --publish-only` to finish it.
 - **One release at a time.** Releases are built from committed, pushed code. If another session is working in the same
   checkout, coordinate: don't commit or release its uncommitted work, and use a separate `git worktree` for your own.
 
