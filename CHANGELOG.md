@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.10.3
+
+- **Copy** buttons work in the desktop app. Copying selected text, **Copy all** in Notes, and **Copy image** said
+  "Copied" but left the clipboard unchanged.
+- Text boxes come back when you reopen a document. Before, they reopened empty and the next auto-save removed them.
+- **Save a copy** and **Print** include every saved mark, not just the ones on pages you'd scrolled to since reopening.
+- Opening another document over a placed signature, or over markup on a password-protected PDF, asks first instead of
+  discarding it.
+
 ## 1.10.2
 
 - **What's new** in Settings shows this changelog inside Folio.
