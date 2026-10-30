@@ -3,6 +3,7 @@
 // were the page's own text, so selection, search, highlights, and Ask AI work on scans without special cases.
 // The geometry, filtering, and scan detection live in ../text.
 import { pdfjs, type PDFDocumentProxy } from "../../../pdf";
+import { PAGES_KEY, parsePages } from "../export/pageList";
 import { getOcrPages, saveOcrPage } from "../storage/ocrStore";
 import { boxOf, dropDuplicates } from "../text/geometry";
 import { nearestUnqueued, withRecognized } from "../text/pages";
@@ -12,6 +13,12 @@ import type { Box, OcrState, TextItem } from "../types";
 
 type Page = Awaited<ReturnType<PDFDocumentProxy["getPage"]>>;
 
+// Pages are drawn at 300 dpi, but no side longer than 3,300 px: Letter is read at 300 dpi, A4 at about 282, A3 at about
+// 200, and an A1 sheet at about 100. A bigger picture costs memory and time out of proportion. On a synthetic A1
+// drawing sheet (known words in 2.5 to 10 mm lettering, read with the shipped model) it did not pay: reading at 200 dpi
+// found 84% of the words against 85% at 100 dpi, and reading the sheet in 300 dpi tiles found 85% in three times the
+// time, so large sheets stay one capped picture. An earlier trial on real drawing sheets agreed: a higher cap read a
+// large sheet only slightly better, and an A4 page slightly worse.
 const OCR_DPI = 300;
 const MAX_EDGE_PX = 3300;
 const MAX_WORKERS = 2;
@@ -45,6 +52,8 @@ export class OcrSession {
   readonly pdf: PDFDocumentProxy;
   /** Pages with recognized text, by page number. */
   readonly pages = new Map<number, unknown[]>();
+  /** Pages whose recognized text is already inside the PDF itself, because it is a copy that Folio saved. */
+  readonly embedded = new Set<number>();
   /** Bumped whenever a page gains text, so caches built from page text know to refresh. */
   version = 0;
   state: OcrState = { phase: "idle", done: 0, total: 0 };
@@ -53,7 +62,6 @@ export class OcrSession {
   #pageListeners = new Set<(page: number) => void>();
   #cancelled = false;
   #workers: { terminate(): Promise<unknown> }[] = [];
-  #focus: () => number = () => 1;
 
   /** `key` is the document's content id; without one (password-protected files) results stay in memory only. */
   constructor(pdf: PDFDocumentProxy, key: string | null) {
@@ -96,9 +104,27 @@ export class OcrSession {
 
   /** Brings back pages recognized in an earlier session. Call before the document is shown. */
   async restore() {
+    await this.#readEmbedded();
     if (!this.#key) return;
     for (const [page, items] of await getOcrPages(this.#key)) this.pages.set(page, items);
     if (this.pages.size) this.version++;
+  }
+
+  /** A copy saved by Folio lists, in its document info, the pages it carries recognized text for. */
+  async #readEmbedded() {
+    try {
+      const { info } = await this.pdf.getMetadata();
+      // pdf.js hands the info's own (non-standard) entries over as a Map.
+      const list = (info as { Custom?: Map<string, unknown> }).Custom?.get(PAGES_KEY);
+      if (typeof list === "string") for (const n of parsePages(list, this.pdf.numPages)) this.embedded.add(n);
+    } catch {
+      /* no readable document info: nothing was embedded */
+    }
+  }
+
+  /** Pages that have recognized text, whether kept alongside the document or inside it. */
+  #recognized() {
+    return new Set([...this.pages.keys(), ...this.embedded]);
   }
 
   /** Looks at a few pages; if most carry no text, this is a scan and recognition is offered. */
@@ -107,23 +133,23 @@ export class OcrSession {
     const sample = [...new Set([1, 2, 3, 4, 5, 6].map((i) => Math.max(1, Math.round((i * total) / 6))))];
     let empty = 0;
     for (const n of sample) {
-      if (this.pages.has(n) || (await looksScanned(await this.pdf.getPage(n)))) empty++;
+      if (this.#recognized().has(n) || (await looksScanned(await this.pdf.getPage(n)))) empty++;
     }
     if (this.#cancelled || empty * 2 < sample.length) return;
-    const finished = this.pages.size >= total;
-    this.#set({ phase: finished ? "done" : "offer", total, done: finished ? total : this.pages.size });
+    const recognized = this.#recognized().size;
+    const finished = recognized >= total;
+    this.#set({ phase: finished ? "done" : "offer", total, done: finished ? total : recognized });
   }
 
   /** Recognizes every page that has no text, starting near the page being read. */
   async start(focus: () => number) {
     if (this.state.phase === "running") return;
-    this.#focus = focus;
     this.#cancelled = false;
     const total = this.pdf.numPages;
-    const queued = new Set<number>(this.pages.keys());
+    const queued = this.#recognized();
     this.#set({ phase: "running", total, done: queued.size, error: undefined });
     const next = () => {
-      const best = nearestUnqueued(total, queued, this.#focus());
+      const best = nearestUnqueued(total, queued, focus());
       if (best) queued.add(best);
       return best;
     };

@@ -5,13 +5,13 @@ vi.mock("./lib/ocr", () => ({ ocrSession: (pdf: { session?: unknown }) => pdf.se
 import { documentText, instructions } from "./AiPanel";
 
 type FakeItem = { str?: string; hasEOL?: boolean };
-type Session = { version: number; pages: Map<number, unknown[]> };
+type Session = { version: number; pages: Map<number, unknown[]>; embedded: Set<number> };
 
 function makePdf(pages: FakeItem[][], session?: Session) {
   const getPage = vi.fn(async (n: number) => ({ getTextContent: async () => ({ items: pages[n - 1] }) }));
   return { numPages: pages.length, getPage, session } as unknown as Parameters<typeof documentText>[0] & { getPage: typeof getPage };
 }
-const sessionWith = (pages: [number, unknown[]][] = [], version = 0): Session => ({ version, pages: new Map(pages) });
+const sessionWith = (pages: [number, unknown[]][] = [], version = 0, embedded: number[] = []): Session => ({ version, pages: new Map(pages), embedded: new Set(embedded) });
 
 describe("documentText", () => {
   it("lays the document out as page blocks, with words joined and line ends kept", async () => {
@@ -67,6 +67,8 @@ describe("documentText", () => {
     expect((await documentText(makePdf([[{ str: "a" }]], sessionWith()))).recognized).toBe(false);
     expect((await documentText(makePdf([[{ str: "a" }]], sessionWith([[1, []]])))).recognized).toBe(false);
     expect((await documentText(makePdf([[{ str: "a" }]], sessionWith([[1, [{}]]])))).recognized).toBe(true);
+    // A copy saved with recognized text carries it inside the PDF, but it is still read by OCR.
+    expect((await documentText(makePdf([[{ str: "a" }]], sessionWith([], 0, [1])))).recognized).toBe(true);
   });
 });
 

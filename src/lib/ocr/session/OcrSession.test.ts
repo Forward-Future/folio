@@ -45,9 +45,13 @@ function makePage({ items = [], image = false }: PageOptions = {}) {
 }
 type FakePage = ReturnType<typeof makePage>;
 
-function makePdf(pages: FakePage[]) {
-  return { numPages: pages.length, getPage: async (n: number) => pages[n - 1] } as unknown as ConstructorParameters<typeof OcrSession>[0];
+/** `info` is what the document's info holds (or the error from reading it); documents without any can't be asked. */
+function makePdf(pages: FakePage[], info?: object | Error) {
+  const getMetadata = async () => { if (info instanceof Error) throw info; return { info }; };
+  return { numPages: pages.length, getPage: async (n: number) => pages[n - 1], ...(info ? { getMetadata } : {}) } as unknown as ConstructorParameters<typeof OcrSession>[0];
 }
+/** The document info of a copy Folio saved with recognized text on these pages. pdf.js gives non-standard entries as a Map. */
+const savedCopyInfo = (pages: string) => ({ Custom: new Map([["FolioOcrPages", pages]]) });
 
 /** What Tesseract returns for one line of words, each given as [text, x0, x1, confidence] in pixels. */
 function recognized(...words: [string, number, number, number?][]) {
@@ -156,6 +160,42 @@ describe("restore", () => {
     await session.restore();
     expect(mocks.getOcrPages).not.toHaveBeenCalled();
   });
+
+  it("learns which pages a copy saved by Folio already carries recognized text for", async () => {
+    const session = new OcrSession(makePdf([makePage(), makePage(), makePage(), makePage()], savedCopyInfo("1-2,4")), "k");
+    await session.restore();
+    expect([...session.embedded]).toEqual([1, 2, 4]);
+    expect(session.pages.size).toBe(0);
+    expect(session.version).toBe(0); // it is ordinary text in the PDF, which pdf.js already serves
+  });
+
+  it("learns it for a document that isn't stored too", async () => {
+    const session = new OcrSession(makePdf([makePage(), makePage()], savedCopyInfo("2")), null);
+    await session.restore();
+    expect([...session.embedded]).toEqual([2]);
+  });
+
+  it("ignores a list that names pages the document doesn't have", async () => {
+    const session = new OcrSession(makePdf([makePage(), makePage()], savedCopyInfo("1-99")), "k");
+    await session.restore();
+    expect([...session.embedded]).toEqual([1, 2]);
+  });
+
+  it("finds nothing embedded when the document info doesn't say so", async () => {
+    for (const info of [{}, { Custom: new Map() }, { Custom: new Map([["Other", "1"]]) }, { Custom: new Map([["FolioOcrPages", 3]]) }]) {
+      const session = new OcrSession(makePdf([makePage(), makePage()], info), "k");
+      await session.restore();
+      expect(session.embedded.size).toBe(0);
+    }
+  });
+
+  it("carries on when the document info can't be read", async () => {
+    mocks.getOcrPages.mockResolvedValue(new Map([[1, [{}]]]));
+    const session = new OcrSession(makePdf([makePage()], new Error("bad info")), "k");
+    await session.restore();
+    expect(session.embedded.size).toBe(0);
+    expect(session.pages.size).toBe(1);
+  });
 });
 
 describe("detect", () => {
@@ -175,6 +215,14 @@ describe("detect", () => {
     const session = new OcrSession(makePdf([makePage({ items: TYPED, image: true })]), "k");
     await session.detect();
     expect(session.state.phase).toBe("idle");
+  });
+
+  it("doesn't count blank pieces of text, or markers that carry none, as the PDF's own text", async () => {
+    // A scanner's invisible blank layer over the whole page is not text a reader could use.
+    const blank = [textItem(0, 0, 612, 792, "   "), { type: "beginMarkedContent" }];
+    const session = new OcrSession(makePdf([makePage({ items: blank, image: true })]), "k");
+    await session.detect();
+    expect(session.state.phase).toBe("offer");
   });
 
   it("does not offer it for sparse text without a picture (a drawing or a cover page)", async () => {
@@ -218,6 +266,42 @@ describe("detect", () => {
     session.pages.set(1, [{}]);
     await session.detect();
     expect(session.state).toEqual({ phase: "offer", total: 2, done: 1 });
+  });
+
+  it("does not offer recognition again for pages a saved copy carries text for, however little text they have", async () => {
+    // Recognized text on a drawing is a few words over a picture of the whole sheet: it looks just like a scan.
+    const sparse = () => makePage({ items: STAMP, image: true });
+    const session = new OcrSession(makePdf([sparse(), sparse()], savedCopyInfo("1-2")), "k");
+    await session.restore();
+    await session.detect();
+    expect(session.state).toEqual({ phase: "done", total: 2, done: 2 });
+  });
+
+  it("offers the rest of a document whose recognized pages are now full of text", async () => {
+    // Once a copy is saved, the pages that were scans are typed pages as far as pdf.js can tell.
+    const pages = [...Array.from({ length: 8 }, () => makePage({ items: TYPED, image: true })), makePage({ image: true }), makePage({ image: true })];
+    const session = new OcrSession(makePdf(pages, savedCopyInfo("1-8")), "k");
+    await session.restore();
+    await session.detect();
+    expect(session.state).toEqual({ phase: "offer", total: 10, done: 8 });
+  });
+
+  it("offers the pages a saved copy doesn't carry text for", async () => {
+    const session = new OcrSession(makePdf([makePage({ image: true }), makePage({ image: true })], savedCopyInfo("1")), "k");
+    await session.restore();
+    await session.detect();
+    expect(session.state).toEqual({ phase: "offer", total: 2, done: 1 });
+  });
+
+  it("adds up the pages recognized here and the pages the file carries", async () => {
+    const session = new OcrSession(makePdf([makePage({ image: true }), makePage({ image: true }), makePage({ image: true })], savedCopyInfo("2")), "k");
+    await session.restore();
+    session.pages.set(1, [{}]);
+    await session.detect();
+    expect(session.state).toEqual({ phase: "offer", total: 3, done: 2 });
+    session.pages.set(3, []);
+    await session.detect();
+    expect(session.state).toEqual({ phase: "done", total: 3, done: 3 });
   });
 
   it("stays quiet if the document was closed while it looked", async () => {
@@ -269,15 +353,21 @@ describe("start", () => {
     expect(page.cleanup).toHaveBeenCalled();
   });
 
-  it("caps the size of the picture it reads on a very large sheet", async () => {
+  it.each([
+    { name: "Letter", width: 612, height: 792, dpi: 300 },
+    { name: "A4", width: 595, height: 842, dpi: 282 },
+    { name: "A3 (landscape)", width: 1191, height: 842, dpi: 200 },
+    { name: "A1", width: 1684, height: 2384, dpi: 100 },
+  ])("reads $name at about $dpi dpi: 300 where the picture fits in 3,300 px, less on a bigger sheet", async ({ width, height, dpi }) => {
     makeWorker();
     const page = makePage({ image: true });
-    page.getViewport = ({ scale }: { scale: number }) => ({ width: 2384 * scale, height: 1684 * scale, convertToPdfPoint: (x: number, y: number) => [x, y] });
+    page.getViewport = ({ scale }: { scale: number }) => ({ width: width * scale, height: height * scale, convertToPdfPoint: (x: number, y: number) => [x, y] });
     let drawn = { width: 0, height: 0 };
     page.render = vi.fn((params: { canvas: { width: number; height: number } }) => { drawn = { ...params.canvas }; return { promise: Promise.resolve() }; });
     await new OcrSession(makePdf([page]), "k").start(() => 1);
-    expect(Math.max(drawn.width, drawn.height)).toBeLessThanOrEqual(3301);
-    expect(drawn.width).toBeGreaterThan(3000);
+    const longest = Math.max(drawn.width, drawn.height);
+    expect(longest).toBeLessThanOrEqual(3301);
+    expect((longest / Math.max(width, height)) * 72).toBeCloseTo(dpi, -1); // within 5 dpi
   });
 
   it("works from the page being read outwards", async () => {
@@ -305,6 +395,20 @@ describe("start", () => {
     expect(worker.recognize).toHaveBeenCalledTimes(1);
     expect([...session.pages.keys()]).toEqual([2]);
     expect(session.state).toMatchObject({ phase: "done", done: 2, total: 2 });
+  });
+
+  it("leaves alone the pages a saved copy carries text for, but counts them as done", async () => {
+    const worker = makeWorker();
+    const pages = [makePage({ image: true }), makePage({ image: true }), makePage({ image: true })];
+    const session = new OcrSession(makePdf(pages, savedCopyInfo("2")), "k");
+    await session.restore();
+    const progress: number[] = [];
+    session.subscribe(() => progress.push(session.state.done));
+    await session.start(() => 1);
+    expect(worker.recognize).toHaveBeenCalledTimes(2);
+    expect([...session.pages.keys()].sort()).toEqual([1, 3]);
+    expect(progress[0]).toBe(1); // page 2 is already done when it begins
+    expect(session.state).toEqual({ phase: "done", total: 3, done: 3, error: undefined });
   });
 
   it("skips pages it already has", async () => {
@@ -488,6 +592,68 @@ describe("cancel, dismiss, and destroy", () => {
     makeWorker();
     await session.start(() => 1);
     expect(session.state.phase).toBe("done");
+  });
+
+  it("stops if it is cancelled while the recognizer is still starting", async () => {
+    const gate = deferred();
+    const worker = makeWorker();
+    mocks.createWorker.mockImplementation(async () => { await gate.promise; return worker; });
+    const session = new OcrSession(makePdf([makePage({ image: true })]), "k");
+    const run = session.start(() => 1);
+    await vi.waitFor(() => expect(mocks.createWorker).toHaveBeenCalled());
+    session.cancel();
+    gate.resolve();
+    await run;
+    expect(worker.recognize).not.toHaveBeenCalled();
+    expect(session.state.phase).toBe("offer");
+    expect(worker.terminate).toHaveBeenCalled(); // the worker that arrived late is shut down too
+  });
+
+  it("does not report a failure to start when it was stopped meanwhile", async () => {
+    const gate = deferred();
+    mocks.createWorker.mockImplementation(async () => { await gate.promise; throw new Error("terminated"); });
+    const session = new OcrSession(makePdf([makePage({ image: true })]), "k");
+    const run = session.start(() => 1);
+    await vi.waitFor(() => expect(mocks.createWorker).toHaveBeenCalled());
+    session.cancel();
+    gate.resolve();
+    await run;
+    expect(session.state.phase).toBe("offer");
+    expect(session.state.error).toBeUndefined();
+  });
+
+  it("does not count a page that failed only because it was stopped", async () => {
+    const worker = makeWorker();
+    const gate = deferred();
+    worker.recognize.mockImplementationOnce(async () => { await gate.promise; throw new Error("terminated"); });
+    const session = new OcrSession(makePdf([makePage({ image: true })]), "k");
+    const run = session.start(() => 1);
+    await vi.waitFor(() => expect(worker.recognize).toHaveBeenCalled());
+    session.cancel();
+    gate.resolve();
+    await run;
+    // One page, and it failed: a run that wasn't stopped would report that none could be read.
+    expect(session.state.phase).toBe("offer");
+    expect(session.state.error).toBeUndefined();
+  });
+
+  it("finishes even when a worker can't be shut down", async () => {
+    const worker = makeWorker();
+    worker.terminate.mockRejectedValue(new Error("already gone"));
+    const session = new OcrSession(makePdf([makePage({ image: true })]), "k");
+    await session.start(() => 1);
+    expect(session.state.phase).toBe("done");
+    expect(worker.terminate).toHaveBeenCalled();
+  });
+
+  it("changes nothing when there is nothing running to stop", async () => {
+    const session = new OcrSession(makePdf([makePage({ image: true })]), "k");
+    await session.detect();
+    const changed = vi.fn();
+    session.subscribe(changed);
+    session.cancel();
+    expect(session.state.phase).toBe("offer");
+    expect(changed).not.toHaveBeenCalled();
   });
 
   it("dismissing hides the offer", () => {

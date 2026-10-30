@@ -102,6 +102,13 @@ describe("toItems", () => {
     expect(items.map((i) => i.hasEOL)).toEqual([false, false, true]);
   });
 
+  it("copes with a baseline that has no length", () => {
+    const flat: Line = { ...line([word("dot", 20, 60)]), baseline: { x0: 50, y0: 100, x1: 50, y1: 100 } };
+    const [item] = toItems([flat], upright);
+    expect(item.str).toBe("dot");
+    expect(Number.isFinite(item.transform[5])).toBe(true);
+  });
+
   it("joins into the sentence that was printed when read the way find does", () => {
     const items = toItems([line([word("A", 20, 40), word("sample", 60, 160), word("page.", 180, 260)])], upright);
     expect(items.map((i) => i.str + (i.hasEOL ? "\n" : "")).join("")).toBe("A sample page.\n");

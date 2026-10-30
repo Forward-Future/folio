@@ -32,8 +32,8 @@ import { ChangelogDialog } from "./ChangelogDialog";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
 import { OcrBanner } from "./components/ocr";
-import { useOcrState } from "./hooks/ocr";
-import { OcrSession } from "./lib/ocr";
+import { useOcrSearchRefresh, useOcrState } from "./hooks/ocr";
+import { OcrSession, copyWithText, savedMessage } from "./lib/ocr";
 
 type Tool = "select" | "highlight" | "ink" | "freetext";
 
@@ -105,7 +105,6 @@ export default function App() {
   const markupRef = useRef<MarkupController | null>(null);
   const persistRef = useRef(false);
   const ocrRef = useRef<OcrSession | null>(null);
-  const findVersionRef = useRef(0);
 
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const [loading, setLoading] = useState(false);
@@ -175,10 +174,10 @@ export default function App() {
   docRef.current = doc;
   preferencesRef.current = { sidebar, spread };
 
-  const flash = useCallback((msg: string) => {
+  const flash = useCallback((msg: string, ms = 2200) => {
     setToast(msg);
     window.clearTimeout((flash as unknown as { t?: number }).t);
-    (flash as unknown as { t?: number }).t = window.setTimeout(() => setToast(null), 2200);
+    (flash as unknown as { t?: number }).t = window.setTimeout(() => setToast(null), ms);
   }, []);
 
   // ── Viewer bootstrap ────────────────────────────────────────────────
@@ -306,7 +305,6 @@ export default function App() {
         }
         ocrRef.current?.destroy();
         ocrRef.current = session;
-        findVersionRef.current = session.version;
         setOcr(session);
         void session.detect().catch(() => {});
 
@@ -472,12 +470,8 @@ export default function App() {
       v.update();
     });
   }, [ocr]);
-  // The find controller reads every page's text once and keeps it, so it is refreshed (not mid-search) once new text exists.
-  useEffect(() => {
-    if (!ocr || !searchOpen || ocr.version === findVersionRef.current || ocrState.phase === "running") return;
-    findVersionRef.current = ocr.version;
-    findRef.current?.setDocument(ocr.pdf);
-  }, [ocr, searchOpen, ocrState.phase]);
+  // The find controller reads every page's text once and keeps it, so it is refreshed (not mid-run) once new text exists.
+  useOcrSearchRefresh({ session: ocr, searchOpen, phase: ocrState.phase, find: findRef, bus: busRef });
 
   // Remember where the reader left off.
   useEffect(() => {
@@ -720,8 +714,11 @@ export default function App() {
       return;
     }
     if (!bytes || !doc) return;
-    saveBytes(bytes);
-    flash(doc.pdf.annotationStorage.size > 0 ? "Saved a copy with your highlights and notes" : "Download started");
+    // Text recognized on a scan goes into the copy, so it stays searchable in other readers too.
+    const copy = await copyWithText(ocr, bytes);
+    saveBytes(copy.bytes);
+    // Longer when something was left out, because the reader needs time to read why.
+    flash(savedMessage({ markup: doc.pdf.annotationStorage.size > 0, ...copy }), copy.problem ? 6000 : undefined);
   };
 
   const print = async () => {

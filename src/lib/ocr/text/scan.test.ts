@@ -24,6 +24,11 @@ describe("imageCover", () => {
     expect(run([[ops.transform, [1224, 0, 0, 792, -306, 0]], [ops.paintImageXObject, ["img"]]])).toBeCloseTo(1);
   });
 
+  it("ignores the drawing operators that aren't about pictures or transforms", () => {
+    const other = 99; // a fill, a stroke, a text operator...
+    expect(run([[other, null], [ops.transform, [612, 0, 0, 792, 0, 0]], [other, [1, 2]], [ops.paintImageXObject, ["img"]], [other, null]])).toBeCloseTo(1);
+  });
+
   it("returns to the earlier transform when a save is restored", () => {
     const inside = run([
       [ops.save, null], [ops.transform, [612, 0, 0, 792, 0, 0]], [ops.restore, null],
