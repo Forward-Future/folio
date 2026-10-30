@@ -4,7 +4,7 @@ import type { OcrSession } from "../session/OcrSession";
 import { embedRecognizedText } from "./embedText";
 
 /** Why a copy went without the recognized text. */
-export type TextProblem = "protected" | "signed" | "failed";
+export type TextProblem = "protected" | "signature" | "failed";
 
 export interface SavedCopy {
   bytes: Uint8Array;
@@ -13,13 +13,17 @@ export interface SavedCopy {
   problem?: TextProblem;
 }
 
-/** Whether the document can't take the text: it is encrypted (it can't be read back in), or signed (rewriting it would break the signature). */
+/**
+ * Whether the document can't take the text: it is encrypted (pdf-lib can't read it), or has a signature field (rewriting
+ * the file could break a signature). pdf.js doesn't say whether a signature field is filled in, and a blank one looks
+ * just like a signed one, so any signature field counts.
+ */
 async function whyNot(pdf: PDFDocumentProxy): Promise<TextProblem | undefined> {
   const { info } = await pdf.getMetadata();
   if ((info as { EncryptFilterName?: string | null }).EncryptFilterName) return "protected";
   const fields = await pdf.getFieldObjects();
   for (const field of fields?.values() ?? []) {
-    if (field.some((f) => (f as { type?: string }).type === "signature")) return "signed";
+    if (field.some((f) => (f as { type?: string }).type === "signature")) return "signature";
   }
 }
 
@@ -37,7 +41,7 @@ export async function copyWithText(session: OcrSession | null, bytes: Uint8Array
 
 const REASONS: Record<TextProblem, string> = {
   protected: "The recognized text can't be added to a password-protected file.",
-  signed: "The recognized text was left out so the digital signature stays valid.",
+  signature: "The recognized text was left out because this file has a signature field, and rewriting it could break the signature.",
   failed: "Couldn't add the recognized text.",
 };
 

@@ -48,9 +48,9 @@ Or build Folio yourself from source (below).
   Recognition is English only for now, can make mistakes on poor scans (Ask AI is told when text came from
   recognition), and is saved with the document so it only runs once. **Save a copy** adds the recognized text to the
   copy as an invisible layer on top of the scan, so the copy can be searched and selected in any PDF reader and Folio
-  won't offer to recognize it again. That is left out, with a note, for password-protected files (they can't be
-  rewritten) and digitally signed ones (rewriting would break the signature), and characters outside Western European
-  text are saved as `?`. The PDF you opened isn't changed.
+  won't offer to recognize it again. That is left out, with a note, for encrypted files (they can't be
+  rewritten) and files with a signature field (rewriting could break a signature), and characters outside Western
+  European text are saved as `?`. The PDF you opened isn't changed.
 - **Sample document:** try the built-in tour from the home screen without finding a PDF first.
 
 URL opening and webpage conversion require the desktop app. Failed downloads leave your current document open.

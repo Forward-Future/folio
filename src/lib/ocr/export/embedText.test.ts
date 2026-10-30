@@ -1,5 +1,6 @@
 import { PDFArray, PDFDocument, PDFName, StandardFonts, decodePDFRawStream, type PDFRawStream } from "pdf-lib";
 import { describe, expect, it } from "vitest";
+import { protectedByOwner, protectedWithPassword } from "../../../testing/fixtures";
 import { openPdf } from "../../../testing/pdfjs";
 import type { TextItem } from "../types";
 import { embedRecognizedText } from "./embedText";
@@ -196,6 +197,11 @@ describe("embedRecognizedText", () => {
     const bytes = await blank(1, (doc) => { doc.context.trailerInfo.Encrypt = doc.context.register(doc.context.obj({ Filter: "Standard" })); });
     await expect(embed(bytes, [[1, [word("a", 72, 700, 10)]]])).rejects.toThrow(/encrypted/);
   });
+
+  it.each([{ kind: "needs a password", bytes: protectedWithPassword }, { kind: "only has an owner password", bytes: protectedByOwner }])(
+    "refuses a real encrypted file that $kind", async ({ bytes }) => {
+      await expect(embed(bytes, [[1, [word("a", 72, 700, 10)]]])).rejects.toThrow(/encrypted/);
+    });
 
   it("fails, rather than saving a broken file, when the bytes aren't a PDF", async () => {
     await expect(embed(new Uint8Array([1, 2, 3]), [[1, [word("a", 72, 700, 10)]]])).rejects.toThrow();
