@@ -127,6 +127,17 @@ try {
 
   // A saved copy includes every saved mark, also on pages that haven't been drawn since the document was reopened.
   const lastPage = await page.locator(".page").count();
+  // A page's text can be selected before pdf.js has built its highlight layer: it first waits for the page's links
+  // and form fields from its worker, which can take a while on a busy computer. Hold that reply back so this
+  // highlight always lands in the gap.
+  await page.evaluate(() => {
+    const post = Worker.prototype.postMessage;
+    window.folioPostMessage = post;
+    Worker.prototype.postMessage = function (message, ...rest) {
+      if (message?.action !== "GetAnnotations") return post.call(this, message, ...rest);
+      setTimeout(() => post.call(this, message, ...rest), 1000);
+    };
+  });
   await page.evaluate((n) => document.querySelector(`.page[data-page-number="${n}"]`).scrollIntoView(), lastPage);
   await page.locator(`.page[data-page-number="${lastPage}"] .textLayer span:not(.markedContent)`).first().evaluate((span) => {
     const range = document.createRange();
@@ -137,6 +148,7 @@ try {
   await page.locator(".selection-popover").waitFor();
   await page.getByRole("button", { name: "Highlight yellow" }).click();
   await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 2, null, { timeout: 15_000 });
+  await page.evaluate(() => { Worker.prototype.postMessage = window.folioPostMessage; });
   await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
   await page.waitForTimeout(800);
   await page.getByTitle("Back to library").click();
