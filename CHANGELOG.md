@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.11.0
+
+- Open Word documents (.docx and .doc) in Folio: right-click and choose **Open with → Folio**, use **Open**, or drop
+  one in. Folio converts it to a PDF, saves it next to the original ("Report.docx" gets "Report.pdf"), and opens it.
+  It uses Microsoft Word or LibreOffice when installed, otherwise its own converter for .docx. Word stays the
+  default app for double-clicking.
+
 ## 1.10.5
 
 - Ask AI shows equations as math, in answers and in saved chats.
