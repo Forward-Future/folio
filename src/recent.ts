@@ -16,6 +16,8 @@ const STORE = "recent";
 const NOTES = "notes";
 const AI = "ai";
 const MAX_RECENT = 8;
+/** Bigger files aren't kept in Recent: each entry stores the whole PDF, so a few 300 MB downloads would be gigabytes of copies on disk. */
+export const MAX_RECENT_FILE_BYTES = 50 * 1024 * 1024;
 let connection: Promise<IDBDatabase> | null = null;
 
 function open(): Promise<IDBDatabase> {

@@ -9,7 +9,7 @@ import {
 } from "./viewer";
 import { AnnotationEditorParamsType, AnnotationEditorType } from "pdfjs-dist";
 import { loadPdf, thumbnailDataUrl, type PDFDocumentProxy } from "./pdf";
-import { contentKey, fileId, getRecent, saveRecent, updateLastPage } from "./recent";
+import { contentKey, fileId, getRecent, MAX_RECENT_FILE_BYTES, saveRecent, updateLastPage } from "./recent";
 import { activeDocument, readView, setActiveDocument, writeView, type ReadingView } from "./session";
 import { SearchResults } from "./SearchResults";
 import { Icon, type IconName } from "./icons";
@@ -315,8 +315,9 @@ export default function App() {
 
         setLoading(false);
         setActiveDocument(id);
-        // Password-protected documents stay out of Recent: it would keep their bytes and a page-1 thumbnail unprotected on disk.
-        if (!password) void (async () => {
+        // Password-protected documents stay out of Recent: it would keep their bytes and a page-1
+        // thumbnail unprotected on disk. Very large files are skipped too — see MAX_RECENT_FILE_BYTES.
+        if (!password && data.byteLength <= MAX_RECENT_FILE_BYTES) void (async () => {
           const thumb = existing?.thumb ?? (await thumbnailDataUrl(pdf).catch(() => ""));
           if (generation !== openGeneration.current) return;
           await saveRecent({
