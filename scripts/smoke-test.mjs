@@ -150,7 +150,7 @@ try {
     window.folioPostMessage = post;
     Worker.prototype.postMessage = function (message, ...rest) {
       if (message?.action !== "GetAnnotations") return post.call(this, message, ...rest);
-      setTimeout(() => post.call(this, message, ...rest), 1000);
+      setTimeout(() => post.call(this, message, ...rest), 2500);
     };
   });
   await page.evaluate((n) => document.querySelector(`.page[data-page-number="${n}"]`).scrollIntoView(), lastPage);

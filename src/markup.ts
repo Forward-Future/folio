@@ -344,12 +344,21 @@ export class MarkupController {
     try {
       this.#bus.dispatch("switchannotationeditorparams", { source: null, type: AnnotationEditorParamsType.HIGHLIGHT_COLOR, value: color });
       ui.highlightSelection("floating_button");
-      // pdf.js switches into highlight mode, creates the editor, and we return to reading mode.
+      // pdf.js clears the selection when it goes ahead; if it's still there, pdf.js found nothing to highlight.
+      if (!selection.isCollapsed) return null;
+      // pdf.js switches into highlight mode, creates the editor, and we return to reading mode. The switch first
+      // redraws the visible pages, which can take seconds on a busy computer, and returning to reading mode before
+      // it finishes cancels it and loses the highlight, so give it plenty of time.
       let created: Editor | undefined;
-      for (let i = 0; i < 40 && !created; i++) {
+      for (let i = 0; i < 400 && !created; i++) {
         await new Promise((r) => setTimeout(r, 25));
         created = this.#liveEditors().find((e) => !before.has(e.id) && !e.isEmpty());
       }
+      // pdf.js focuses the new highlight. Leaving highlight mode with it focused moves focus to the current page's
+      // highlight layer, and throws if that page hasn't drawn one yet, which leaves pdf.js stuck mid-switch and
+      // every later highlight ignored. Nothing needs the focus, so drop it first.
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && focused.closest(".annotationEditorLayer")) focused.blur();
       this.#viewer.annotationEditorMode = { mode: AnnotationEditorType.NONE };
       await new Promise((r) => setTimeout(r, 0));
       if (!created) return null;
