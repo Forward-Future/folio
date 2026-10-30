@@ -1,6 +1,11 @@
 # Changelog
 
-## 1.11.0
+## 1.10.7
+
+- Highlighting keeps working after your first highlight. Before, it could stop until you reopened the document, and
+  on a busy computer a highlight could be dropped.
+
+## 1.10.6
 
 - Open Word documents (.docx and .doc) in Folio: right-click and choose **Open with → Folio**, use **Open**, or drop
   one in. Folio converts it to a PDF, saves it next to the original ("Report.docx" gets "Report.pdf"), and opens it.
