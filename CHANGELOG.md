@@ -1,7 +1,11 @@
 # Changelog
 
-## 1.10.4
+## 1.10.5
 
+- Ask AI shows equations as math, in answers and in saved chats.
+- Printing no longer marks unsaved highlights and signatures as saved, so Folio still asks before you open another
+  document over them.
+- Highlighting text on a page that's still loading works. Before, it could drop the highlight and your selection.
 - Opening a PDF uses less memory by avoiding an extra copy of the document.
 - Downloads include fewer unused resources without changing Folio's language or PDF support.
 - The Ask AI welcome card stays inside its panel instead of covering the document.
