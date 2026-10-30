@@ -29,6 +29,7 @@ import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog
 import { SignatureDialog } from "./SignatureDialog";
 import { SettingsDialog } from "./SettingsDialog";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
+import { keepDrawingPointer } from "./drawing";
 
 type Tool = "select" | "highlight" | "ink" | "freetext";
 
@@ -192,6 +193,7 @@ export default function App() {
       imagesRightClickMinSize: 1e9,
     });
     trackPageImages(eventBus);
+    const stopDrawingPointer = keepDrawingPointer(container);
     linkService.setViewer(viewer);
     viewerRef.current = viewer;
     markupRef.current = new MarkupController(eventBus, viewer, setMarkup);
@@ -256,7 +258,7 @@ export default function App() {
       });
     };
     container.addEventListener("wheel", onWheel, { passive: false });
-    return () => container.removeEventListener("wheel", onWheel);
+    return () => { stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
   }, []);
 
   // ── Opening documents ───────────────────────────────────────────────

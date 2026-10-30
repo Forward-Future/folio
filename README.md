@@ -1,6 +1,7 @@
 # Folio
 
-A simple, clean PDF reader for Windows, macOS, and Linux. Free and open source.
+A fast, clean PDF reader for Windows, macOS, and Linux. Read, highlight, annotate, sign, and ask AI about your
+documents. Free and open source, with no Folio account required.
 
 ## Download
 
@@ -29,26 +30,156 @@ Or build Folio yourself from source (below).
 
 ## Features
 
-- **Reading:** continuous scroll, page thumbnails, outline/bookmarks, find with match case and whole word plus
-  per-page result snippets, zoom (fit width, fit page, presets, Ctrl+wheel/pinch), two-page view, rotate, focus mode
-  (F; Esc to exit), light and dark themes, and night reading that dims bright pages while keeping images in their true
-  colors.
-- **Opening:** drag in a PDF, open one from your file manager ("Open with → Folio" in File Explorer, Finder, or your
-  Linux file manager), or drop, paste, or enter a link (Ctrl+Shift+O; ⌘⇧O on a Mac). PDF links open directly; **webpages are converted to a PDF** you can highlight, annotate, and ask AI
-  about, keeping the site's on-screen look (backgrounds, transparency, colors, and layout) and selectable text.
-- **Images:** click an image to view it larger in Folio, or open it in your browser when it has a web address.
-- **Highlights and notes:** select text and click a color (or press H) to highlight it, or type a note in the box that
-  appears under the colors and press Enter. Click any highlight to recolor it, edit its note, or remove it. The Notes
-  tab lists every highlight with its note, plus a notes box for the whole document, and copies them all as Markdown. Everything saves automatically and comes back when you reopen the file. Ctrl+S saves a PDF copy with
-  highlights and notes embedded as standard PDF annotations. Freehand drawing and text boxes are there too.
-- **Ask AI:** ask questions about the whole document, or select a passage and ask about just that part. Answers cite
-  clickable page numbers. Uses your own ChatGPT plan (Sign in with ChatGPT) or your Claude subscription through
-  [Claude Code](https://claude.com/claude-code); no API keys needed.
-- **Signing:** add a handwritten signature captured with your camera or from a photo, placed on signature lines Folio
-  detects or anywhere you choose. These are visual signatures, not cryptographic certificates.
-- **Library:** recent files with thumbnails, each reopening where you left off.
+### Open PDFs and web links
 
-Press `?` in the app for keyboard shortcuts. On a Mac, use ⌘ wherever this README says Ctrl.
+- **Local files:** open a PDF with the file picker, drag and drop it anywhere in Folio, or use **Open with → Folio**
+  from your file manager. The desktop app keeps one window, bringing an already-running copy forward when you open
+  another PDF.
+- **PDF URLs:** drop a link, paste it with `Ctrl+V` outside a text field, or choose **Open from URL**
+  (`Ctrl+Shift+O`). Folio downloads and opens the PDF, follows redirects, and uses the server's filename when available.
+- **Webpage to PDF:** use the same URL workflow for a webpage. Folio converts it into a PDF with selectable text,
+  ready for highlights, notes, and Ask AI. The conversion preserves the site's on-screen layout, backgrounds,
+  transparency, colors, and images instead of switching to its print styles.
+- **Password-protected PDFs:** enter the password to read and annotate a protected document. These documents are not
+  kept in the recent library, and their annotations and AI conversations are not persisted locally between sessions.
+- **Sample document:** try the built-in tour from the home screen without finding a PDF first.
+
+URL opening and webpage conversion require the desktop app. Failed downloads leave your current document open.
+
+### Read and navigate
+
+- **Continuous scrolling** with selectable text, previous/next controls, and a page-number field for jumping directly
+  to a page.
+- **Pages and Outline tabs:** browse page thumbnails or the PDF's existing outline/bookmarks; hide the sidebar when
+  you want more reading space.
+- **Search as you type:** match case or whole words, see the current match and total count, browse per-page snippets
+  and match counts, and move between matches with `Enter` / `Shift+Enter`.
+- **Flexible views:** fit to width, fit to page, automatic sizing, preset zoom levels, zoom buttons, `Ctrl+wheel` /
+  trackpad pinch, two-page spreads, and page rotation.
+- **Focus mode:** press `F` for distraction-free, fullscreen reading; press `Esc` to return.
+- **Light and dark themes**, plus an independent **Night reading** setting that dims bright pages while keeping
+  photos and figures in their original colors, including in thumbnails. Both settings survive restarts.
+
+### Highlight, draw, and take notes
+
+- **One-click highlights:** select text, then choose yellow, green, blue, pink, or red from the selection toolbar;
+  `H` applies the current highlight color.
+- **Notes on passages:** type into the selection toolbar and press `Enter` to highlight with a note, or press `N`
+  with text selected to focus the note box.
+- **Edit existing highlights:** click one to recolor it, edit its note, ask AI about the passage, or remove it.
+- **Freehand drawing:** choose **Draw** (`D`) and draw directly on the page in black, red, blue, green, or purple.
+- **Text boxes:** choose **Text** (`T`) to add text to a page, using the same ink palette.
+- **Undo and redo** annotation edits with the usual keyboard shortcuts; choose **Done**, `V`, or `Esc` to leave a
+  drawing/text tool and return to selection.
+- **Notes tab:** review highlights, their notes, and text boxes; click an entry to jump to it, edit a highlight's note,
+  delete an entry, or ask AI about a highlight. A separate notes box holds thoughts about the whole document.
+- **Copy all as Markdown:** copy document notes, highlighted passages, and text-box content with page references.
+- **Automatic local saving:** highlights, notes, drawings, and text boxes return when you reopen an
+  ordinary, non-password-protected PDF. Use **Save a copy** to share page annotations with other readers.
+
+### Add handwritten signatures
+
+- **Capture on paper:** sign with dark ink on white paper, then use your camera or upload a PNG, JPEG, or WebP photo.
+- **Clean up the image:** crop to the signature and adjust ink sensitivity to remove the paper background. Capture
+  and image processing stay on your device.
+- **Suggested placement:** Folio checks the current page for empty PDF signature fields and likely signature labels,
+  then offers places to sign. Detection is a suggestion, not a guarantee that every field will be found.
+- **Preview and position:** review the actual page, pick a suggestion or place the signature manually, and adjust its
+  width before approving.
+- **Explicit approval:** nothing is added until you click **Approve and add signature**. Signatures are visual stamps,
+  not certificate-based digital signatures. Use **Save a copy** to keep a signed PDF; placed signatures are not part
+  of Folio's automatic annotation restoration.
+- **Optional reuse:** choose to remember a signature on this computer; remove the saved image in
+  **Settings → Signature → Forget**.
+
+### Ask AI about a document
+
+- **Bring your own subscription:** use **Sign in with ChatGPT** or your Claude subscription through
+  [Claude Code](https://claude.com/claude-code). No API key or separate Folio account is needed.
+- **Whole-document or passage questions:** open the Ask AI panel from the toolbar, select text and choose **Ask AI**,
+  or ask about an existing highlight.
+- **Streaming answers** with clickable page citations that jump back to the source page.
+- **Provider and model selection**, a stop button for an in-progress answer, and a **+** button to start a fresh
+  conversation.
+- **Per-document history:** conversations are saved on this computer and restored when you reopen that document,
+  except for password-protected PDFs. Starting a new conversation clears that document's saved chat.
+- **Account settings:** choose your default provider, sign in to or out of ChatGPT, and check Claude Code's connection
+  from **Settings → Ask AI**.
+
+Ask AI is optional and desktop-only. See [Using Ask AI](#using-ask-ai) for setup and [Privacy](#privacy) for what is sent.
+
+### Inspect images
+
+- Click a PDF image and choose **View larger** for a high-resolution, full-window view.
+- Switch between **Fit to window** and **Actual size**, or copy the image to your clipboard.
+- Choose **Open in browser** when an image has a web address. Images in converted webpages retain their original
+  image links.
+
+### Pick up where you left off
+
+- **Recent library:** keep up to eight recently opened PDFs with thumbnail previews and the last page read; reopen
+  with one click, remove individual entries, or choose **Clear all**.
+- **Startup restore:** reopen the last active document automatically when it is still in the recent library.
+- **Reading state:** remember each document's page, scroll position, zoom, rotation, sidebar visibility, and two-page
+  mode.
+- **Window state:** restore the desktop window's size, monitor position, and maximized state.
+
+### Save, print, and inspect
+
+- **Save a copy** (`Ctrl+S`) exports a PDF with page annotations, including highlights and attached notes, drawings,
+  text boxes, and visual signatures. Your original file is not overwritten. Whole-document notes and AI chat history
+  stay in Folio; copy notes as Markdown when you want to share them.
+- **Print** (`Ctrl+P`) prints the current document with its page annotations.
+- **Document info** shows available metadata: filename, title, author, subject, page count and size, file size,
+  creation/modification dates, generating application, producer, and PDF version.
+
+### Settings and updates
+
+Open **⋯ → Settings** or press `Ctrl+,` for appearance, night reading, AI accounts and defaults, remembered signatures,
+and updates. **About Folio** shows the version, installed/portable edition, and installation location, with a shortcut
+to open that folder.
+
+- **Automatic updates on or off:** the preference survives restarts. Turning it off stops background checks/downloads
+  and automatic installation; manual **Check for updates** remains available for self-updating editions.
+- **Installed Windows:** updates download in the background and install silently on exit, or when you choose
+  **Restart and update**, without repeating the Setup wizard.
+- **Linux AppImage:** downloads updates and replaces the AppImage. **Linux .deb:** updates through the signed apt
+  repository and your system updater; Folio's toggle does not disable apt updates.
+- **macOS:** current unsigned builds notify you and offer the download; self-installing updates require a signed
+  build. **Windows portable:** download a replacement manually.
+- **Visible update status:** checking, download progress, update-ready prompts, and errors are shown in the app.
+
+### Keyboard shortcuts
+
+On macOS, use `⌘` wherever this table says `Ctrl`. Press `?` with a document open for in-app help.
+
+| Action | Shortcut |
+| --- | --- |
+| Open a PDF / open a URL | `Ctrl+O` / `Ctrl+Shift+O` |
+| Find / next match / previous match | `Ctrl+F` / `Enter` / `Shift+Enter` |
+| Highlight selection / write a note | `H` / `N` |
+| Remove a clicked highlight | `Delete` |
+| Select / draw / add text | `V` / `D` / `T` |
+| Undo / redo annotation edits | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` |
+| Save a copy / print | `Ctrl+S` / `Ctrl+P` |
+| Zoom in / zoom out / reset zoom | `Ctrl++` / `Ctrl+-` / `Ctrl+0` |
+| Toggle sidebar | `Ctrl+\` |
+| Rotate / toggle two-page view | `R` / `2` |
+| First page / last page | `Home` / `End` |
+| Focus mode / leave focus or current tool | `F` / `Esc` |
+| Settings / keyboard help | `Ctrl+,` / `?` |
+
+### Current limits
+
+- Folio annotates PDFs; it does not edit their original text/layout, merge or reorder pages, or provide OCR.
+- Search, text selection, signature-label detection, and Ask AI depend on an existing PDF text layer. Image-only scans
+  can still be viewed, drawn on, and signed, but do not gain searchable text automatically.
+- Ask AI uses extracted text, not page images, and includes up to about 400,000 characters of document text. Long
+  documents may be truncated; AI answers can be wrong, so check the cited pages.
+- URL imports need a network connection and support public HTTP(S) links, with a 300 MB PDF download limit. Webpage
+  conversion does not share your browser's cookies or sign-ins, so pages behind a login may not load as expected.
+- Automatic local saving is not cloud sync or a replacement for exporting a PDF copy. Password-protected documents
+  are not saved in Folio between sessions.
 
 ## Using Ask AI
 
@@ -65,8 +196,8 @@ Ask AI is available in the desktop app only, not the browser version.
 
 ## Privacy
 
-Folio has no accounts, analytics, or telemetry, and never uploads your documents on its own. It makes network requests
-only to:
+Folio requires no Folio account, has no analytics or telemetry, and never uploads your documents on its own. It makes
+network requests only to:
 
 - check GitHub for updates (installed copies; can be turned off in **Settings**),
 - open a link you give it (a webpage is loaded in a hidden, sandboxed window with its own temporary session, so no
