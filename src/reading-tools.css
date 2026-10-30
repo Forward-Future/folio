@@ -862,3 +862,43 @@
 .switch:disabled {
   opacity: 0.5;
 }
+
+/* ── What's new ─────────────────────────────────────────────────────── */
+.modal:has(.changelog) {
+  width: min(600px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+}
+.changelog {
+  padding: 0 14px 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.changelog section + section {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.changelog h3 {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text);
+}
+.changelog ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.changelog li + li {
+  margin-top: 6px;
+}
+.changelog strong {
+  color: var(--text);
+  font-weight: 620;
+}
+.changelog code {
+  font-size: 12px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--hover);
+}
