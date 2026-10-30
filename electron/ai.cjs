@@ -126,13 +126,18 @@ async function signInChatGPT() {
     const server = http.createServer();
     const callback = new Promise((resolve, reject) => {
       server.on("request", (req, res) => {
-        const url = new URL(req.url, "http://127.0.0.1");
-        // Only a response carrying this attempt's state counts; anything else is ignored, so stray
-        // requests from other local software or web pages can't end the sign-in.
-        if (url.pathname !== "/auth/callback" || url.searchParams.get("state") !== state) { res.writeHead(404).end(); return; }
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }).end(CALLBACK_PAGE);
-        if (url.searchParams.get("error")) return reject(new Error(url.searchParams.get("error") === "access_denied" ? "Sign-in was cancelled." : "ChatGPT sign-in failed."));
-        resolve(url.searchParams);
+        try {
+          const url = new URL(req.url, "http://127.0.0.1");
+          // Only a response carrying this attempt's state counts; anything else is ignored, so stray
+          // requests from other local software or web pages can't end the sign-in.
+          if (url.pathname !== "/auth/callback" || url.searchParams.get("state") !== state) { res.writeHead(404).end(); return; }
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }).end(CALLBACK_PAGE);
+          if (url.searchParams.get("error")) return reject(new Error(url.searchParams.get("error") === "access_denied" ? "Sign-in was cancelled." : "ChatGPT sign-in failed."));
+          resolve(url.searchParams);
+        } catch {
+          // A malformed request line shouldn't be able to take the app down.
+          res.writeHead(400).end();
+        }
       });
     });
     callback.catch(() => {}); // handled by the race below; avoids an early unhandled rejection

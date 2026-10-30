@@ -381,8 +381,11 @@ export default function App() {
             throw new Error(`Couldn't download from ${host}. The site may not allow it.`);
           });
           if (!res.ok) throw new Error(`The server responded with ${res.status}.`);
+          const data = new Uint8Array(await res.arrayBuffer());
+          // Same cap the desktop app applies to URL downloads.
+          if (data.byteLength > 300 * 1024 * 1024) throw new Error("That PDF is larger than 300 MB.");
           const name = decodeURIComponent(new URL(res.url || url).pathname.split("/").filter(Boolean).pop() || host);
-          file = { name: /\.pdf$/i.test(name) ? name : name + ".pdf", data: new Uint8Array(await res.arrayBuffer()) };
+          file = { name: /\.pdf$/i.test(name) ? name : name + ".pdf", data };
         }
         if (generation !== openGeneration.current) return;
         setToast(null);

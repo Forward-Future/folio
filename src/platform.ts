@@ -1,7 +1,10 @@
 // Which operating system Folio is running on, and shortcut labels written its way.
+// navigator.platform is deprecated; userAgentData covers Chromium, the old API is the fallback.
+const uaPlatform =
+  (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform;
 const platform =
   window.folioDesktop?.platform ??
-  (/Mac|iPhone|iPad/.test(navigator.platform) ? "darwin" : /Linux/.test(navigator.platform) ? "linux" : "win32");
+  (/Mac|iPhone|iPad/i.test(uaPlatform) ? "darwin" : /Linux/i.test(uaPlatform) ? "linux" : "win32");
 
 export const IS_MAC = platform === "darwin";
 

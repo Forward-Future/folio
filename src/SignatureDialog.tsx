@@ -93,7 +93,7 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 } }, audio: false });
       if (!mounted.current || generation !== captureGeneration.current) { stream.getTracks().forEach(track => track.stop()); return; }
       streamRef.current?.getTracks().forEach(track => track.stop()); streamRef.current = stream; setCamera(true);
-    } catch (reason) { if (mounted.current && generation === captureGeneration.current) setError("Couldn't access the camera. Check Windows camera permissions or upload a photo. " + (reason as Error).message); }
+    } catch (reason) { if (mounted.current && generation === captureGeneration.current) setError("Couldn't access the camera. Check your system camera permissions or upload a photo. " + (reason as Error).message); }
   };
   const acceptSource = (image: CanvasImageSource, width: number, height: number) => {
     const factor = Math.min(1, 1600 / Math.max(width, height));

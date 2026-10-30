@@ -25,9 +25,14 @@ function withTimeout(promise, ms, message) {
     .finally(() => clearTimeout(timer));
 }
 
+// Windows can't create files named after devices — "CON.pdf" included — so a page title
+// needs that case broken too, not just the illegal characters.
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
 function fileName(title, url) {
   const clean = String(title || "").replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-  return `${clean || url.hostname}.pdf`;
+  const base = clean || url.hostname;
+  return `${WINDOWS_DEVICE_NAME.test(base) ? base + "_" : base}.pdf`;
 }
 
 // Scrolls through the page so lazy-loaded images load, then back to the top.
