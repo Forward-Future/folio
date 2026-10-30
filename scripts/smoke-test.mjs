@@ -162,7 +162,12 @@ try {
   });
   await page.locator(".selection-popover").waitFor();
   await page.getByRole("button", { name: "Highlight yellow" }).click();
-  await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 2, null, { timeout: 15_000 });
+  await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 2, null, { timeout: 15_000 }).catch(async (e) => {
+    console.log("TRACE", JSON.stringify(await page.evaluate(() => ({ trace: window.__trace, sel: getSelection().toString().slice(0, 40),
+      editors: document.querySelectorAll(".highlightEditor").length, popover: !!document.querySelector(".selection-popover"),
+      layers: [...document.querySelectorAll(".page")].map((p) => p.dataset.pageNumber + ":" + !!p.querySelector(".annotationEditorLayer")) }))));
+    throw e;
+  });
   await page.evaluate(() => { Worker.prototype.postMessage = window.folioPostMessage; });
   await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
   await page.waitForTimeout(800);
