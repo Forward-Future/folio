@@ -1,4 +1,5 @@
-// Folio desktop shell: one window, PDFs opened from Explorer / "Open with", files served over app://.
+// Folio desktop shell: one window, PDFs (and Word documents, converted) opened from Explorer / "Open with",
+// files served over app://.
 const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, screen } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -9,6 +10,7 @@ const ai = require("./ai.cjs");
 const { captureWebpage } = require("./webpage.cjs");
 const { safePdfName } = require("./filenames.cjs");
 const { csp } = require("./csp.cjs");
+const { WORD_FILE, convertToPdf, pdfPathFor } = require("./convert.cjs");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 // Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
@@ -47,14 +49,15 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let win = null;
-let pendingFile = pdfFromArgs(process.argv);
+const OPENABLE = /\.(pdf|docx?)$/i;
+let pendingFile = fileFromArgs(process.argv);
 let rendererReady = false;
 
 // macOS hands files to the app through "open-file" (Finder, the Dock, "Open With") rather than argv.
 // It can fire before the app is ready, so register it right away.
 app.on("open-file", (event, file) => {
   event.preventDefault();
-  if (!/\.pdf$/i.test(file)) return;
+  if (!OPENABLE.test(file)) return;
   if (win && rendererReady) {
     if (win.isMinimized()) win.restore();
     win.focus();
@@ -65,8 +68,8 @@ app.on("open-file", (event, file) => {
   }
 });
 
-function pdfFromArgs(argv) {
-  const file = argv.slice(1).find((a) => !a.startsWith("-") && /\.pdf$/i.test(a) && fs.existsSync(a));
+function fileFromArgs(argv) {
+  const file = argv.slice(1).find((a) => !a.startsWith("-") && OPENABLE.test(a) && fs.existsSync(a));
   return file ? path.resolve(file) : null;
 }
 
@@ -75,6 +78,7 @@ function pdfFromArgs(argv) {
 async function sendFile(file) {
   const target = win;
   if (!file || !target) return;
+  if (WORD_FILE.test(file)) return sendWordFile(file, target);
   try {
     if ((await fs.promises.stat(file)).size > MAX_URL_PDF_BYTES) {
       dialog.showErrorBox("Couldn't open file", `${file}\n\nThat PDF is larger than 300 MB.`);
@@ -85,6 +89,42 @@ async function sendFile(file) {
   } catch (err) {
     dialog.showErrorBox("Couldn't open file", `${file}\n\n${err.message}`);
   }
+}
+
+// A Word document opens as a PDF, saved next to it ("Report.docx" gets "Report.pdf") so it's there to share
+// afterwards. A folder Folio can't write to (a read-only share) just means the PDF isn't kept.
+async function sendWordFile(file, target) {
+  const send = (channel, payload) => { if (!target.isDestroyed()) target.webContents.send(channel, payload); };
+  const original = path.basename(file);
+  send("folio:converting", { name: original });
+  try {
+    if ((await fs.promises.stat(file)).size > MAX_URL_PDF_BYTES) throw Object.assign(new Error("too large"), { userMessage: "It's larger than 300 MB." });
+    const output = pdfPathFor(file);
+    if (output?.existing) {
+      const data = await fs.promises.readFile(output.file);
+      return send("folio:open-file", { name: path.basename(output.file), data });
+    }
+    const data = await convertToPdf(file, (msg) => logConvert(`${file}: ${msg}`));
+    let name = original.replace(/\.[^.]+$/, ".pdf");
+    let note = null;
+    if (output) {
+      try {
+        await fs.promises.writeFile(output.file, data, { flag: "wx" });
+        name = path.basename(output.file);
+        note = `Saved ${name} next to ${original}.`;
+      } catch {}
+    }
+    send("folio:open-file", { name, data, note });
+  } catch (error) {
+    logConvert(`${file}: ${error?.stack || error}`);
+    send("folio:open-failed", { message: `Couldn't convert “${original}” to PDF. ${error?.userMessage ?? ""}`.trim() });
+  }
+}
+
+function logConvert(msg) {
+  try {
+    fs.appendFileSync(path.join(app.getPath("userData"), "convert.log"), `${new Date().toISOString()} ${msg}\n`);
+  } catch {}
 }
 
 // ── Auto-update ──────────────────────────────────────────────────────
@@ -424,7 +464,7 @@ if (!app.requestSingleInstanceLock()) {
     if (!win) return;
     if (win.isMinimized()) win.restore();
     win.focus();
-    void sendFile(pdfFromArgs(argv));
+    void sendFile(fileFromArgs(argv));
   });
 
   app.whenReady().then(() => {
@@ -456,6 +496,11 @@ if (!app.requestSingleInstanceLock()) {
       pendingFile = null;
       if (file) setTimeout(() => void sendFile(file), 0);
       return !!file;
+    });
+    // Word documents picked or dropped in Folio (PDFs are read by the page itself).
+    handle("folio:open-document", (_event, file) => {
+      if (typeof file !== "string" || !WORD_FILE.test(file) || !path.isAbsolute(file)) throw new Error("Not a Word document");
+      void sendFile(file);
     });
     // PDF links open directly; webpages are converted to a PDF first.
     handle("folio:fetch-pdf", async (_event, url) => {

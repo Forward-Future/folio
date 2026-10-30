@@ -21,6 +21,7 @@ they cover, and Electron's and Chromium's licenses are in the app's installation
 | [Electron](https://www.electronjs.org) | MIT | GitHub Inc., OpenJS Foundation and contributors |
 | Chromium (bundled with Electron) | BSD-3-Clause and others | The Chromium Authors |
 | [electron-updater](https://github.com/electron-userland/electron-builder) and its dependencies | MIT, ISC, BlueOak-1.0.0, Python-2.0 | electron-builder contributors and others |
+| [mammoth](https://github.com/mwilliamson/mammoth.js) (Word document conversion) and its dependencies | BSD-2-Clause, MIT, ISC, Zlib, Python-2.0; JSZip under MIT (of MIT OR GPL-3.0-or-later) | Michael Williamson and others |
 
 The sample document (`public/sample.pdf`) was written for Folio and is covered by Folio's MIT License.
 
