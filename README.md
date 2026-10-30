@@ -44,9 +44,13 @@ Or build Folio yourself from source (below).
   kept in the recent library, and their annotations and AI conversations are not persisted locally between sessions.
 - **Scanned PDFs:** when a document is a picture of pages with no text, Folio offers **Recognize text**. It reads the
   pages on your device, starting with the one you're on, and you can keep reading meanwhile. Afterwards search, selection,
-  highlights, and Ask AI work on the scan. Recognition is English only for now, can make mistakes on poor scans (Ask AI
-  is told when text came from recognition), and is saved with the document so it only runs once. Folio's own copy of the
-  PDF isn't changed; **Save a copy** doesn't add the recognized text.
+  highlights, and Ask AI work on the scan, and a search that is open when recognition finishes is run again for you.
+  Recognition is English only for now, can make mistakes on poor scans (Ask AI is told when text came from
+  recognition), and is saved with the document so it only runs once. **Save a copy** adds the recognized text to the
+  copy as an invisible layer on top of the scan, so the copy can be searched and selected in any PDF reader and Folio
+  won't offer to recognize it again. That is left out, with a note, for password-protected files (they can't be
+  rewritten) and digitally signed ones (rewriting would break the signature), and characters outside Western European
+  text are saved as `?`. The PDF you opened isn't changed.
 - **Sample document:** try the built-in tour from the home screen without finding a PDF first.
 
 URL opening and webpage conversion require the desktop app. Failed downloads leave your current document open.
@@ -176,9 +180,13 @@ On macOS, use `⌘` wherever this table says `Ctrl`. Press `?` with a document o
 
 ### Current limits
 
-- Folio annotates PDFs; it does not edit their original text/layout, merge or reorder pages, or provide OCR.
-- Search, text selection, signature-label detection, and Ask AI depend on an existing PDF text layer. Image-only scans
-  can still be viewed, drawn on, and signed, but do not gain searchable text automatically.
+- Folio annotates PDFs; it does not edit their original text/layout or merge or reorder pages. Its only OCR is
+  **Recognize text** for scanned pages, in English.
+- Search, text selection, signature-label detection, and Ask AI depend on a PDF text layer. Image-only scans can be
+  viewed, drawn on, and signed straight away; to search or select their text, choose **Recognize text** first.
+- Recognition reads each page as one picture of at most 3,300 pixels on its longest side: Letter is read at 300 dpi, A4
+  at about 280, A3 at about 200, and an A1 sheet at about 100. Reading large sheets at a higher resolution, or in
+  tiles, found at most slightly more words in our tests and took up to three times as long.
 - Ask AI uses extracted text, not page images, and includes up to about 400,000 characters of document text. Long
   documents may be truncated; AI answers can be wrong, so check the cited pages.
 - URL imports need a network connection and support public HTTP(S) links, with a 300 MB PDF download limit. Webpage
@@ -214,7 +222,8 @@ network requests only to:
 
 Recognizing text in scanned PDFs happens entirely on your device: the recognition engine and its English model ship
 inside Folio and make no network requests. Recognized text is stored with the document on this computer, except for
-password-protected PDFs, which are never stored.
+password-protected PDFs, which are never stored. When you save a copy of a scan, the recognized text becomes part of
+the copy you save.
 
 For ChatGPT, Folio stores its sign-in tokens in its data folder (below, under `ai`), encrypted with the system's
 credential protection (Windows data protection, the macOS Keychain, or the Linux secret store; if a Linux desktop has

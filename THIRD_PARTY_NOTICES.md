@@ -17,6 +17,7 @@ they cover, and Electron's and Chromium's licenses are in the app's installation
 | pdf.js ICC profile | CC0-1.0 | |
 | [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) via [tesseract.js](https://github.com/naptha/tesseract.js) and `tesseract.js-core` | Apache-2.0 | Tesseract OCR authors, tesseract.js contributors |
 | Tesseract English language data (`@tesseract.js-data/eng`) | MIT (wrapper); model from `tessdata_best`, Apache-2.0 | tesseract.js contributors, Tesseract OCR authors |
+| [pdf-lib](https://github.com/Hopding/pdf-lib) and its dependencies (`pako`, `@pdf-lib/standard-fonts`, `@pdf-lib/upng`, `tslib`) | MIT, Zlib, 0BSD | pdf-lib contributors, Nodeca (pako), and others |
 | [React](https://react.dev) and React DOM | MIT | Meta Platforms, Inc. and affiliates |
 | [Electron](https://www.electronjs.org) | MIT | GitHub Inc., OpenJS Foundation and contributors |
 | Chromium (bundled with Electron) | BSD-3-Clause and others | The Chromium Authors |
