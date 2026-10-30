@@ -7,7 +7,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { pathToFileURL } = require("node:url");
+const { fileURLToPath, pathToFileURL } = require("node:url");
 
 const WORD_FILE = /\.docx?$/i;
 const CONVERT_TIMEOUT_MS = 120_000;
@@ -85,13 +85,21 @@ const LETTER_COUNTRIES = new Set(["US", "CA", "MX", "CL", "CO", "VE", "PH", "GT"
 
 /** Prints the HTML file `htmlFile` (and only files from its folder: textutil's images) to a PDF. */
 async function printHtml(htmlFile) {
-  const folder = pathToFileURL(path.dirname(htmlFile)).href + "/";
+  // Compared as real paths: the URL Chromium asks for can spell the folder differently (a short name like
+  // C:\Users\RUNNER~1 written out in full, other letter case, percent-encoding).
+  const folder = fs.realpathSync.native(path.dirname(htmlFile));
+  const inFolder = (url) => {
+    try {
+      const relative = path.relative(folder, fs.realpathSync.native(fileURLToPath(url)));
+      return !!relative && !relative.startsWith("..") && !path.isAbsolute(relative);
+    } catch { return false; }
+  };
   const ses = session.fromPartition(`folio-convert-${crypto.randomUUID()}`); // in-memory only
   ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   ses.setPermissionCheckHandler(() => false);
   ses.on("will-download", (event) => event.preventDefault());
   // A document can point at web images or other files on disk; nothing outside its own folder is loaded.
-  ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !(details.url.startsWith(folder) || details.url.startsWith("data:")) }));
+  ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !(details.url.startsWith("data:") || (details.url.startsWith("file:") && inFolder(details.url))) }));
   const win = new BrowserWindow({
     show: false,
     webPreferences: { session: ses, javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false, backgroundThrottling: false },
