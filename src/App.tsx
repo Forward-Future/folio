@@ -100,6 +100,7 @@ export default function App() {
   const docRef = useRef<OpenDoc | null>(null);
   const markupRef = useRef<MarkupController | null>(null);
   const persistRef = useRef(false);
+  const dirtyRef = useRef(false);
 
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const [loading, setLoading] = useState(false);
@@ -165,7 +166,11 @@ export default function App() {
   }, [doc, page]);
 
   docRef.current = doc;
+  dirtyRef.current = dirty;
   preferencesRef.current = { sidebar, spread };
+
+  /** Opening another document drops unsaved work (a placed signature, markup on a password-protected PDF), so ask first. */
+  const mayReplaceDocument = () => !dirtyRef.current || confirm("You have unsaved annotations. Open another document anyway?");
 
   const flash = useCallback((msg: string) => {
     setToast(msg);
@@ -354,6 +359,7 @@ export default function App() {
         setError(`“${file.name}” isn't a PDF.`);
         return;
       }
+      if (!mayReplaceDocument()) return;
       try {
         await openBytes(file.name, new Uint8Array(await file.arrayBuffer()));
       } catch {
@@ -373,6 +379,7 @@ export default function App() {
 
   const openUrl = useCallback(
     async (url: string) => {
+      if (!mayReplaceDocument()) return;
       const generation = ++openGeneration.current;
       const host = new URL(url).hostname;
       setLoading(true);
@@ -716,7 +723,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     const generation = openGeneration.current;
-    const unsubscribe = window.folioDesktop?.onOpenFile((name, data) => openBytes(name, data));
+    const unsubscribe = window.folioDesktop?.onOpenFile((name, data) => { if (mayReplaceDocument()) void openBytes(name, data); });
     void (async () => {
       const hasStartupFile = await window.folioDesktop?.ready();
       if (hasStartupFile || cancelled || generation !== openGeneration.current) return;
