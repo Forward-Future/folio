@@ -86,6 +86,8 @@ export class MarkupController {
     bus.on("showannotationeditorui", ({ mode }: { mode: number }) => {
       this.#viewer.annotationEditorMode = { mode };
     });
+    window.addEventListener("error", (e) => ((window as any).__trace ??= []).push(`error ${e.message} ${e.error?.stack}`));
+    window.addEventListener("unhandledrejection", (e) => ((window as any).__trace ??= []).push(`rejection ${e.reason?.message} ${e.reason?.stack}`));
     for (const name of ["showannotationeditorui", "annotationeditormodechanged", "pagerendered", "pagerender", "annotationlayerrendered", "annotationeditorlayerrendered", "switchannotationeditormode"]) {
       bus.on(name, (e: any) => ((window as any).__trace ??= []).push(`ev ${name} mode=${e?.mode} page=${e?.pageNumber} t=${Date.now()}`));
     }
@@ -362,7 +364,8 @@ export class MarkupController {
       }
       ((window as any).__trace ??= []).push(`waited created=${!!created} editors=${this.#liveEditors().length} t=${Date.now()}`);
       ((window as any).__trace ??= []).push(`state viewerMode=${(this.#viewer as any).annotationEditorMode} pages=${(this.#viewer as any)._pages?.map((p: any) => p.id + ":" + p.renderingState + ":" + p.hasEditableAnnotations?.()).join(",")}`);
-      this.#viewer.annotationEditorMode = { mode: AnnotationEditorType.NONE };
+      try { this.#viewer.annotationEditorMode = { mode: AnnotationEditorType.NONE }; } catch (e: any) { ((window as any).__trace ??= []).push(`setNONE threw ${e?.stack}`); throw e; }
+      ((window as any).__trace ??= []).push(`set NONE viewerMode=${(this.#viewer as any).annotationEditorMode}`);
       await new Promise((r) => setTimeout(r, 0));
       if (!created) return null;
       this.sync();
