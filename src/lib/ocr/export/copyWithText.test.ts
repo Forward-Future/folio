@@ -62,7 +62,7 @@ describe("copyWithText", () => {
     expect((await copyWithText(sessionFor({ fields: null }), bytes)).embedded).toBe(true);
   });
 
-  it("leaves the text out of a password-protected file, which can't be rewritten", async () => {
+  it("leaves the text out of an encrypted file, which can't be rewritten", async () => {
     const bytes = await blank();
     const copy = await copyWithText(sessionFor({ info: { EncryptFilterName: "Standard" } }), bytes);
     expect(copy).toEqual({ bytes, embedded: false, problem: "protected" });
@@ -101,7 +101,7 @@ describe("savedMessage", () => {
   });
 
   it("says why the recognized text was left out", () => {
-    expect(savedMessage({ markup: false, embedded: false, problem: "protected" })).toBe("Download started. The recognized text can't be added to a password-protected file.");
+    expect(savedMessage({ markup: false, embedded: false, problem: "protected" })).toBe("Download started. The recognized text can't be added to a protected file.");
     expect(savedMessage({ markup: true, embedded: false, problem: "signature" })).toBe("Saved a copy with your highlights and notes. The recognized text was left out because this file has a signature field, and rewriting it could break the signature.");
     expect(savedMessage({ markup: false, embedded: false, problem: "failed" })).toBe("Download started. Couldn't add the recognized text.");
   });

@@ -40,7 +40,7 @@ export async function copyWithText(session: OcrSession | null, bytes: Uint8Array
 }
 
 const REASONS: Record<TextProblem, string> = {
-  protected: "The recognized text can't be added to a password-protected file.",
+  protected: "The recognized text can't be added to a protected file.",
   signature: "The recognized text was left out because this file has a signature field, and rewriting it could break the signature.",
   failed: "Couldn't add the recognized text.",
 };
