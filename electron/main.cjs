@@ -246,9 +246,13 @@ function createWindow() {
 
   const cameraOwner = win.webContents;
   const trustedCameraOrigin = isAppUrl;
+  // Folio's own page may write (never read) the clipboard, for its Copy buttons.
+  const clipboardWrite = (contents, permission, url) =>
+    contents === cameraOwner && permission === "clipboard-sanitized-write" && isAppUrl(url ?? "");
   cameraOwner.session.setPermissionCheckHandler((contents, permission, origin, details) =>
     contents === cameraOwner && permission === "media" && trustedCameraOrigin(details.requestingUrl || origin) && details.mediaType !== "audio");
   cameraOwner.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    if (clipboardWrite(contents, permission, details.requestingUrl)) return callback(true);
     if (contents !== cameraOwner || permission !== "media" || !details.isMainFrame
       || !trustedCameraOrigin(details.requestingUrl) || !details.mediaTypes?.length
       || details.mediaTypes.some(type => type !== "video")) return callback(false);

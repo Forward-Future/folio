@@ -81,9 +81,11 @@ export function NotesPanel({ state, docName, persisted, onReveal, onNote, onRemo
           className="link small"
           disabled={!highlights.length && !state.note.trim()}
           onClick={() => {
-            void navigator.clipboard.writeText(toMarkdown(docName, state));
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
+            // Only confirm once the text has really reached the clipboard.
+            navigator.clipboard.writeText(toMarkdown(docName, state)).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }, () => {});
           }}
           title="Copy all notes and highlights as Markdown"
         >
