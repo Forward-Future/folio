@@ -841,7 +841,8 @@ export default function App() {
       } else if (e.key === "Escape") {
         if (highlightMenu) setHighlightMenu(null);
         else if (noteBox) setNoteBox(null);
-        else if (dialog) setDialog(null);
+        // Each dialog's Modal closes itself on Escape (the changelog goes back to Settings); closing here too would override it.
+        else if (dialog) return;
         else if (searchOpen) setSearchOpen(false);
         else if (tool !== "select") chooseTool("select");
         else if (focus) toggleFocus();
