@@ -55,6 +55,36 @@ $$`);
     }
   });
 
+  check("single line breaks remain visible in saved answers", () => {
+    for (const newline of ["\n", "\r\n"]) {
+      const html = render(["Summary:", "• First point (p. 2)", "• Second point"].join(newline));
+      assert.equal([...html.matchAll(/<br\s*\/>/g)].length, 2);
+      assert.match(html, /Summary:<br\/>\s*• First point /);
+      assert.match(html, /<\/button><br\/>\s*• Second point/);
+      assert.equal(pageRefCount(html), 1);
+    }
+    assert.equal(render("First line\nSecond line"), "<p>First line<br/>\nSecond line</p>");
+  });
+
+  check("model-written links stay readable without becoming navigation", () => {
+    for (const [text, label] of [
+      ["[the paper](https://example.test/paper.pdf)", "the paper"],
+      ["[here](javascript:alert(1))", "here"],
+      ["[paper][source]\n\n[source]: https://example.test/paper.pdf", "paper"],
+      ["<https://example.test/paper.pdf>", "https://example.test/paper.pdf"],
+      ["[email](mailto:author@example.test)", "email"],
+      ["[jump](#folio-page-9)", "jump"],
+      ["[(p. 2)](https://example.test/paper.pdf)", "(p. 2)"],
+      ["[(p. 2)][source]\n\n[source]: https://example.test/paper.pdf", "(p. 2)"],
+    ]) {
+      assert.equal(render(text), `<p>${label}</p>`, text);
+    }
+    const html = render("See (p. 2), then [(p. 3)](https://example.test/paper.pdf).");
+    assert.equal(pageRefCount(html), 1);
+    assert.match(html, /Go to page 2/);
+    assert.doesNotMatch(html, /Go to page 3|<a\b/);
+  });
+
   check("math-like dollar syntax in URLs and link destinations stays unchanged", () => {
     for (const text of [
       "Source https://example.test/$x$/paper.pdf",
@@ -128,7 +158,7 @@ $$`);
  + y_i\).`);
     assert.equal(mathCount(html), 1);
     assert.match(html, /<annotation encoding="application\/x-tex">x_i \+ y_i<\/annotation>/);
-    assert.doesNotMatch(html, /<(?:ul|code)\b/);
+    assert.doesNotMatch(html, /<(?:ul|code|br)\b/);
   });
 
   check("literal backticks do not hide subsequent equations", () => {
@@ -158,6 +188,7 @@ $$`);
         assert.equal(mathCount(html), 0);
         assert.match(html, /<pre><code\b/);
         assert.match(html, /\\\[x_i\\\] and \$y_i\$/);
+        assert.doesNotMatch(html, /<br\b/);
       }
     }
   });

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AiMarkdown } from "./AiMarkdown";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
 import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
+
+const AiMarkdown = lazy(() => import("./AiMarkdown").then((module) => ({ default: module.AiMarkdown })));
 
 export interface AiContext {
   text: string;
@@ -305,7 +306,9 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
                     )}
                   </div>
                 ) : m.content ? (
-                  <AiMarkdown text={m.content} onPage={onGoToPage} />
+                  <Suspense fallback={<p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}>
+                    <AiMarkdown text={m.content} onPage={onGoToPage} />
+                  </Suspense>
                 ) : (
                   <div className="typing" aria-label="Thinking"><span /><span /><span /></div>
                 )}
