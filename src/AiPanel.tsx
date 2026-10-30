@@ -1,4 +1,5 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AiMarkdown } from "./AiMarkdown";
 import { Icon } from "./icons";
 import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
@@ -63,55 +64,11 @@ function instructions(name: string, doc: { text: string; truncated: boolean }) {
     "- Answer from the document. If it doesn't contain the answer, say so plainly; you may add general knowledge if it helps, clearly labeled as such.",
     "- Cite page numbers like (p. 12) when you use specific information from the document.",
     "- When the user quotes a passage, focus on that passage and use the rest of the document as context.",
-    "- Be concise. Use short paragraphs, and bullet lists where they help. Use only light Markdown: **bold**, lists, and `code`.",
+    "- Be concise. Use short paragraphs, and bullet lists where they help. Use light Markdown: **bold**, lists, and `code`.",
+    "- Write mathematical notation in LaTeX: \\( ... \\) for inline math and \\[ ... \\] for display equations. Do not put equations in code blocks.",
     "",
     hasText ? `<document>\n${doc.text}</document>` : "",
   ].join("\n");
-}
-
-// ── Light Markdown rendering (no HTML is ever injected) ──────────────────────────────────
-function inline(text: string, onPage: (n: number) => void): ReactNode[] {
-  const out: ReactNode[] = [];
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\((?:p|pp|page|pages)\.?\s*(\d+)(?:[–-]\d+)?\))/gi;
-  let last = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text))) {
-    if (match.index > last) out.push(text.slice(last, match.index));
-    const token = match[0];
-    if (token.startsWith("**")) out.push(<strong key={out.length}>{token.slice(2, -2)}</strong>);
-    else if (token.startsWith("`")) out.push(<code key={out.length}>{token.slice(1, -1)}</code>);
-    else {
-      const n = Number(match[2]);
-      out.push(<button key={out.length} className="page-ref" onClick={() => onPage(n)} title={`Go to page ${n}`}>{token}</button>);
-    }
-    last = match.index + token.length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
-
-function Markdown({ text, onPage }: { text: string; onPage: (n: number) => void }) {
-  const blocks: ReactNode[] = [];
-  const lines = text.split("\n");
-  for (let i = 0; i < lines.length; ) {
-    const line = lines[i];
-    if (!line.trim()) { i++; continue; }
-    const bullet = /^\s*(?:[-*•]|\d+[.)])\s+/;
-    if (bullet.test(line)) {
-      const ordered = /^\s*\d/.test(line);
-      const items: string[] = [];
-      while (i < lines.length && bullet.test(lines[i])) items.push(lines[i++].replace(bullet, ""));
-      const List = ordered ? "ol" : "ul";
-      blocks.push(<List key={blocks.length}>{items.map((item, k) => <li key={k}>{inline(item, onPage)}</li>)}</List>);
-      continue;
-    }
-    const heading = /^#{1,4}\s+(.*)/.exec(line);
-    if (heading) { blocks.push(<p key={blocks.length}><strong>{inline(heading[1], onPage)}</strong></p>); i++; continue; }
-    const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !bullet.test(lines[i]) && !/^#{1,4}\s/.test(lines[i])) para.push(lines[i++]);
-    blocks.push(<p key={blocks.length}>{para.map((p, k) => <Fragment key={k}>{k > 0 && <br />}{inline(p, onPage)}</Fragment>)}</p>);
-  }
-  return <>{blocks}</>;
 }
 
 // ── Panel ─────────────────────────────────────────────────────────────────────────────────
@@ -348,7 +305,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
                     )}
                   </div>
                 ) : m.content ? (
-                  <Markdown text={m.content} onPage={onGoToPage} />
+                  <AiMarkdown text={m.content} onPage={onGoToPage} />
                 ) : (
                   <div className="typing" aria-label="Thinking"><span /><span /><span /></div>
                 )}
