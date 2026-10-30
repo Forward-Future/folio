@@ -86,6 +86,9 @@ export class MarkupController {
     bus.on("showannotationeditorui", ({ mode }: { mode: number }) => {
       this.#viewer.annotationEditorMode = { mode };
     });
+    for (const name of ["showannotationeditorui", "annotationeditormodechanged", "pagerendered", "pagerender", "annotationlayerrendered", "annotationeditorlayerrendered", "switchannotationeditormode"]) {
+      bus.on(name, (e: any) => ((window as any).__trace ??= []).push(`ev ${name} mode=${e?.mode} page=${e?.pageNumber} t=${Date.now()}`));
+    }
     document.addEventListener("selectionchange", () => {
       const selection = document.getSelection();
       const anchor = selection?.anchorNode instanceof Element ? selection.anchorNode : selection?.anchorNode?.parentElement;
@@ -358,6 +361,7 @@ export class MarkupController {
         created = this.#liveEditors().find((e) => !before.has(e.id) && !e.isEmpty());
       }
       ((window as any).__trace ??= []).push(`waited created=${!!created} editors=${this.#liveEditors().length} t=${Date.now()}`);
+      ((window as any).__trace ??= []).push(`state viewerMode=${(this.#viewer as any).annotationEditorMode} pages=${(this.#viewer as any)._pages?.map((p: any) => p.id + ":" + p.renderingState + ":" + p.hasEditableAnnotations?.()).join(",")}`);
       this.#viewer.annotationEditorMode = { mode: AnnotationEditorType.NONE };
       await new Promise((r) => setTimeout(r, 0));
       if (!created) return null;
