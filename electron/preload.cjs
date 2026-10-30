@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld("folioDesktop", {
   getVersion: () => ipcRenderer.invoke("folio:version"),
   /** Replaces the system clipboard with `text`. The renderer's Clipboard API is denied in the shell. */
   copyText: (text) => ipcRenderer.invoke("folio:copy-text", text),
+  /** Replaces the system clipboard with a PNG image, given as a `data:image/png;base64,` URL. */
+  copyImage: (dataUrl) => ipcRenderer.invoke("folio:copy-image", dataUrl),
   /** Called with the new version once an update has been downloaded and is ready to install. */
   onUpdateReady(callback) {
     ipcRenderer.on("folio:update-ready", (_e, version) => callback(version));

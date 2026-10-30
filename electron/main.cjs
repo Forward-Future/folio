@@ -1,5 +1,5 @@
 // Folio desktop shell: one window, PDFs opened from Explorer / "Open with", files served over app://.
-const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, screen, clipboard } = require("electron");
+const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, screen, clipboard, ClipboardItem } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const { pathToFileURL } = require("node:url");
@@ -448,8 +448,19 @@ if (!app.requestSingleInstanceLock()) {
     });
     // The renderer's Clipboard API is denied by the permission handlers above; the page writes
     // through the shell instead, so "Copy" only reports success once the clipboard really changed.
-    handle("folio:copy-text", (_event, text) => {
-      clipboard.writeText(typeof text === "string" ? text : "");
+    // Both writes are awaited: the clipboard commits asynchronously, and a rejected write is the
+    // only signal the page gets that nothing reached the system clipboard.
+    handle("folio:copy-text", async (_event, text) => {
+      await clipboard.writeText(typeof text === "string" ? text : "");
+      return true;
+    });
+    // The page hands over a PNG data URL, the same encoding its canvas already produces.
+    handle("folio:copy-image", async (_event, dataUrl) => {
+      const comma = typeof dataUrl === "string" ? dataUrl.indexOf(",") : -1;
+      if (comma < 0 || !dataUrl.startsWith("data:image/png;base64,")) return false;
+      const bytes = Buffer.from(dataUrl.slice(comma + 1), "base64");
+      if (!bytes.length) return false;
+      await clipboard.write([new ClipboardItem({ "image/png": new Blob([bytes], { type: "image/png" }) })]);
       return true;
     });
     handle("folio:version", () => app.getVersion());

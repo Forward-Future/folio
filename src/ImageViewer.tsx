@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { copyImage } from "./clipboard";
 import { Icon } from "./icons";
 import type { PDFDocumentProxy } from "./pdf";
 import type { ImageRegion } from "./nightImages";
@@ -75,7 +76,7 @@ export function ImageViewer({ pdf, target, onClose }: { pdf: PDFDocumentProxy; t
   const [image, setImage] = useState<HTMLCanvasElement | null>(null);
   const [failed, setFailed] = useState(false);
   const [actual, setActual] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -105,10 +106,11 @@ export function ImageViewer({ pdf, target, onClose }: { pdf: PDFDocumentProxy; t
   const copy = () => {
     image?.toBlob((blob) => {
       if (!blob) return;
-      void navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      });
+      // Only report success once the clipboard actually took the image.
+      copyImage(blob).then(
+        () => { setCopyState("copied"); setTimeout(() => setCopyState("idle"), 1500); },
+        () => { setCopyState("failed"); setTimeout(() => setCopyState("idle"), 2500); },
+      );
     }, "image/png");
   };
 
@@ -119,8 +121,9 @@ export function ImageViewer({ pdf, target, onClose }: { pdf: PDFDocumentProxy; t
         <button className="pop-btn" onClick={() => setActual(!actual)} disabled={!image}>
           <Icon name={actual ? "fitPage" : "plus"} size={15} /> {actual ? "Fit to window" : "Actual size"}
         </button>
-        <button className="pop-btn" onClick={copy} disabled={!image}>
-          <Icon name={copied ? "check" : "copy"} size={15} /> {copied ? "Copied" : "Copy image"}
+        <button className="pop-btn" onClick={copy} disabled={!image} title={copyState === "failed" ? "Could not copy the image" : undefined}>
+          <Icon name={copyState === "copied" ? "check" : "copy"} size={15} />{" "}
+          {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy image"}
         </button>
         {target.href && (
           <a className="pop-btn" href={target.href} target="_blank" rel="noreferrer" title={target.href}>

@@ -23,6 +23,8 @@ interface FolioDesktop {
   getVersion(): Promise<string>;
   /** Replaces the system clipboard with `text` (the renderer's Clipboard API is denied in the shell). */
   copyText(text: string): Promise<boolean>;
+  /** Replaces the system clipboard with a PNG, given as a `data:image/png;base64,` URL. */
+  copyImage(dataUrl: string): Promise<boolean>;
   onUpdateReady(callback: (version: string) => void): void;
   installUpdate(): void;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;

@@ -67,6 +67,12 @@ try {
   assert.match(await app.evaluate(({ clipboard }) => clipboard.readText()), /SMOKE CLIPBOARD NOTE/);
   console.log("ok  Copy all replaced the native clipboard");
 
+  // "Copy image" takes the same route through the shell, so check that half of it too.
+  const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  assert.equal(await page.evaluate((url) => window.folioDesktop.copyImage(url), png), true, "Copy image didn't reach the clipboard");
+  assert.equal(await app.evaluate(({ clipboard }) => clipboard.has("image/png")), true, "The clipboard holds no image after Copy image");
+  console.log("ok  Copy image replaced the native clipboard");
+
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });
   assert.deepEqual(failures, []);
