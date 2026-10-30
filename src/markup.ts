@@ -86,11 +86,6 @@ export class MarkupController {
     bus.on("showannotationeditorui", ({ mode }: { mode: number }) => {
       this.#viewer.annotationEditorMode = { mode };
     });
-    window.addEventListener("error", (e) => ((window as any).__trace ??= []).push(`error ${e.message} ${e.error?.stack}`));
-    window.addEventListener("unhandledrejection", (e) => ((window as any).__trace ??= []).push(`rejection ${e.reason?.message} ${e.reason?.stack}`));
-    for (const name of ["showannotationeditorui", "annotationeditormodechanged", "pagerendered", "pagerender", "annotationlayerrendered", "annotationeditorlayerrendered", "switchannotationeditormode"]) {
-      bus.on(name, (e: any) => ((window as any).__trace ??= []).push(`ev ${name} mode=${e?.mode} page=${e?.pageNumber} t=${Date.now()}`));
-    }
     document.addEventListener("selectionchange", () => {
       const selection = document.getSelection();
       const anchor = selection?.anchorNode instanceof Element ? selection.anchorNode : selection?.anchorNode?.parentElement;
@@ -335,14 +330,12 @@ export class MarkupController {
   async highlightSelection(color: string): Promise<string | null> {
     const ui = this.#ui;
     const selection = document.getSelection();
-    ((window as any).__trace ??= []).push(`start ui=${!!ui} collapsed=${selection?.isCollapsed} t=${Date.now()}`);
     if (!ui || !selection || selection.isCollapsed) return null;
     // A page's text can be selected before pdf.js has finished drawing the page, but its highlight layer only exists
     // afterwards, and pdf.js drops a highlight (and the selection) on a page without one. Wait for the layer.
     const anchor = selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode?.parentElement;
     const page = Number((anchor?.closest(".page") as HTMLElement | null)?.dataset.pageNumber);
     for (let i = 0; i < 200 && page && !ui.getLayer(page - 1); i++) await new Promise((r) => setTimeout(r, 25));
-    ((window as any).__trace ??= []).push(`layer page=${page} layer=${!!(page && ui.getLayer(page - 1))} collapsed=${selection.isCollapsed} t=${Date.now()}`);
     if (selection.isCollapsed) return null;
     this.sync();
     const before = new Set(this.#liveEditors().map((e) => e.id));
@@ -352,7 +345,6 @@ export class MarkupController {
       this.#bus.dispatch("switchannotationeditorparams", { source: null, type: AnnotationEditorParamsType.HIGHLIGHT_COLOR, value: color });
       ui.highlightSelection("floating_button");
       // pdf.js clears the selection when it goes ahead; if it's still there, pdf.js found nothing to highlight.
-      ((window as any).__trace ??= []).push(`after pdfjs collapsed=${selection.isCollapsed} t=${Date.now()}`);
       if (!selection.isCollapsed) return null;
       // pdf.js switches into highlight mode, creates the editor, and we return to reading mode. The switch first
       // redraws the visible pages, which can take seconds on a busy computer, and returning to reading mode before
@@ -362,10 +354,12 @@ export class MarkupController {
         await new Promise((r) => setTimeout(r, 25));
         created = this.#liveEditors().find((e) => !before.has(e.id) && !e.isEmpty());
       }
-      ((window as any).__trace ??= []).push(`waited created=${!!created} editors=${this.#liveEditors().length} t=${Date.now()}`);
-      ((window as any).__trace ??= []).push(`state viewerMode=${(this.#viewer as any).annotationEditorMode} pages=${(this.#viewer as any)._pages?.map((p: any) => p.id + ":" + p.renderingState + ":" + p.hasEditableAnnotations?.()).join(",")}`);
-      try { this.#viewer.annotationEditorMode = { mode: AnnotationEditorType.NONE }; } catch (e: any) { ((window as any).__trace ??= []).push(`setNONE threw ${e?.stack}`); throw e; }
-      ((window as any).__trace ??= []).push(`set NONE viewerMode=${(this.#viewer as any).annotationEditorMode}`);
+      // pdf.js focuses the new highlight. Leaving highlight mode with it focused moves focus to the current page's
+      // highlight layer, and throws if that page hasn't drawn one yet, which leaves pdf.js stuck mid-switch and
+      // every later highlight ignored. Nothing needs the focus, so drop it first.
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && focused.closest(".annotationEditorLayer")) focused.blur();
+      this.#viewer.annotationEditorMode = { mode: AnnotationEditorType.NONE };
       await new Promise((r) => setTimeout(r, 0));
       if (!created) return null;
       this.sync();
