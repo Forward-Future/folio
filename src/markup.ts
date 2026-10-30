@@ -3,6 +3,7 @@
 // editors whenever the document is opened again.
 import { AnnotationEditorParamsType, AnnotationEditorType } from "pdfjs-dist";
 import type { EventBus, PDFViewer } from "./viewer";
+import type { PDFDocumentProxy } from "./pdf";
 import { getNotes, saveNotes, type DocNotes, type StoredMark } from "./recent";
 
 export type Mark = StoredMark;
@@ -303,6 +304,26 @@ export class MarkupController {
     if (!this.#persist || !this.#docId) return;
     const notes: DocNotes = { id: this.#docId, note: this.#note, marks: [...this.#known.values()], updatedAt: Date.now() };
     void saveNotes(notes);
+  }
+
+  /**
+   * Saved marks on pages pdf.js hasn't drawn yet, serialized like their editors would be. pdf.js only recreates a
+   * mark's editor (and adds it to its annotation storage) when the page renders, so saved copies and printouts
+   * need these added to include every mark.
+   */
+  async unrenderedMarks(pdf: PDFDocumentProxy): Promise<Record<string, unknown>[]> {
+    const marks: Record<string, unknown>[] = [];
+    for (const [pageIndex, pending] of this.#pending) {
+      const [, , pageRight] = (await pdf.getPage(pageIndex + 1)).view;
+      for (const mark of pending) {
+        const data: Record<string, unknown> = { ...mark.data, pageIndex, deleted: false };
+        const top = (mark.data.rect as number[] | undefined)?.[3];
+        // The pop-up pdf.js gives an editor's comment (see AnnotationEditor.addComment).
+        if (mark.note && top !== undefined) data.popup = { contents: mark.note, deleted: false, rect: [pageRight + 1, top - 100, pageRight + 181, top] };
+        marks.push(data);
+      }
+    }
+    return marks;
   }
 
   /** Highlights the current text selection in one click. Resolves to the new mark's id. */

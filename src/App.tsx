@@ -663,7 +663,20 @@ export default function App() {
 
   const currentBytes = async () => {
     if (!doc) return null;
-    return doc.pdf.annotationStorage.size > 0 ? await doc.pdf.saveDocument() : doc.data;
+    // Marks on pages that haven't been drawn yet aren't in pdf.js's annotation storage; add them for this copy only.
+    // (pdf.js saves only entries keyed with its editor prefix.)
+    const storage = doc.pdf.annotationStorage;
+    const unrendered = (await markupRef.current?.unrenderedMarks(doc.pdf)) ?? [];
+    const keys = unrendered.map((data, i) => {
+      const key = `pdfjs_internal_editor_folio-unrendered-${i}`;
+      storage.setValue(key, data);
+      return key;
+    });
+    try {
+      return storage.size > 0 ? await doc.pdf.saveDocument() : doc.data;
+    } finally {
+      for (const key of keys) storage.remove(key);
+    }
   };
 
   const saveBytes = (bytes: Uint8Array) => {
@@ -685,7 +698,7 @@ export default function App() {
     }
     if (!bytes || !doc) return;
     saveBytes(bytes);
-    flash(doc.pdf.annotationStorage.size > 0 ? "Saved a copy with your highlights and notes" : "Download started");
+    flash(bytes !== doc.data ? "Saved a copy with your highlights and notes" : "Download started");
   };
 
   const print = async () => {

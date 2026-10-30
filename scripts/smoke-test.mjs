@@ -4,7 +4,7 @@
 // Run `npm run build` first.
 import { _electron as electron } from "playwright-core";
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -102,6 +102,35 @@ try {
   await page.getByRole("button", { name: "Highlight yellow" }).click();
   await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 1, null, { timeout: 15_000 });
   console.log("ok  highlight created");
+
+  // A saved copy includes every saved mark, also on pages that haven't been drawn since the document was reopened.
+  const lastPage = await page.locator(".page").count();
+  await page.evaluate((n) => document.querySelector(`.page[data-page-number="${n}"]`).scrollIntoView(), lastPage);
+  await page.locator(`.page[data-page-number="${lastPage}"] .textLayer span:not(.markedContent)`).first().evaluate((span) => {
+    const range = document.createRange();
+    range.selectNodeContents(span);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
+  await page.locator(".selection-popover").waitFor();
+  await page.getByRole("button", { name: "Highlight yellow" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 2, null, { timeout: 15_000 });
+  await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
+  await page.waitForTimeout(800);
+  await page.getByTitle("Back to library").click();
+  await page.getByRole("button", { name: /Try a sample/ }).click();
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
+  const copy = path.join(env.FOLIO_TEST_USER_DATA, "copy.pdf");
+  await app.evaluate(({ session }, file) => {
+    globalThis.folioCopySaved = new Promise((resolve) => session.defaultSession.once("will-download", (_event, item) => {
+      item.setSavePath(file);
+      item.once("done", (_done, state) => resolve(state));
+    }));
+  }, copy);
+  await page.keyboard.press("ControlOrMeta+s");
+  assert.equal(await app.evaluate(() => globalThis.folioCopySaved), "completed");
+  assert.equal(readFileSync(copy, "latin1").match(/\/Subtype\s*\/Highlight\b/g)?.length, 2);
+  console.log("ok  saved copy includes marks on pages not drawn yet");
 
   // The More menu opens and closes.
   await page.getByRole("button", { name: "More" }).click();
