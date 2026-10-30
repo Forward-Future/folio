@@ -16,7 +16,14 @@ interface Editor {
   div?: HTMLElement | null;
   deleted?: boolean;
   annotationElementId?: string | null;
+  isClone?: boolean;
+  x: number;
+  y: number;
+  pageDimensions: [number, number];
   comment: { text?: string; deleted?: boolean } | null;
+  getPDFRect(): number[];
+  getRectInCurrentCoords(rect: number[], pageHeight: number): number[];
+  fixAndSetPosition(): void;
   isEmpty(): boolean;
   serialize(isForCopying?: boolean): Record<string, unknown> | null;
   remove(): void;
@@ -24,6 +31,7 @@ interface Editor {
   __folioMark?: string;
 }
 interface EditorLayer {
+  div: HTMLElement;
   deserialize(data: Record<string, unknown>): Promise<Editor | null>;
   add(editor: Editor): void;
 }
@@ -133,18 +141,43 @@ export class MarkupController {
     this.#restoring.add(page);
     const docId = this.#docId;
     try {
+      let added = false;
       for (const mark of marks) {
-        const editor = await layer.deserialize({ ...mark.data, deleted: false, annotationElementId: null }).catch(() => null);
+        // pdf.js only puts a text box's saved text on the page when the box is recreated as a copy; without it
+        // the box comes back empty and the next sync drops it. isClone stops the copy being offset like a paste
+        // (the same steps pdf.js takes when it duplicates a page).
+        const textBox = mark.type === "freetext";
+        const editor = await layer.deserialize({ ...mark.data, deleted: false, annotationElementId: null, isCopy: textBox }).catch(() => null);
         if (!editor || this.#docId !== docId) continue;
         editor.__folioMark = mark.id;
+        if (textBox) editor.isClone = true;
         layer.add(editor);
+        if (textBox) this.#moveTo(editor, mark.data.rect);
         if (mark.note) this.#setEditorNote(editor, mark.note);
+        added = true;
       }
+      // pdf.js hides an editor layer that was empty when its page rendered, and saved marks arrive after that.
+      if (added) layer.div.hidden = false;
       if (this.#docId === docId) this.#pending.delete(page);
     } finally {
       this.#restoring.delete(page);
     }
     this.scheduleSync();
+  }
+
+  /** Puts a restored text box back on its saved rectangle: pdf.js nudges a new box by its font size when it's first drawn. */
+  #moveTo(editor: Editor, rect: unknown) {
+    if (!Array.isArray(rect)) return;
+    try {
+      const [pageWidth, pageHeight] = editor.pageDimensions;
+      const [wantX, wantY] = editor.getRectInCurrentCoords(rect, pageHeight);
+      const [haveX, haveY] = editor.getRectInCurrentCoords(editor.getPDFRect(), pageHeight);
+      editor.x += (wantX - haveX) / pageWidth;
+      editor.y += (wantY - haveY) / pageHeight;
+      editor.fixAndSetPosition();
+    } catch {
+      /* the text is restored either way */
+    }
   }
 
   #setEditorNote(editor: Editor, note: string) {
