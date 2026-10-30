@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Modal } from "./Dialogs";
+import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
+import { updateSummary } from "./updates";
 
 /** One place for every Folio preference. */
 interface Props {
@@ -10,9 +12,6 @@ interface Props {
   onOpenChangelog: () => void;
   onClose: () => void;
 }
-
-const USAGE_URL = "https://chatgpt.com/settings/usage";
-const CLAUDE_CODE_URL = "https://claude.com/claude-code";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -85,15 +84,6 @@ export function SettingsDialog({ theme, onTheme, night, onNight, onOpenChangelog
   const updatable = info?.mode === "installed" || info?.mode === "appimage";
   // Unsigned Mac builds only announce updates (with a download link); signed ones install them.
   const notifyOnly = !!info?.notifyOnly;
-  const updateMessage = status.state === "checking" ? "Checking for updates…"
-    : status.state === "downloading" ? `Downloading ${status.version} (${status.percent ?? 0}%)`
-    : status.state === "ready" ? `Version ${status.version} is ready to install.`
-    : status.state === "available" ? `Folio ${status.version} is available to download.`
-    : status.state === "latest" ? "You're up to date."
-    : status.state === "error" ? `Couldn't check for updates. ${status.message ?? "Try again."}`
-    : status.state === "unsupported" && status.message === "system" ? "Updates arrive with your system's software updates (apt)."
-    : status.state === "unsupported" ? "This copy doesn't update itself."
-    : "";
 
   // Ask AI
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
@@ -122,7 +112,7 @@ export function SettingsDialog({ theme, onTheme, night, onNight, onOpenChangelog
         {desktop && (
           <Section title="Ask AI">
             <Row label="Default provider" hint="Which assistant Ask AI opens with.">
-              <Choice label="Default provider" value={provider as "chatgpt" | "claude"}
+              <Choice label="Default provider" value={provider as AiProvider}
                 onChange={(p) => { setProvider(p); localStorage.setItem("folio:ai-provider", p); }}
                 options={[{ id: "chatgpt", name: "ChatGPT" }, { id: "claude", name: "Claude" }]} />
             </Row>
@@ -138,10 +128,10 @@ export function SettingsDialog({ theme, onTheme, night, onNight, onOpenChangelog
                 <button className="btn primary" disabled={!aiStatus || signingIn} onClick={async () => {
                   setSigningIn(true);
                   setError(null);
-                  const result = await ai!.signInChatGPT();
+                  const result = await signInChatGPT(ai!);
                   setSigningIn(false);
-                  if (!result.ok) setError(result.error ?? "ChatGPT sign-in failed.");
-                  setAiStatus(await ai!.status());
+                  setError(result.error);
+                  setAiStatus(result.status);
                 }}>{signingIn ? "Waiting for browser…" : "Continue with ChatGPT"}</button>
               )}
             </Row>
@@ -186,7 +176,7 @@ export function SettingsDialog({ theme, onTheme, night, onNight, onOpenChangelog
                 }} />
               </Row>
             )}
-            <Row label={`Folio ${info?.version ?? ""}`.trim()} hint={updateMessage || (status.checkedAt ? `Last checked ${new Date(status.checkedAt).toLocaleString()}` : undefined)}>
+            <Row label={`Folio ${info?.version ?? ""}`.trim()} hint={updateSummary(status) || (status.checkedAt ? `Last checked ${new Date(status.checkedAt).toLocaleString()}` : undefined)}>
               {updatable ? (
                 <button className="btn ghost" disabled={status.state === "checking" || status.state === "downloading"}
                   onClick={() => status.state === "ready" ? desktop.installUpdate() : status.state === "available" ? void desktop.openDownload() : desktop.checkForUpdates()}>

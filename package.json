@@ -44,6 +44,9 @@
   "build": {
     "appId": "app.folio.reader",
     "productName": "Folio",
+    "electronLanguages": [
+      "en-US"
+    ],
     "directories": {
       "output": "release",
       "buildResources": "build"

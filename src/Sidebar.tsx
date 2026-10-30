@@ -28,13 +28,13 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, tab, 
     <aside className={`sidebar tab-${tab}`}>
       <div className="sidebar-tabs" role="tablist">
         <button role="tab" aria-selected={tab === "pages"} className={tab === "pages" ? "on" : ""} onClick={() => setTab("pages")}>
-          <Icon name="grid" size={15} /> Pages
+          Pages
         </button>
         <button role="tab" aria-selected={tab === "outline"} className={tab === "outline" ? "on" : ""} onClick={() => setTab("outline")}>
-          <Icon name="list" size={15} /> Outline
+          Outline
         </button>
         <button role="tab" aria-selected={tab === "notes"} className={tab === "notes" ? "on" : ""} onClick={() => setTab("notes")}>
-          <Icon name="note" size={15} /> Notes{noteCount > 0 && <span className="tab-count">{noteCount}</span>}
+          Notes{noteCount > 0 && <span className="tab-count">{noteCount}</span>}
         </button>
       </div>
       <div className="sidebar-scroll">
