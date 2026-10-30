@@ -136,6 +136,25 @@ try {
     console.log("--  clipboard check skipped: the window isn't focused");
   }
 
+  // A refused clipboard write must be reported, not dressed up as a copy. The write is blocked here so the button's
+  // failure path runs on every machine, not just where the OS happens to refuse it.
+  await page.evaluate(() => {
+    globalThis.__clipboardWriteText = navigator.clipboard.writeText;
+    Object.defineProperty(navigator.clipboard, "writeText", {
+      configurable: true,
+      value: () => Promise.reject(new DOMException("Write permission denied.", "NotAllowedError")),
+    });
+  });
+  await page.locator(".selection-popover").getByRole("button", { name: "Copy" }).click();
+  await page.locator('.selection-popover button[title="Copy failed"]').waitFor({ timeout: 5_000 });
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, "writeText", {
+      configurable: true,
+      value: globalThis.__clipboardWriteText,
+    });
+  });
+  console.log("ok  a refused clipboard write is reported as Copy failed");
+
   await page.getByRole("button", { name: "Highlight yellow" }).click();
   await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 1, null, { timeout: 15_000 });
   console.log("ok  highlight created");
