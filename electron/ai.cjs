@@ -13,6 +13,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
+const { chatRequest, claudePrompt } = require("./ai-prompt.cjs");
 
 const AUTH_ISSUER = "https://auth.openai.com";
 const AUTHORIZE_URL = "https://auth.openai.com/api/accounts/authorize";
@@ -267,14 +268,8 @@ async function chatgptModels() {
     .filter((m) => typeof m.id === "string");
 }
 
-async function askChatGPT({ model, instructions, messages }, emit, signal) {
-  const body = JSON.stringify({
-    model,
-    instructions,
-    input: messages.map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })),
-    store: false,
-    stream: true,
-  });
+async function askChatGPT({ model, document, messages }, emit, signal) {
+  const body = JSON.stringify(chatRequest(model, document, messages));
   const send = (token) => net.fetch(`${API}/responses`, {
     method: "POST", signal, body,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "text/event-stream" },
@@ -382,16 +377,17 @@ function cleanStaleClaudeFolders() {
   } catch {}
 }
 
-async function askClaude({ model, instructions, messages }, emit, signal) {
+async function askClaude({ model, document, messages }, emit, signal) {
   const exe = await findClaude();
   if (!exe) throw new Error("Claude Code isn't installed.");
   if (signal.aborted) return;
+  const prompt = claudePrompt(document, messages);
   // An empty working folder, no settings, MCP servers, slash commands, or tools: Claude only reads and answers.
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "folio-claude-"));
   const cleanup = () => { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch {} };
   const promptFile = path.join(cwd, "system.txt");
   try {
-    fs.writeFileSync(promptFile, instructions, { mode: 0o600 });
+    fs.writeFileSync(promptFile, prompt.system, { mode: 0o600 });
   } catch (error) {
     cleanup();
     throw error;
@@ -448,15 +444,8 @@ async function askClaude({ model, instructions, messages }, emit, signal) {
       if (/limit|usage/i.test(message)) return reject(Object.assign(new Error("You've reached your Claude usage limit. " + message.split("\n")[0]), { code: "usage_limit" }));
       reject(new Error(message.split("\n")[0] || "Claude Code couldn't answer."));
     });
-    child.stdin.end(transcript(messages));
+    child.stdin.end(prompt.input);
   });
-}
-
-/** Claude Code reads one prompt, so earlier turns are included as a transcript. */
-function transcript(messages) {
-  if (messages.length === 1) return messages[0].content;
-  const earlier = messages.slice(0, -1).map((m) => `<${m.role}>\n${m.content}\n</${m.role}>`).join("\n\n");
-  return `${earlier}\n\nContinue the conversation. Reply to this latest message:\n\n${messages[messages.length - 1].content}`;
 }
 
 // ── IPC surface ────────────────────────────────────────────────────────────────────────────
@@ -465,10 +454,12 @@ const MAX_CHARS = 1_500_000;
 
 function validRequest(req) {
   return req && typeof req.id === "string" && req.id.length < 100 && (req.provider === "chatgpt" || req.provider === "claude")
-    && typeof req.instructions === "string" && typeof req.model === "string" && req.model.length < 100
+    && typeof req.model === "string" && req.model.length < 100
+    && typeof req.document?.name === "string" && typeof req.document.text === "string" && typeof req.document.truncated === "boolean"
     && Array.isArray(req.messages) && req.messages.length > 0 && req.messages.length < 200
-    && req.messages.every((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-    && req.instructions.length + req.messages.reduce((n, m) => n + m.content.length, 0) < MAX_CHARS;
+    && req.messages.every((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
+      && (m.context === undefined || (m.role === "user" && typeof m.context?.text === "string" && Number.isSafeInteger(m.context.page) && m.context.page >= 1)))
+    && req.document.name.length + req.document.text.length + req.messages.reduce((n, m) => n + m.content.length + (m.context?.text.length ?? 0), 0) < MAX_CHARS;
 }
 
 const MAX_ACTIVE = 2;
@@ -498,7 +489,10 @@ function register(handle, send) {
     active.set(req.id, controller);
     const emit = (text) => send("folio:ai-event", { id: req.id, type: "delta", text });
     const ask = req.provider === "chatgpt" ? askChatGPT : askClaude;
-    Promise.resolve(ask(req, emit, controller.signal))
+    const { name, text, truncated } = req.document;
+    const messages = req.messages.map(({ role, content, context }) => context
+      ? { role, content, context: { text: context.text, page: context.page } } : { role, content });
+    Promise.resolve(ask({ model: req.model, document: { name, text, truncated }, messages }, emit, controller.signal))
       .then(() => send("folio:ai-event", { id: req.id, type: "done" }))
       .catch((e) => send("folio:ai-event", controller.signal.aborted ? { id: req.id, type: "done" }
         : { id: req.id, type: "error", message: e.message || "Something went wrong.", code: e.code ?? "", link: e.link ?? "" }))

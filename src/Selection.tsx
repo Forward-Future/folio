@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
 import { keys } from "./platform";
 import { copyText } from "./clipboard";
+import type { PDFDocumentProxy } from "./pdf";
 
 export interface SelectionInfo {
   text: string;
@@ -17,10 +18,10 @@ export interface SelectionInfo {
 const POPOVER_H = 86;
 
 /** Tracks the reader's text selection inside the document (hidden while the mouse is still dragging). */
-export function useTextSelection(container: HTMLElement | null, enabled: boolean) {
-  const [info, setInfo] = useState<SelectionInfo | null>(null);
+export function useTextSelection(container: HTMLElement | null, enabled: boolean, pdf: PDFDocumentProxy | undefined) {
+  const [info, setInfo] = useState<(SelectionInfo & { pdf: PDFDocumentProxy }) | null>(null);
   useEffect(() => {
-    if (!enabled || !container) {
+    if (!enabled || !container || !pdf) {
       setInfo(null);
       return;
     }
@@ -39,6 +40,7 @@ export function useTextSelection(container: HTMLElement | null, enabled: boolean
       const left = Math.min(...rects.map((r) => r.left));
       const right = Math.max(...rects.map((r) => r.right));
       setInfo({
+        pdf,
         text,
         range: selection.getRangeAt(0).cloneRange(),
         page: Number((anchor.closest(".page") as HTMLElement | null)?.dataset.pageNumber) || 1,
@@ -64,8 +66,8 @@ export function useTextSelection(container: HTMLElement | null, enabled: boolean
       container.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
     };
-  }, [container, enabled]);
-  return info;
+  }, [container, enabled, pdf]);
+  return info?.pdf === pdf ? info : null;
 }
 
 /** Places a floating card above (or, near the top edge, below) a selection, kept inside the stage. */

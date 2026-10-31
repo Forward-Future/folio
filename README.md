@@ -48,8 +48,10 @@ Or build Folio yourself from source (below).
   ready for highlights, notes, and Ask AI. The conversion preserves the site's on-screen layout, backgrounds,
   transparency, colors, and images instead of switching to its print styles.
 - **Word documents to PDF:** open a `.docx` or `.doc` file the same ways as a PDF (**Open with → Folio**, the file
-  picker, or drag and drop). Folio converts it, saves the PDF next to the original ("Report.docx" gets "Report.pdf"),
-  and opens it. An existing PDF is never replaced; one that's newer than the document opens as is. Folio converts with
+  picker, or drag and drop). Folio opens the PDF and saves a private copy beside the original when possible
+  ("Report.docx" gets "Report.pdf"). Occupied names get a number. Reopening reuses a copy only if both files still
+  match Folio's conversion record. Opening a symbolic link, or a file on a separate volume on macOS, skips the
+  automatic save. Folio converts with
   Microsoft Word on Windows when it's installed, otherwise with LibreOffice, otherwise with its own converter for
   `.docx` (text, headings, lists, tables, and images, in a simpler layout). `.doc` files need Word or LibreOffice,
   except on macOS. Installing Folio adds it to **Open with** for Word documents without making it their default app.
@@ -191,8 +193,12 @@ On macOS, use `⌘` wherever this table says `Ctrl`. Press `?` with a document o
   can still be viewed, drawn on, and signed, but do not gain searchable text automatically.
 - Ask AI uses extracted text, not page images, and includes up to about 400,000 characters of document text. Long
   documents may be truncated; AI answers can be wrong, so check the cited pages.
-- URL imports need a network connection and support public HTTP(S) links, with a 300 MB PDF download limit. Webpage
-  conversion does not share your browser's cookies or sign-ins, so pages behind a login may not load as expected.
+- Folio opens PDFs up to 300 MiB and 10,000 pages. Webpage conversion uses a separate session, so pages behind a
+  login may not load. Desktop URL imports need a direct connection or an HTTP(S) system proxy that accepts
+  numeric-address tunnels. Local-network access requires approval for the requested origin.
+- On upgrading from 1.10.8 or earlier, Recent keeps the stored PDFs and rebuilds their previews when opened.
+  Notes and chat on files up to 2 MiB keep their existing content identity. Larger files had only a partial hash,
+  so Folio keeps those legacy records on disk without attaching them to a potentially different document.
 - Automatic local saving is not cloud sync or a replacement for exporting a PDF copy. Password-protected documents
   are not saved in Folio between sessions.
 

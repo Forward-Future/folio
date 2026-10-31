@@ -13,6 +13,7 @@ export interface RecentFile {
 
 const DB_NAME = "folio";
 const STORE = "recent";
+const LEGACY = "recentByName";
 const NOTES = "notes";
 const AI = "ai";
 const MAX_RECENT = 8;
@@ -23,10 +24,12 @@ let connection: Promise<IDBDatabase> | null = null;
 function open(): Promise<IDBDatabase> {
   if (connection) return connection;
   connection = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 3);
+    const req = indexedDB.open(DB_NAME, 4);
     req.onupgradeneeded = () => {
       const database = req.result;
-      if (!database.objectStoreNames.contains(STORE)) database.createObjectStore(STORE, { keyPath: "id" });
+      // Older cards can pair one file's preview and position with another file's bytes.
+      if (database.objectStoreNames.contains(STORE)) req.transaction!.objectStore(STORE).name = LEGACY;
+      database.createObjectStore(STORE, { keyPath: "id" });
       if (!database.objectStoreNames.contains(NOTES)) database.createObjectStore(NOTES, { keyPath: "id" });
       if (!database.objectStoreNames.contains(AI)) database.createObjectStore(AI, { keyPath: "id" });
     };
@@ -34,7 +37,8 @@ function open(): Promise<IDBDatabase> {
       const database = req.result;
       database.onversionchange = () => { database.close(); connection = null; };
       database.onclose = () => { connection = null; };
-      resolve(database);
+      // A migration that runs out of quota can retry next time. Notes and chat still work.
+      migrateRecent(database).catch(() => {}).then(() => resolve(database));
     };
     req.onerror = () => { connection = null; reject(req.error); };
   });
@@ -52,19 +56,45 @@ async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBReq
   });
 }
 
-export const fileId = (name: string, size: number) => `${name}:${size}`;
-
-/** Identifies a PDF by its content: SHA-256 of the first and last megabyte plus its size (fast even for huge files). */
 export async function contentKey(data: Uint8Array) {
-  const chunk = 1 << 20;
-  let sample: Uint8Array = data;
-  if (data.byteLength > 2 * chunk) {
-    sample = new Uint8Array(2 * chunk);
-    sample.set(data.subarray(0, chunk));
-    sample.set(data.subarray(data.byteLength - chunk), chunk);
+  // Up to 2 MiB the old key already hashed every byte. Larger sampled keys cannot prove
+  // which file owns old notes or chat, even if a file with the same sample is still in Recent.
+  const prefix = data.byteLength <= 2 * 1024 * 1024 ? "sha256:" : "sha256-full:";
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data as Uint8Array<ArrayBuffer>));
+  return prefix + Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("") + ":" + data.byteLength;
+}
+
+async function migrateRecent(database: IDBDatabase) {
+  if (!database.objectStoreNames.contains(LEGACY)) return;
+  const old = await new Promise<RecentFile[]>((resolve, reject) => {
+    const request = database.transaction(LEGACY).objectStore(LEGACY).getAll();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  for (const file of old.sort((a, b) => b.openedAt - a.openedAt)) {
+    let id: string | undefined;
+    if (file.data instanceof Blob && file.data.size <= MAX_RECENT_FILE_BYTES) {
+      try { id = await contentKey(new Uint8Array(await file.data.arrayBuffer())); } catch { continue; }
+    }
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction([LEGACY, STORE], "readwrite");
+      const legacy = transaction.objectStore(LEGACY);
+      const current = transaction.objectStore(STORE);
+      // Two tabs can start the same migration. Moving each row atomically avoids resurrecting a removed card.
+      const source = legacy.getKey(file.id);
+      source.onsuccess = () => {
+        if (source.result === undefined) return;
+        legacy.delete(file.id);
+        if (!id) return;
+        const dest = current.getKey(id);
+        dest.onsuccess = () => {
+          if (dest.result === undefined) current.put({ ...file, id, size: file.data.size, thumb: "", lastPage: 1 });
+        };
+      };
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error);
+    });
   }
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", sample.slice()));
-  return "sha256:" + Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("") + ":" + data.byteLength;
 }
 
 export async function listRecent(): Promise<RecentFile[]> {
@@ -86,9 +116,14 @@ export async function getRecent(id: string): Promise<RecentFile | undefined> {
 
 export async function saveRecent(file: RecentFile) {
   try {
-    await tx("readwrite", (s) => s.put(file));
-    const all = await listRecent();
-    for (const old of all.slice(MAX_RECENT)) await removeRecent(old.id);
+    await tx("readwrite", (store) => {
+      store.put(file);
+      const all: IDBRequest<RecentFile[]> = store.getAll();
+      all.onsuccess = () => {
+        for (const old of all.result.sort((a, b) => b.openedAt - a.openedAt).slice(MAX_RECENT)) store.delete(old.id);
+      };
+      return all;
+    });
   } catch {
     /* storage may be unavailable (private mode); recent files are best-effort */
   }
@@ -113,7 +148,14 @@ export async function updateLastPage(id: string, lastPage: number) {
 
 export async function clearRecent() {
   try {
-    await tx("readwrite", (s) => s.clear());
+    const db = await open();
+    const stores = db.objectStoreNames.contains(LEGACY) ? [STORE, LEGACY] : [STORE];
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(stores, "readwrite");
+      for (const name of stores) transaction.objectStore(name).clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error);
+    });
   } catch {
     /* ignore */
   }

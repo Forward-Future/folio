@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
+    "jszip": "^3.10.2",
     "mammoth": "^1.13.0"
   },
   "devDependencies": {

@@ -8,10 +8,11 @@ const { pathToFileURL } = require("node:url");
 const { autoUpdater } = require("electron-updater");
 const ai = require("./ai.cjs");
 const { captureWebpage } = require("./webpage.cjs");
-const { guardSession, isLocalHost } = require("./network.cjs");
+const { guardSession, resolveDestination } = require("./network.cjs");
 const { safePdfName } = require("./filenames.cjs");
 const { csp } = require("./csp.cjs");
-const { WORD_FILE, convertToPdf, pdfPathFor } = require("./convert.cjs");
+const { WORD_FILE, openWord } = require("./convert.cjs");
+const { MAX_DOCUMENT_BYTES, checkDiskPath, readRegular } = require("./document-files.cjs");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 // Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
@@ -81,14 +82,11 @@ async function sendFile(file) {
   if (!file || !target) return;
   if (WORD_FILE.test(file)) return sendWordFile(file, target);
   try {
-    if ((await fs.promises.stat(file)).size > MAX_URL_PDF_BYTES) {
-      dialog.showErrorBox("Couldn't open file", `${file}\n\nThat PDF is larger than 300 MB.`);
-      return;
-    }
-    const data = await fs.promises.readFile(file);
+    checkDiskPath(file);
+    const data = await readRegular(await fs.promises.realpath(file));
     if (!target.isDestroyed()) target.webContents.send("folio:open-file", { name: path.basename(file), data });
   } catch (err) {
-    dialog.showErrorBox("Couldn't open file", `${file}\n\n${err.message}`);
+    dialog.showErrorBox("Couldn't open file", `${file}\n\n${err.userMessage ?? err.message}`);
   }
 }
 
@@ -99,23 +97,7 @@ async function sendWordFile(file, target) {
   const original = path.basename(file);
   send("folio:converting", { name: original });
   try {
-    if ((await fs.promises.stat(file)).size > MAX_URL_PDF_BYTES) throw Object.assign(new Error("too large"), { userMessage: "It's larger than 300 MB." });
-    const output = pdfPathFor(file);
-    if (output?.existing) {
-      const data = await fs.promises.readFile(output.file);
-      return send("folio:open-file", { name: path.basename(output.file), data });
-    }
-    const data = await convertToPdf(file, (msg) => logConvert(`${file}: ${msg}`));
-    let name = original.replace(/\.[^.]+$/, ".pdf");
-    let note = null;
-    if (output) {
-      try {
-        await fs.promises.writeFile(output.file, data, { flag: "wx" });
-        name = path.basename(output.file);
-        note = `Saved ${name} next to ${original}.`;
-      } catch {}
-    }
-    send("folio:open-file", { name, data, note });
+    send("folio:open-file", await openWord(file, (msg) => logConvert(`${file}: ${msg}`)));
   } catch (error) {
     logConvert(`${file}: ${error?.stack || error}`);
     send("folio:open-failed", { message: `Couldn't convert “${original}” to PDF. ${error?.userMessage ?? ""}`.trim() });
@@ -366,7 +348,7 @@ function createWindow() {
   win.on("closed", () => { clearTimeout(windowTimer); win = null; rendererReady = false; });
 }
 
-const MAX_URL_PDF_BYTES = 300 * 1024 * 1024;
+const MAX_URL_PDF_BYTES = MAX_DOCUMENT_BYTES;
 
 // Shown in dialogs: long enough to see where a link goes, short enough that the dialog stays readable.
 const shortUrl = (url) => (url.href.length > 300 ? url.href.slice(0, 300) + "…" : url.href);
@@ -401,12 +383,12 @@ async function openLink(rawUrl) {
 
 // Asked before Folio opens an address on this computer or the local network, here rather than in the page: a document
 // that managed to run code in the page could otherwise use Folio to reach them.
-async function confirmLocalAddress(url) {
+async function confirmLocalAddress(url, addresses) {
   const { response } = await dialog.showMessageBox(win, {
     type: "warning",
     title: "Open a local address?",
     message: `Open ${url.host}?`,
-    detail: `This address is on your computer or local network.\n\n${shortUrl(url)}`,
+    detail: `Allow ${url.origin} to connect to the following resolved addresses?\n\n${addresses.join(", ")}\n\n${shortUrl(url)}`,
     buttons: ["Open", "Cancel"],
     defaultId: 1,
     cancelId: 1,
@@ -422,12 +404,11 @@ function pdfNameFromResponse(url, disposition) {
   return safePdfName(name, url.hostname);
 }
 
-// Downloads a PDF link in the main process, so cross-origin URLs work without CORS. Unless `allowLocal`, neither the
-// link nor a redirect may lead into this computer or the local network.
+// Desktop PDF downloads use the same pinned network policy as webpage capture.
 // Resolves to { name, data } or { error } (error text is shown to the user as-is).
-function downloadPdf(url, allowLocal) {
+async function downloadPdf(url, approvedLocal) {
   const ses = session.fromPartition(`folio-download-${crypto.randomUUID()}`); // in-memory only
-  const refusedLocal = guardSession(ses, allowLocal);
+  const guard = await guardSession(ses, session.defaultSession, approvedLocal);
   return new Promise((resolve) => {
     let done = false;
     const request = net.request({ url: url.toString(), redirect: "manual", session: ses, cache: "no-store" });
@@ -449,7 +430,7 @@ function downloadPdf(url, allowLocal) {
       url = next;
       request.followRedirect();
     });
-    request.on("error", () => finish({ error: refusedLocal()
+    request.on("error", () => finish({ error: guard.refusedLocal()
       ? "That link leads to a local network address, so Folio didn't follow it." : `Couldn't reach ${url.hostname}.` }));
     request.on("response", (response) => {
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -482,7 +463,7 @@ function downloadPdf(url, allowLocal) {
       });
     });
     request.end();
-  });
+  }).finally(guard.close);
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -533,17 +514,24 @@ if (!app.requestSingleInstanceLock()) {
     });
     // PDF links open directly; webpages are converted to a PDF first. An address on this computer or the local
     // network opens only once the user agrees (cancelling resolves to { cancelled: true }).
+    let importing = false;
     handle("folio:fetch-pdf", async (_event, rawUrl) => {
       let url;
       try { url = new URL(typeof rawUrl === "string" && rawUrl.length <= 8192 ? rawUrl.trim() : ""); }
       catch { return { error: "That isn't a valid web address." }; }
       if (url.protocol !== "http:" && url.protocol !== "https:") return { error: "Only http:// and https:// links can be opened." };
-      const local = await isLocalHost(url.hostname, session.defaultSession);
-      if (local && !(await confirmLocalAddress(url))) return { cancelled: true };
-      const result = await downloadPdf(url, local);
-      if (!result.webpage) return result;
-      // A local page that redirected to the web is held to the same rules as any other webpage.
-      return captureWebpage(result.webpage, local && await isLocalHost(new URL(result.webpage).hostname, session.defaultSession));
+      if (importing) return { error: "Another link is still opening." };
+      importing = true;
+      try {
+        const destination = await resolveDestination(url, session.defaultSession);
+        if (destination.local && !(await confirmLocalAddress(url, destination.addresses))) return { cancelled: true };
+        const approved = destination.local ? destination : null;
+        const result = await downloadPdf(url, approved);
+        if (!result.webpage) return result;
+        return await captureWebpage(result.webpage, approved?.origin === new URL(result.webpage).origin ? approved : null);
+      } catch {
+        return { error: `Couldn't open a verified connection to ${url.hostname}.` };
+      } finally { importing = false; }
     });
     handle("folio:app-info", () => ({ version: app.getVersion(), mode: installKind(), location: installLocation(), platform: process.platform,
       notifyOnly: NOTIFY_ONLY }));

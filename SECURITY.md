@@ -25,17 +25,21 @@ Folio opens untrusted PDFs, so it's built to keep a malicious document contained
 - Links inside PDFs open in your default browser, and only after a dialog from the main process shows where they go
   (a PDF decides a link's clickable area, which can be invisible). Folio never navigates its own window away from the
   app. Pasted or dropped links fill in **Open from URL** rather than opening straight away.
-- Links and webpages can't reach your computer or local network (loopback, private, link-local, and carrier-grade NAT
-  addresses, which include Tailscale) unless you agree in a main-process dialog. Names are resolved before each
-  request, so a public name that points at a local address is caught too, and a response that comes from a local
-  address anyway (DNS rebinding) is refused. A rebinding name can still send a request; it can't read the reply.
+- Desktop imports resolve each HTTP(S) destination before connecting. A temporary, TCP-only proxy connects to the
+  approved IP addresses and Chromium verifies HTTPS against the original hostname. This covers redirects and page
+  subresources. Access to a local address requires approval for the specific origin and addresses in the dialog.
+  The importer supports direct connections and HTTP(S) system proxies that allow tunnels to numeric addresses.
+  If it cannot establish a verified route, the import fails.
 - Webpages opened from a link are loaded in a separate hidden window: sandboxed, no Node.js or preload, a throwaway
   in-memory session per page, every permission denied, pop-ups and downloads blocked, only http(s)/data/blob requests
   allowed, and a 60-second limit. Only the printed PDF reaches Folio.
 - Word documents are converted by Microsoft Word (macros disabled) or LibreOffice (a temporary profile with macros and
   linked content disabled) when installed. Otherwise Folio's own converter reads the `.docx` in a separate utility
-  process that is stopped if it takes more than two minutes or 2 GB of memory, so a document built to exhaust memory
-  can't take Folio down; the result is printed in a sandboxed window with JavaScript and the network off.
+  process with a two-minute timeout and a 768 MiB working-set limit. It counts the bytes expanded from each archive
+  part (32 MiB), the total (96 MiB), and the generated HTML (48 MiB). A sandboxed window prints the result with
+  JavaScript and the network off. File imports and converted PDFs have a 300 MiB limit. A saved conversion grants
+  access only to the current user and is reused only after verifying both files against private SHA-256 records.
+  Opening a Word file through a symbolic link skips the automatic save.
 - Electron fuses disable `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, and inspector flags, and require app code to load
   from an integrity-checked archive.
 - Printing hands the document to Chromium's built-in PDF viewer.
@@ -55,8 +59,9 @@ Known limitations:
   SHA-512 published with each release, but without a signature the update channel is only as secure as that GitHub
   account. Until Mac builds are signed, Macs don't install updates automatically: Folio announces new versions, which
   are downloaded from the releases page.
-- The Linux apt repository (published with each release) is signed with Folio's own key (fingerprint
-  `B337 6868 EE22 8389 6C2B  8ABD C455 276C CAE0 3757`), installed by the .deb as
+- The Linux apt repository for the 1.10.9 bridge is signed with Folio's existing key
+  (`B337 6868 EE22 8389 6C2B 8ABD C455 276C CAE0 3757`). The bridge also installs the successor public key
+  (`01AF 1CBF 971E 5482 C064 1A6E EE00 67F5 E3B5 48FC`). These keys are installed by the .deb as
   `/usr/share/keyrings/folio-archive-keyring.gpg` and used only for Folio's source (`signed-by`). apt rejects any
   repository metadata not signed with it.
 - Local data (recent files, reading positions, an optionally remembered signature) is stored unencrypted in your user
