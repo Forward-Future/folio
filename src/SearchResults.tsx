@@ -59,6 +59,8 @@ export function SearchResults({ pdf, controller, bus, onSelect }: {
     const clear = () => {
       generation++;
       window.clearTimeout(timer);
+      // OCR can add text between searches without replacing the PDF object.
+      textCache.current.clear();
       setResults([]);
       setPageCount(0);
     };

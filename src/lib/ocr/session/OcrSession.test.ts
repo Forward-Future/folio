@@ -506,6 +506,20 @@ describe("start", () => {
     expect(session.state).toMatchObject({ phase: "error", error: "Couldn't start text recognition." });
   });
 
+  it("terminates a worker that starts after another worker fails", async () => {
+    vi.stubGlobal("navigator", { hardwareConcurrency: 8 });
+    const gate = deferred();
+    const worker = makeWorker();
+    mocks.createWorker.mockReset().mockRejectedValueOnce(new Error("no wasm"))
+      .mockImplementationOnce(async () => { await gate.promise; return worker; });
+    const session = new OcrSession(makePdf([makePage({ image: true })]), "k");
+    const running = session.start(() => 1);
+    await vi.waitFor(() => expect(mocks.createWorker).toHaveBeenCalledTimes(2));
+    gate.resolve(); await running;
+    expect(worker.terminate).toHaveBeenCalledOnce();
+    expect(session.state.phase).toBe("error");
+  });
+
   it("reports an error when no page could be read, but carries on past a bad page", async () => {
     const worker = makeWorker();
     worker.recognize.mockRejectedValue(new Error("bad page"));

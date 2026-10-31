@@ -69,6 +69,18 @@ const rows = () => [...container.querySelectorAll<HTMLButtonElement>(".search-re
 const heading = () => container.querySelector("h3")!.textContent;
 
 describe("SearchResults", () => {
+  it("refreshes cached snippets when a later search finds newly recognized text", async () => {
+    const pages: Pages = { 1: [{ str: "stamp" }] };
+    const { pdf } = makePdf(pages);
+    const controller = makeController({ 1: { offsets: [0], length: 5 } });
+    await mount(pdf, controller); await settle();
+    expect(rows()[0].querySelector("mark")!.textContent).toBe("stamp");
+    pages[1] = [{ str: "stamp needle" }];
+    controller.pageMatches[0] = [6]; controller.pageMatchesLength[0] = [6];
+    await act(async () => { bus.emit("find"); bus.emit("updatefindmatchescount"); });
+    await settle();
+    expect(rows()[0].querySelector("mark")!.textContent).toBe("needle");
+  });
   it("asks for a search before there is anything to show", async () => {
     const { pdf } = makePdf({});
     await mount(pdf, { pageMatches: [], pageMatchesLength: [] });

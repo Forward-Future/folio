@@ -164,7 +164,7 @@ export class OcrSession {
       const { createWorker } = await import("tesseract.js");
       const base = new URL(`${import.meta.env.BASE_URL}ocr/`, location.href).href;
       const count = Math.max(1, Math.min(MAX_WORKERS, Math.floor((navigator.hardwareConcurrency || 2) / 4)));
-      const workers = await Promise.all(Array.from({ length: count }, async () => {
+      const starts = await Promise.allSettled(Array.from({ length: count }, async () => {
         const worker = await createWorker("eng", 1 /* LSTM only: the bundled model has no legacy data */, {
           workerPath: base + "worker.min.js", corePath: base + "core", langPath: base + "lang",
           // Start the worker straight from the app's own file rather than through a blob: wrapper, and skip
@@ -174,6 +174,9 @@ export class OcrSession {
         mine.push(worker);
         return worker;
       }));
+      const failed = starts.find((result) => result.status === "rejected");
+      if (failed) throw failed.reason;
+      const workers = starts.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
       if (!live()) return;
       // Pages that already have text are skipped, so only the pages sent to the recognizer count towards failing.
       let sent = 0, failures = 0;
