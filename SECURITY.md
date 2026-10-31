@@ -59,8 +59,9 @@ Known limitations:
   SHA-512 published with each release, but without a signature the update channel is only as secure as that GitHub
   account. Until Mac builds are signed, Macs don't install updates automatically: Folio announces new versions, which
   are downloaded from the releases page.
-- The Linux apt repository (published with each release) is signed with Folio's own key (fingerprint
-  `B337 6868 EE22 8389 6C2B  8ABD C455 276C CAE0 3757`), installed by the .deb as
+- The Linux apt repository for the 1.10.9 bridge is signed with Folio's existing key
+  (`B337 6868 EE22 8389 6C2B 8ABD C455 276C CAE0 3757`). The bridge also installs the successor public key
+  (`01AF 1CBF 971E 5482 C064 1A6E EE00 67F5 E3B5 48FC`). These keys are installed by the .deb as
   `/usr/share/keyrings/folio-archive-keyring.gpg` and used only for Folio's source (`signed-by`). apt rejects any
   repository metadata not signed with it.
 - Local data (recent files, reading positions, an optionally remembered signature) is stored unencrypted in your user

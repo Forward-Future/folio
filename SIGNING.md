@@ -1,7 +1,7 @@
 # Code signing
 
 The release workflow uses three GitHub environments in **Forward-Future/folio**. Keep Apple credentials in
-`release-macos`, Azure credentials in `release-windows`, and the existing apt private key in `release-linux`.
+`release-macos`, Azure credentials in `release-windows`, and the successor apt signing subkey in `release-linux`.
 Configure each environment to accept only release tags matching `v*` and require an independent release reviewer.
 Protect the creation, update and deletion of those tags with a repository ruleset. These controls are configured
 in GitHub. A workflow file in a tag cannot enforce restrictions on someone who can change that file.
@@ -61,12 +61,21 @@ certificates), and Windows checks the publisher on every update.
    gh secret set AZURE_SIGNING_PUBLISHER --env release-windows --repo Forward-Future/folio    # exactly the validated publisher name
    ```
 
-## Linux: apt repository key (already set up)
+## Linux apt signing bridge
 
-`APT_SIGNING_KEY` holds the private key that signs the apt repository published with every release; the public key is
-`build/linux/folio-archive-keyring.gpg` and is installed by the `.deb`. Fingerprint:
-`B337 6868 EE22 8389 6C2B  8ABD C455 276C CAE0 3757`.
+Release 1.10.9 uses the repository's existing `APT_SIGNING_KEY`. Its primary fingerprint is
+`B3376868EE2283896C2B8ABDC455276CCAE03757`. The package installs that public key alongside the successor
+primary `01AF1CBF971E5482C0641A6EEE0067F5E3B548FC`. The signing subkey
+`044910C952671F192A495B35E6BB76278A601D69` is provisioned as `APT_SIGNING_KEY_NEXT` in `release-linux`.
+The build checks both repository signatures using only the certificate from pre-bridge installations. It also
+checks the signed package index, the .deb digest and version, and the public keyring inside the .deb.
 
-Store the private key in the protected `release-linux` environment secret. If it's ever lost or exposed, generate a new key, replace both the
-secret and `build/linux/folio-archive-keyring.gpg`, and release: existing .deb users then install the new .deb once
-from the releases page (apt will refuse the new signature until they do).
+Keep the bridge release and its signed apt metadata available at the immutable `v1.10.9` release URL.
+Clients must install the bridge package before a successor-only feed can work; refreshing the index alone is
+insufficient. Clients that miss the bridge can temporarily point their existing Folio apt source to
+`https://github.com/Forward-Future/folio-releases/releases/download/v1.10.9` with the same `signed-by`
+keyring and `./` distribution, install the bridge through apt, then restore the normal latest-release URL.
+
+Before a future cutover, independently escrow and test recovery of the successor primary key, confirm the
+deployment window and legacy-client recovery path, and change both the workflow's secret mapping and the
+signer fingerprint in `scripts/apt-repo.sh`. Retire the old secret only after validating the new feed.
