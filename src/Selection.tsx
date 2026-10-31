@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
 import { keys } from "./platform";
+import { copyText } from "./clipboard";
+import type { PDFDocumentProxy } from "./pdf";
 
 export interface SelectionInfo {
   text: string;
@@ -16,10 +18,10 @@ export interface SelectionInfo {
 const POPOVER_H = 86;
 
 /** Tracks the reader's text selection inside the document (hidden while the mouse is still dragging). */
-export function useTextSelection(container: HTMLElement | null, enabled: boolean) {
-  const [info, setInfo] = useState<SelectionInfo | null>(null);
+export function useTextSelection(container: HTMLElement | null, enabled: boolean, pdf: PDFDocumentProxy | undefined) {
+  const [info, setInfo] = useState<(SelectionInfo & { pdf: PDFDocumentProxy }) | null>(null);
   useEffect(() => {
-    if (!enabled || !container) {
+    if (!enabled || !container || !pdf) {
       setInfo(null);
       return;
     }
@@ -38,6 +40,7 @@ export function useTextSelection(container: HTMLElement | null, enabled: boolean
       const left = Math.min(...rects.map((r) => r.left));
       const right = Math.max(...rects.map((r) => r.right));
       setInfo({
+        pdf,
         text,
         range: selection.getRangeAt(0).cloneRange(),
         page: Number((anchor.closest(".page") as HTMLElement | null)?.dataset.pageNumber) || 1,
@@ -63,8 +66,8 @@ export function useTextSelection(container: HTMLElement | null, enabled: boolean
       container.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
     };
-  }, [container, enabled]);
-  return info;
+  }, [container, enabled, pdf]);
+  return info?.pdf === pdf ? info : null;
 }
 
 /** Places a floating card above (or, near the top edge, below) a selection, kept inside the stage. */
@@ -89,7 +92,7 @@ interface PopoverProps {
 
 /** Shown as soon as text is selected: one-click colors, plus a note field that's ready to type in. */
 export function SelectionPopover({ info, stageWidth, colors, current, onHighlight, onAsk, onPin, onDismiss }: PopoverProps) {
-  const [copied, setCopied] = useState(false);
+  const [copy, setCopy] = useState<"idle" | "done" | "failed">("idle");
   const [note, setNote] = useState("");
   const width = 30 * colors.length + 210;
   return (
@@ -118,16 +121,15 @@ export function SelectionPopover({ info, stageWidth, colors, current, onHighligh
         </button>
         <button
           className="pop-btn icon-only"
-          title={copied ? "Copied" : "Copy"}
+          title={copy === "done" ? "Copied" : copy === "failed" ? "Copy failed" : "Copy"}
           aria-label="Copy"
-          onClick={() => {
-            navigator.clipboard.writeText(info.text).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1200);
-            }, () => {});
+          onClick={async () => {
+            const ok = await copyText(info.text);
+            setCopy(ok ? "done" : "failed");
+            setTimeout(() => setCopy("idle"), ok ? 1200 : 2500);
           }}
         >
-          <Icon name={copied ? "check" : "copy"} size={15} />
+          <Icon name={copy === "done" ? "check" : copy === "failed" ? "close" : "copy"} size={15} />
         </button>
       </div>
       <input

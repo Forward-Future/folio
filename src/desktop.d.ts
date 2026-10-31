@@ -15,7 +15,8 @@ interface FolioDesktop {
   /** Converts a Word document (.doc, .docx) to PDF; the result arrives through onOpenFile. */
   openDocument(file: File): Promise<void>;
   ready(): Promise<boolean>;
-  fetchPdf(url: string): Promise<{ name: string; data: Uint8Array }>;
+  /** Null when the user declines to open an address on their computer or local network. */
+  fetchPdf(url: string): Promise<{ name: string; data: Uint8Array } | null>;
   getAppInfo(): Promise<{ version: string; mode: "development" | "portable" | "installed" | "appimage" | "package"; location: string; platform: string;
     /** True when updates are announced with a download link instead of installed (unsigned macOS builds). */
     notifyOnly: boolean }>;
@@ -41,6 +42,7 @@ interface AiStatus {
 interface AiMessage {
   role: "user" | "assistant";
   content: string;
+  context?: { text: string; page: number };
 }
 
 interface AiEvent {
@@ -59,7 +61,8 @@ interface FolioAi {
   chatgptWelcomeSeen(): Promise<boolean>;
   chatgptModels(): Promise<{ ok: boolean; models?: { id: string; name: string }[]; error?: string; code?: string }>;
   recheckClaude(): Promise<AiStatus["claude"]>;
-  ask(request: { id: string; provider: "chatgpt" | "claude"; model: string; instructions: string; messages: AiMessage[] }): Promise<boolean>;
+  ask(request: { id: string; provider: "chatgpt" | "claude"; model: string; document: { name: string; text: string; truncated: boolean; recognized: boolean };
+    messages: AiMessage[] }): Promise<boolean>;
   cancel(id: string): Promise<boolean>;
   onEvent(callback: (event: AiEvent) => void): () => void;
 }

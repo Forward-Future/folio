@@ -9,16 +9,14 @@
 //   npm run release -- minor             # 1.0.0 -> 1.1.0
 //   npm run release -- patch --notes "Faster search, fixed printing"
 //
-// If a run fails after the tag is pushed, fix the problem and publish that same tag with:
+// After the original tag-push build succeeds (including a rerun), resume publication with:
 //   npm run release -- --publish-only
 import { execFileSync, execSync } from "node:child_process";
-import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { checkRelease, RELEASES_REPO, REQUIRED_ASSETS } from "./check-release.mjs";
-
-const SOURCE_REPO = "Forward-Future/folio";
-const WORKFLOW = "release-build.yml";
-const DOWNLOADS = "release-dist";
+import { checkRelease, RELEASES_REPO } from "./check-release.mjs";
+import { artifactIds, releaseFiles, selectBuild, successfulAttempt, verifyReleaseTag, SOURCE_REPO, WORKFLOW } from "./release-build.mjs";
 
 const args = process.argv.slice(2);
 const notesAt = args.indexOf("--notes");
@@ -35,7 +33,9 @@ const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 const run = (cmd) => execSync(cmd, { stdio: "inherit", env });
 // Arguments are passed directly (no shell), so values like release notes can contain any characters.
-const gh = (ghArgs, opts = {}) => execFileSync("gh", ghArgs, { env, encoding: "utf8", ...opts });
+const gh = (ghArgs, opts = {}) => execFileSync("gh", ghArgs, { env: { ...env, GH_HOST: "github.com" }, encoding: "utf8", ...opts });
+const api = (endpoint) => JSON.parse(gh(["api", "--hostname", "github.com", `repos/${SOURCE_REPO}/${endpoint}`]));
+const git = (...args) => execFileSync("git", args, { env, encoding: "utf8" }).trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 if (!publishOnly) {
@@ -54,57 +54,64 @@ if (!publishOnly) {
   run(`npm version ${bump} -m "Release v%s"`);
 }
 const { version } = JSON.parse(readFileSync("package.json", "utf8"));
+if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("Expected a numeric release version.");
 const tag = `v${version}`;
-// Pushing the tag starts the cross-platform build. Name the target explicitly so this works from any local branch.
-if (!publishOnly) run(`git push origin HEAD:main refs/tags/${tag}`);
+const ref = `refs/tags/${tag}`;
+const tagObject = git("rev-parse", "--verify", ref);
+const commit = git("rev-parse", "--verify", `${tagObject}^{commit}`);
+if (JSON.parse(git("show", `${commit}:package.json`)).version !== version) throw new Error("The tagged source has a different package version.");
+if (!publishOnly) {
+  if (git("rev-parse", "HEAD") !== commit) throw new Error("The release tag differs from the commit being pushed.");
+  execFileSync("git", ["push", "--atomic", "origin", "HEAD:refs/heads/main", ref], { env, stdio: "inherit" });
+}
+verifyReleaseTag(api, tag, tagObject, commit);
+const query = new URLSearchParams({ event: "push", branch: tag, head_sha: commit, per_page: "2" });
+const findBuild = () => selectBuild(api(`actions/workflows/${WORKFLOW}/runs?${query}`), tag, commit);
 
 // Find the build for this tag (it can take a few seconds to appear), then wait for it.
 console.log(`\nWaiting for the ${tag} build on GitHub Actions…`);
-let runId = null;
-for (let i = 0; i < 60 && !runId; i++) {
-  const runs = JSON.parse(gh(["run", "list", "--repo", SOURCE_REPO, "--workflow", WORKFLOW, "--branch", tag, "--limit", "5",
-    "--json", "databaseId,headBranch,createdAt"]));
-  runId = runs.find((r) => r.headBranch === tag)?.databaseId ?? null;
-  if (!runId) await sleep(5000);
+let build = null;
+for (let i = 0; i < 60 && !build; i++) {
+  build = findBuild();
+  if (!build) await sleep(5000);
 }
-if (!runId) {
+if (!build) {
   console.error(`No "${WORKFLOW}" run found for ${tag}. Check https://github.com/${SOURCE_REPO}/actions`);
   process.exit(1);
 }
+const runId = build.id;
 console.log(`Build: https://github.com/${SOURCE_REPO}/actions/runs/${runId}`);
 try {
   gh(["run", "watch", String(runId), "--repo", SOURCE_REPO, "--exit-status", "--interval", "20"], { stdio: "inherit" });
 } catch {
-  console.error(`\nThe ${tag} build failed, so nothing was published. Fix it, then run: npm run release -- --publish-only`);
+  console.error(`\nThe ${tag} build failed. Rerun the failed jobs, then use npm run release -- --publish-only. Source changes need a new tag.`);
   process.exit(1);
 }
 
-// Download every platform's installers.
-rmSync(DOWNLOADS, { recursive: true, force: true });
-gh(["run", "download", String(runId), "--repo", SOURCE_REPO, "--dir", DOWNLOADS], { stdio: "inherit" });
-const files = readdirSync(DOWNLOADS, { recursive: true })
-  .map((f) => path.join(DOWNLOADS, f))
-  .filter((f) => statSync(f).isFile());
-// Every platform ships together: refuse to publish unless the build produced all of them.
-const missing = REQUIRED_ASSETS.map((a) => a.name).filter((name) => !files.some((f) => path.basename(f) === name));
-if (missing.length) {
-  console.error(`Missing from the build: ${missing.join(", ")}. Nothing was published.`);
-  process.exit(1);
-}
+const attempt = successfulAttempt(findBuild(), runId);
+const getArtifactIds = () => artifactIds(api(`actions/runs/${runId}/artifacts?per_page=100`), build);
+const ids = getArtifactIds();
 
-// Mac builds are signed and notarized once the Developer ID secrets exist (see SIGNING.md).
-const macSigned = gh(["secret", "list", "--repo", SOURCE_REPO]).includes("MAC_CERTIFICATE_P12_BASE64");
 const body = [
   notes || `Folio ${version}.`,
   "",
   "## Download",
   "- **Windows:** **Folio-Setup.exe** (updates itself), or **Folio-Portable.exe** to run without installing.",
-  macSigned
-    ? "- **macOS:** **Folio-mac.dmg** (Apple Silicon and Intel). Installed copies update themselves."
-    : "- **macOS:** **Folio-mac.dmg** (Apple Silicon and Intel). The first time you open it, macOS blocks it because it isn't notarized yet: open **System Settings → Privacy & Security** and click **Open Anyway**.",
+  "- **macOS:** **Folio-mac.dmg** (Apple Silicon and Intel). Developer ID builds update automatically. For ad-hoc builds, see the first-launch instructions in the [README](https://github.com/Forward-Future/folio#download).",
   "- **Linux:** **Folio-linux-amd64.deb** for Ubuntu/Debian (after that, updates arrive with your system updates), or **Folio-linux-x86_64.AppImage** (updates itself) for other distributions.",
 ].join("\n");
-gh(["release", "create", tag, "--repo", RELEASES_REPO, "--title", `Folio ${version}`, "--notes", body, ...files], { stdio: "inherit" });
+const folder = mkdtempSync(path.join(tmpdir(), "folio-release-"));
+try {
+  gh(["run", "download", String(runId), "--repo", SOURCE_REPO, "--dir", folder], { stdio: "inherit" });
+  const files = releaseFiles(folder);
+  const notesFile = path.join(folder, "release-notes.md");
+  writeFileSync(notesFile, body);
+  verifyReleaseTag(api, tag, tagObject, commit);
+  if (successfulAttempt(findBuild(), runId) !== attempt || getArtifactIds() !== ids) throw new Error("The build changed during download. Run --publish-only again.");
+  gh(["release", "create", tag, "--repo", RELEASES_REPO, "--title", `Folio ${version}`, "--notes-file", notesFile, ...files], { stdio: "inherit" });
+} finally {
+  rmSync(folder, { recursive: true, force: true });
+}
 
 // Double-check what actually got published: every file present, every update feed at this version.
 const { problems } = await checkRelease(tag);

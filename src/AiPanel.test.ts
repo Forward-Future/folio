@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./lib/ocr", () => ({ ocrSession: (pdf: { session?: unknown }) => pdf.session }));
 
-import { documentText, instructions } from "./AiPanel";
+import { documentText } from "./AiPanel";
 
 type FakeItem = { str?: string; hasEOL?: boolean };
 type Session = { version: number; pages: Map<number, unknown[]>; embedded: Set<number> };
@@ -69,37 +69,5 @@ describe("documentText", () => {
     expect((await documentText(makePdf([[{ str: "a" }]], sessionWith([[1, [{}]]])))).recognized).toBe(true);
     // A copy saved with recognized text carries it inside the PDF, but it is still read by OCR.
     expect((await documentText(makePdf([[{ str: "a" }]], sessionWith([], 0, [1])))).recognized).toBe(true);
-  });
-});
-
-describe("instructions", () => {
-  const doc = { text: "[Page 1]\nHello\n\n", truncated: false, recognized: false };
-
-  it("names the document and includes its text between tags", () => {
-    const text = instructions("Report.pdf", doc);
-    expect(text).toContain('"Report.pdf"');
-    expect(text).toContain("<document>\n[Page 1]\nHello\n\n</document>");
-  });
-
-  it("warns the model that recognized text may contain mistakes", () => {
-    expect(instructions("Scan.pdf", { ...doc, recognized: true })).toContain("read from scanned pages by OCR");
-  });
-
-  it("says nothing about recognition for ordinary documents", () => {
-    expect(instructions("Report.pdf", doc)).not.toContain("OCR");
-  });
-
-  it("explains when a document has no text at all", () => {
-    const text = instructions("Scan.pdf", { text: "[Page 1]\n\n", truncated: false, recognized: false });
-    expect(text).toContain("no extractable text");
-    expect(text).not.toContain("<document>");
-  });
-
-  it("explains when only the start of a long document was included", () => {
-    expect(instructions("Long.pdf", { ...doc, truncated: true })).toContain("only the beginning is included");
-  });
-
-  it("keeps its guidance on citing pages", () => {
-    expect(instructions("Report.pdf", doc)).toContain("Cite page numbers");
   });
 });

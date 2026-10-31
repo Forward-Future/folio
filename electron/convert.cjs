@@ -1,13 +1,15 @@
 // Word documents (.doc, .docx) are converted to PDF before Folio opens them. The best converter on the computer
 // wins: Microsoft Word (Windows), then LibreOffice (any platform), then Folio's own, which lays the text, tables,
 // and images out in a hidden window and prints them (.docx everywhere; .doc on macOS, through textutil).
-const { app, BrowserWindow, session } = require("electron");
+const { app, BrowserWindow, session, utilityProcess } = require("electron");
 const { execFile } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
+const { systemPowerShell } = require("./windows-powershell.cjs");
+const { MAX_DOCUMENT_BYTES, MAX_HTML_BYTES, tooLarge, readRegular, stageWord, pdfName, cachedPdf, rememberPdf } = require("./document-files.cjs");
 
 const WORD_FILE = /\.docx?$/i;
 const CONVERT_TIMEOUT_MS = 120_000;
@@ -45,8 +47,8 @@ try {
 
 async function withWord(source, target) {
   // The paths travel in the environment, so no file name can break out of the script.
-  await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WORD_SCRIPT],
-    { env: { ...process.env, FOLIO_SOURCE: source, FOLIO_TARGET: target } });
+  await run(systemPowerShell(), ["-NoProfile", "-NonInteractive", "-Command", WORD_SCRIPT],
+    { cwd: path.dirname(source), env: { ...process.env, FOLIO_SOURCE: source, FOLIO_TARGET: target } });
 }
 
 function libreOffice() {
@@ -58,27 +60,51 @@ function libreOffice() {
   return candidates.find((file) => fs.existsSync(file));
 }
 
+// Settings for that profile: no macros, and no linked content fetched while converting (a document can link an image
+// on the sender's server, which would then learn when and where it was opened).
+const LIBREOFFICE_SETTINGS = `<?xml version="1.0" encoding="UTF-8"?>
+<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop></item>
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</value></prop></item>
+</oor:items>
+`;
+
 async function withLibreOffice(soffice, source, dir) {
   // A profile of its own lets the conversion run while LibreOffice is open (which would otherwise take the job and
   // return straight away) and keeps the user's settings out of it.
-  const profile = pathToFileURL(path.join(dir, "libreoffice-profile")).href;
-  await run(soffice, ["--headless", "--norestore", "--nolockcheck", `-env:UserInstallation=${profile}`, "--convert-to", "pdf", "--outdir", dir, source]);
+  const profile = path.join(dir, "libreoffice-profile");
+  fs.mkdirSync(path.join(profile, "user"), { recursive: true });
+  fs.writeFileSync(path.join(profile, "user", "registrymodifications.xcu"), LIBREOFFICE_SETTINGS);
+  await run(soffice, ["--headless", "--norestore", "--nolockcheck", `-env:UserInstallation=${pathToFileURL(profile).href}`, "--convert-to", "pdf", "--outdir", dir, source]);
   return path.join(dir, path.basename(source).replace(/\.[^.]+$/, ".pdf"));
 }
 
-// Folio's own layout for the built-in converter: a printed page with Word's usual defaults.
-const DOCUMENT_CSS = `
-@page { margin: 1in; }
-body { font-family: Calibri, Carlito, "Segoe UI", Arial, sans-serif; font-size: 11pt; line-height: 1.4; color: #000; margin: 0; overflow-wrap: break-word; }
-h1, h2, h3, h4, h5, h6 { font-weight: 600; line-height: 1.2; margin: 1.2em 0 0.4em; break-after: avoid; }
-h1 { font-size: 20pt; } h2 { font-size: 16pt; } h3 { font-size: 13pt; } h4, h5, h6 { font-size: 11pt; }
-p { margin: 0 0 0.6em; }
-img { max-width: 100%; height: auto; }
-table { border-collapse: collapse; margin: 0 0 0.8em; max-width: 100%; }
-td, th { border: 1px solid #999; padding: 3pt 6pt; vertical-align: top; }
-td > p:last-child, th > p:last-child { margin-bottom: 0; }
-tr { break-inside: avoid; }
-`;
+// The built-in converter reads a .docx in a utility process (docx-worker.cjs) and stops it if it takes too long or
+// grows past this: a few hundred kilobytes of .docx can unpack into more than Folio's memory.
+const WORKER_MEMORY_LIMIT = 768 * 1024 ** 2;
+
+function runWorker(script, serviceName, data) {
+  return new Promise((resolve, reject) => {
+    const worker = utilityProcess.fork(path.join(__dirname, script), [], { serviceName });
+    const stop = (error, result) => {
+      clearTimeout(timer);
+      clearInterval(watch);
+      worker.removeAllListeners("exit");
+      worker.removeAllListeners("message");
+      worker.kill();
+      if (error) reject(error);
+      else resolve(result);
+    };
+    const timer = setTimeout(() => stop(new Error("timed out")), CONVERT_TIMEOUT_MS);
+    const watch = setInterval(() => {
+      const memory = app.getAppMetrics().find((metric) => metric.pid === worker.pid)?.memory.workingSetSize ?? 0; // KB
+      if (memory * 1024 > WORKER_MEMORY_LIMIT) stop(Object.assign(new Error("ran out of memory"), { userMessage: "It's too large to convert." }));
+    }, 250);
+    worker.once("message", (result) => stop(result.error ? Object.assign(new Error(result.error), { userMessage: result.userMessage }) : null, result));
+    worker.once("exit", (code) => stop(new Error(`stopped (exit code ${code})`)));
+    worker.postMessage(data);
+  });
+}
 
 // Most of the Americas print on Letter paper; everyone else on A4.
 const LETTER_COUNTRIES = new Set(["US", "CA", "MX", "CL", "CO", "VE", "PH", "GT", "PR", "CR", "PA", "DO", "SV", "NI", "HN"]);
@@ -106,98 +132,102 @@ async function printHtml(htmlFile) {
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
+  const timer = setTimeout(() => win.destroy(), CONVERT_TIMEOUT_MS);
   try {
     await win.loadFile(htmlFile);
-    return await win.webContents.printToPDF({
+    const data = await win.webContents.printToPDF({
       pageSize: LETTER_COUNTRIES.has(app.getLocaleCountryCode()) ? "Letter" : "A4",
-      preferCSSPageSize: true,
-      printBackground: true,
-      generateDocumentOutline: true,
-      generateTaggedPDF: true,
+      preferCSSPageSize: true, printBackground: true, generateDocumentOutline: true, generateTaggedPDF: true,
     });
+    if (data.length > MAX_DOCUMENT_BYTES) throw tooLarge();
+    return data;
   } finally {
-    win.destroy();
+    clearTimeout(timer);
+    if (!win.isDestroyed()) win.destroy();
     void ses.clearStorageData().catch(() => {});
   }
 }
 
-const escapeHtml = (text) => text.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-
 async function builtIn(source, dir, title) {
   const htmlFile = path.join(dir, "document.html");
-  let body;
   if (/\.docx$/i.test(source)) {
-    // Images come out as data: URLs, so the page needs nothing else.
-    body = (await require("mammoth").convertToHtml({ path: source })).value;
+    await runWorker("docx-worker.cjs", "Folio Word converter", { source, output: htmlFile, title });
   } else if (process.platform === "darwin") {
     await run("/usr/bin/textutil", ["-convert", "html", "-output", htmlFile, source]);
-    body = fs.readFileSync(htmlFile, "utf8");
+    const text = (await readRegular(htmlFile, MAX_HTML_BYTES)).toString("utf8");
+    const html = text.replace(/<head[^>]*>/i, (head) => `${head}<style>@page { margin: 1in; }</style>`);
+    if (Buffer.byteLength(html) > MAX_HTML_BYTES) throw tooLarge(MAX_HTML_BYTES);
+    await fs.promises.writeFile(htmlFile, html);
   } else {
     throw Object.assign(new Error("no converter"), { userMessage: "Converting .doc files needs Microsoft Word or LibreOffice. Install either one, or save the document as .docx." });
   }
-  const page = /<html[\s>]/i.test(body) ? body.replace(/<head[^>]*>/i, (head) => `${head}<style>@page { margin: 1in; }</style>`)
-    : `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${DOCUMENT_CSS}</style></head><body>${body}</body></html>`;
-  fs.writeFileSync(htmlFile, page);
   return printHtml(htmlFile);
 }
 
-/**
- * Converts the Word document `file` to PDF and resolves to its bytes. Rejects with an error whose `userMessage`
- * (when present) says what the user can do about it. `log` hears about each converter that didn't work.
- */
-async function convertToPdf(file, log = () => {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "folio-convert-"));
+// All converters receive the same private, size-bounded snapshot of the selected file.
+async function convertStaged(source, dir, title, log) {
+  const only = !app.isPackaged ? process.env.FOLIO_TEST_CONVERTER : undefined;
+  const failures = [];
+  const started = Date.now();
+  const fail = (converter, error) => {
+    if (error.userMessage) throw error;
+    failures.push(`${converter}: ${error.stderr || error.message}`);
+    log(`${converter} failed after ${Date.now() - started} ms: ${error.stderr || error.message}`);
+  };
+  if (process.platform === "win32" && (!only || only === "word")) {
+    const target = path.join(dir, "word.pdf");
+    try {
+      await withWord(source, target);
+      return await readRegular(target);
+    } catch (error) { fail("Word", error); }
+  }
+  const soffice = (!only || only === "libreoffice") && libreOffice();
+  if (soffice) {
+    try { return await readRegular(await withLibreOffice(soffice, source, dir)); }
+    catch (error) { fail("LibreOffice", error); }
+  }
+  if (!only || only === "builtin") {
+    try { return await builtIn(source, dir, title); }
+    catch (error) { fail("Folio", error); }
+  }
+  throw Object.assign(new Error(failures.join("\n")), { userMessage: "The document may be damaged or protected with a password." });
+}
+
+async function convertDocument(file, log) {
+  const profile = app.getPath("userData");
+  const dir = await fs.promises.mkdtemp(path.join(profile, "word-tmp-"));
   try {
-    // Converters work on a copy: Word may have the original open, and odd file names can't confuse them.
+    if (process.platform === "darwin") await run("/bin/chmod", ["-N", dir]);
     const source = path.join(dir, "source" + path.extname(file).toLowerCase());
-    fs.copyFileSync(file, source);
-    const title = path.basename(file).replace(/\.[^.]+$/, "");
-    const only = !app.isPackaged ? process.env.FOLIO_TEST_CONVERTER : undefined; // tests pick one: word, libreoffice, builtin
-    const failures = [];
-    const started = Date.now();
-    const fail = (converter, error) => {
-      failures.push(`${converter}: ${error.stderr || error.message}`);
-      log(`${converter} failed after ${Date.now() - started} ms: ${error.stderr || error.message}`);
-    };
-    if (process.platform === "win32" && (!only || only === "word")) {
-      const target = path.join(dir, "word.pdf");
+    const staged = await stageWord(file, source);
+    const cached = await cachedPdf(profile, staged);
+    if (cached) return cached;
+    const original = path.basename(file);
+    const data = await convertStaged(source, dir, path.parse(original).name, log);
+    if (staged.location) {
       try {
-        await withWord(source, target);
-        return fs.readFileSync(target);
-      } catch (error) { fail("Word", error); }
+        const ready = path.join(dir, "publish.pdf");
+        await fs.promises.writeFile(ready, data, { flag: "wx", mode: 0o600 });
+        const { index } = await runWorker("word-publish.cjs", "Folio Word export", { location: staged.location, ready });
+        if (index) {
+          const name = pdfName(staged.location.name, index);
+          await rememberPdf(profile, staged, index, data).catch((error) => log(error.message));
+          return { name, data, note: `Saved ${name} next to ${original}.` };
+        }
+      } catch (error) { log(error.message); }
     }
-    const soffice = (!only || only === "libreoffice") && libreOffice();
-    if (soffice) {
-      try { return fs.readFileSync(await withLibreOffice(soffice, source, dir)); }
-      catch (error) { fail("LibreOffice", error); }
-    }
-    if (!only || only === "builtin") {
-      try { return await builtIn(source, dir, title); }
-      catch (error) {
-        if (error.userMessage) throw error;
-        fail("Folio", error);
-      }
-    }
-    throw Object.assign(new Error(failures.join("\n")), { userMessage: "The document may be damaged or protected with a password." });
+    return { name: pdfName(original), data };
   } finally {
-    fs.rm(dir, { recursive: true, force: true }, () => {});
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch((error) => log(error.message));
   }
 }
 
-/**
- * Where the PDF for `file` goes: "Report.pdf" next to "Report.docx". An existing PDF is never replaced. When one
- * is at least as new as the document, it's the document already converted, so `existing` is set and it opens as is.
- */
-function pdfPathFor(file) {
-  const stem = file.replace(/\.[^.\\/]+$/, "");
-  const modified = fs.statSync(file).mtimeMs;
-  for (let n = 1; n < 100; n++) {
-    const candidate = n === 1 ? `${stem}.pdf` : `${stem} (${n}).pdf`;
-    let stat;
-    try { stat = fs.statSync(candidate); } catch { return { file: candidate, existing: false }; }
-    if (stat.isFile() && stat.mtimeMs >= modified) return { file: candidate, existing: true };
-  }
-  return null;
+// Native Office and Chromium can both be expensive. A second open waits for the first export and its receipt.
+let queue = Promise.resolve();
+function openWord(file, log = () => {}) {
+  const result = queue.then(() => convertDocument(file, log));
+  queue = result.then(() => {}, () => {});
+  return result;
 }
 
-module.exports = { WORD_FILE, convertToPdf, pdfPathFor };
+module.exports = { WORD_FILE, openWord };

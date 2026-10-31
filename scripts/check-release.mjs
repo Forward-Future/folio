@@ -10,24 +10,22 @@ import { pathToFileURL } from "node:url";
 
 export const RELEASES_REPO = "Forward-Future/folio-releases";
 
-/** Every file a release must carry, and the update feed (if any) whose version must match the release. */
-export const REQUIRED_ASSETS = [
-  { name: "Folio-Setup.exe" },
-  { name: "Folio-Setup.exe.blockmap" },
-  { name: "Folio-Portable.exe" },
-  { name: "latest.yml", feed: "yaml" },
-  { name: "Folio-mac.dmg" },
-  { name: "Folio-mac.zip" },
-  { name: "latest-mac.yml", feed: "yaml" },
-  { name: "Folio-linux-x86_64.AppImage" },
-  { name: "Folio-linux-amd64.deb" },
-  { name: "latest-linux.yml", feed: "yaml" },
-  { name: "Packages", feed: "apt" },
-  { name: "Packages.gz" },
-  { name: "Release" },
-  { name: "InRelease" },
-  { name: "Release.gpg" },
-];
+/** The files produced by each release job, and the update feeds whose versions must match the release. */
+export const RELEASE_ARTIFACTS = {
+  "folio-windows": [
+    { name: "Folio-Setup.exe" }, { name: "Folio-Setup.exe.blockmap" }, { name: "Folio-Portable.exe" },
+    { name: "latest.yml", feed: "yaml" },
+  ],
+  "folio-macos": [
+    { name: "Folio-mac.dmg" }, { name: "Folio-mac.dmg.blockmap" }, { name: "Folio-mac.zip" },
+    { name: "Folio-mac.zip.blockmap" }, { name: "latest-mac.yml", feed: "yaml" },
+  ],
+  "folio-linux": [
+    { name: "Folio-linux-x86_64.AppImage" }, { name: "Folio-linux-amd64.deb" }, { name: "latest-linux.yml", feed: "yaml" },
+    { name: "Packages", feed: "apt" }, { name: "Packages.gz" }, { name: "Release" }, { name: "InRelease" }, { name: "Release.gpg" },
+  ],
+};
+export const REQUIRED_ASSETS = Object.values(RELEASE_ARTIFACTS).flat();
 
 const headers = { Accept: "application/vnd.github+json", "User-Agent": "folio-release-check" };
 if (process.env.GITHUB_TOKEN || process.env.GH_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN || process.env.GH_TOKEN}`;
@@ -56,7 +54,7 @@ export async function checkRelease(tag = "latest") {
   return { tag: release.tag_name, problems };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { tag, problems } = await checkRelease(process.argv[2] ?? "latest");
   if (problems.length) {
     console.error(`Release ${tag} is incomplete:\n- ${problems.join("\n- ")}`);

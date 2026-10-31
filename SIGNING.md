@@ -1,9 +1,16 @@
 # Code signing
 
-Folio's release build (`.github/workflows/release-build.yml`) signs automatically as soon as the secrets below exist in
-the **Forward-Future/folio** repository (Settings → Secrets and variables → Actions, or `gh secret set NAME --repo
-Forward-Future/folio`). Until then, macOS builds are ad-hoc signed and Windows builds are unsigned, which still work but
-show a warning the first time they're opened.
+The release workflow uses three GitHub environments in **Forward-Future/folio**. Keep Apple credentials in
+`release-macos`, Azure credentials in `release-windows`, and the successor apt signing subkey in `release-linux`.
+Configure each environment to accept only release tags matching `v*` and require an independent release reviewer.
+Protect the creation, update and deletion of those tags with a repository ruleset. These controls are configured
+in GitHub. A workflow file in a tag cannot enforce restrictions on someone who can change that file.
+
+For an existing deployment, provision the environment secrets from your signing credential store, verify the
+expected credential names in each environment, then remove the repository-level copies. Rotate credentials that
+may have been exposed previously. If the apt key exists only as a non-exportable GitHub secret, retain the
+working key until a planned signing-key transition can reach installed clients. Windows builds can run unsigned
+and macOS builds use an ad-hoc signature until those platform credentials are configured.
 
 ## macOS: Apple Developer ID (signing + notarization)
 
@@ -21,11 +28,11 @@ build sets `folioMacSigned`, which turns on silent updates in `electron/main.cjs
 5. Add the secrets:
 
    ```sh
-   base64 -i DeveloperID.p12 | gh secret set MAC_CERTIFICATE_P12_BASE64 --repo Forward-Future/folio
-   gh secret set MAC_CERTIFICATE_PASSWORD --repo Forward-Future/folio      # the .p12 password
-   gh secret set APPLE_ID --repo Forward-Future/folio                      # your Apple ID email
-   gh secret set APPLE_APP_SPECIFIC_PASSWORD --repo Forward-Future/folio
-   gh secret set APPLE_TEAM_ID --repo Forward-Future/folio
+   base64 -i DeveloperID.p12 | gh secret set MAC_CERTIFICATE_P12_BASE64 --env release-macos --repo Forward-Future/folio
+   gh secret set MAC_CERTIFICATE_PASSWORD --env release-macos --repo Forward-Future/folio      # the .p12 password
+   gh secret set APPLE_ID --env release-macos --repo Forward-Future/folio                      # your Apple ID email
+   gh secret set APPLE_APP_SPECIFIC_PASSWORD --env release-macos --repo Forward-Future/folio
+   gh secret set APPLE_TEAM_ID --env release-macos --repo Forward-Future/folio
    ```
 
 The next `npm run release` produces a signed, notarized Mac app. Macs running an earlier, unsigned Folio still see the
@@ -45,21 +52,30 @@ certificates), and Windows checks the publisher on every update.
 5. Add the secrets:
 
    ```sh
-   gh secret set AZURE_TENANT_ID --repo Forward-Future/folio
-   gh secret set AZURE_CLIENT_ID --repo Forward-Future/folio
-   gh secret set AZURE_CLIENT_SECRET --repo Forward-Future/folio
-   gh secret set AZURE_SIGNING_ENDPOINT --repo Forward-Future/folio     # e.g. https://eus.codesigning.azure.net
-   gh secret set AZURE_SIGNING_ACCOUNT --repo Forward-Future/folio      # Trusted Signing account name
-   gh secret set AZURE_SIGNING_PROFILE --repo Forward-Future/folio      # certificate profile name
-   gh secret set AZURE_SIGNING_PUBLISHER --repo Forward-Future/folio    # exactly the validated publisher name
+   gh secret set AZURE_TENANT_ID --env release-windows --repo Forward-Future/folio
+   gh secret set AZURE_CLIENT_ID --env release-windows --repo Forward-Future/folio
+   gh secret set AZURE_CLIENT_SECRET --env release-windows --repo Forward-Future/folio
+   gh secret set AZURE_SIGNING_ENDPOINT --env release-windows --repo Forward-Future/folio     # e.g. https://eus.codesigning.azure.net
+   gh secret set AZURE_SIGNING_ACCOUNT --env release-windows --repo Forward-Future/folio      # Trusted Signing account name
+   gh secret set AZURE_SIGNING_PROFILE --env release-windows --repo Forward-Future/folio      # certificate profile name
+   gh secret set AZURE_SIGNING_PUBLISHER --env release-windows --repo Forward-Future/folio    # exactly the validated publisher name
    ```
 
-## Linux: apt repository key (already set up)
+## Linux apt signing bridge
 
-`APT_SIGNING_KEY` holds the private key that signs the apt repository published with every release; the public key is
-`build/linux/folio-archive-keyring.gpg` and is installed by the `.deb`. Fingerprint:
-`B337 6868 EE22 8389 6C2B  8ABD C455 276C CAE0 3757`.
+Release 1.10.9 uses the repository's existing `APT_SIGNING_KEY`. Its primary fingerprint is
+`B3376868EE2283896C2B8ABDC455276CCAE03757`. The package installs that public key alongside the successor
+primary `01AF1CBF971E5482C0641A6EEE0067F5E3B548FC`. The signing subkey
+`044910C952671F192A495B35E6BB76278A601D69` is provisioned as `APT_SIGNING_KEY_NEXT` in `release-linux`.
+The build checks both repository signatures using only the certificate from pre-bridge installations. It also
+checks the signed package index, the .deb digest and version, and the public keyring inside the .deb.
 
-The private key exists only in that GitHub secret. If it's ever lost or exposed, generate a new key, replace both the
-secret and `build/linux/folio-archive-keyring.gpg`, and release: existing .deb users then install the new .deb once
-from the releases page (apt will refuse the new signature until they do).
+Keep the bridge release and its signed apt metadata available at the immutable `v1.10.9` release URL.
+Clients must install the bridge package before a successor-only feed can work; refreshing the index alone is
+insufficient. Clients that miss the bridge can temporarily point their existing Folio apt source to
+`https://github.com/Forward-Future/folio-releases/releases/download/v1.10.9` with the same `signed-by`
+keyring and `./` distribution, install the bridge through apt, then restore the normal latest-release URL.
+
+Before a future cutover, independently escrow and test recovery of the successor primary key, confirm the
+deployment window and legacy-client recovery path, and change both the workflow's secret mapping and the
+signer fingerprint in `scripts/apt-repo.sh`. Retire the old secret only after validating the new feed.

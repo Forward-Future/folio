@@ -10,8 +10,8 @@ Folio ships for **Windows, macOS, and Linux from one codebase**. Every change an
 - **Never publish by hand.** Don't run `gh release create`/`upload`, `electron-builder --publish`, or a
   single-platform `npm run dist:*` and upload the output. A release missing a platform leaves those users behind; the
   daily **Release check** workflow opens an issue when that happens.
-- If the release build fails, nothing is published. Fix the problem on `main`, then run
-  `npm run release -- --publish-only` to publish the same tag.
+- For a transient build failure, rerun the failed jobs on the original tag-push run. Once it succeeds,
+  `npm run release -- --publish-only` resumes publication. A source fix on `main` needs a new version and tag.
 - The release must start at the latest `main` (the script checks). It pushes to `main` by name, so it works from a
   worktree on any branch, e.g. `git worktree add ../folio-release origin/main`. If the run stops after the tag is
   pushed (a closed terminal, a restarted session), run `npm run release -- --publish-only` to finish it.

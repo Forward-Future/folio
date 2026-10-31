@@ -2,6 +2,7 @@ import * as pdfjs from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { paintImageOverlay } from "./nightImages";
+import { checkPageCount, checkPdfSize } from "./pdfInput";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -10,9 +11,11 @@ const base = `${import.meta.env.BASE_URL}pdfjs/`;
 export { pdfjs };
 export type { PDFDocumentProxy };
 
-export function loadPdf(data: Uint8Array, password?: string) {
-  return pdfjs.getDocument({
-    // pdf.js transfers the buffer to the worker, so hand it a copy and keep ours for saving/printing.
+export async function loadPdf(data: Uint8Array, signal: AbortSignal, password?: string) {
+  checkPdfSize(data.byteLength);
+  signal.throwIfAborted();
+  const task = pdfjs.getDocument({
+    // pdf.js transfers this buffer to the worker. Folio still needs the input for identity, Recent and password retries.
     data: data.slice(),
     password,
     // PDFs are untrusted: don't render XFA forms (embedded PDF JavaScript is never run; no scripting manager).
@@ -23,6 +26,19 @@ export function loadPdf(data: Uint8Array, password?: string) {
     wasmUrl: `${base}wasm/`,
     iccUrl: `${base}iccs/`,
   });
+  const abort = () => { void task.destroy().catch(() => {}); };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    const pdf = await task.promise;
+    signal.throwIfAborted();
+    checkPageCount(pdf.numPages);
+    return pdf;
+  } catch (error) {
+    if (!signal.aborted) await task.destroy().catch(() => {});
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
 }
 
 /** Renders a page into a canvas sized to `width` CSS pixels. */

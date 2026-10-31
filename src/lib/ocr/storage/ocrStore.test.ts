@@ -68,31 +68,33 @@ describe("recognized text storage", () => {
 });
 
 describe("upgrading an existing library", () => {
-  it("adds the recognized-text store and leaves what was already saved", async () => {
+  it.each([3, 4])("upgrades a version %i library without losing notes", async (version) => {
     vi.resetModules();
     const factory = new IDBFactory();
     vi.stubGlobal("indexedDB", factory);
     vi.stubGlobal("IDBKeyRange", IDBKeyRange);
 
-    // A library as the previous release left it: version 3, with notes in it.
+    // Both pre-migration and currently shipping libraries can contain notes.
     await new Promise<void>((resolve, reject) => {
-      const request = factory.open("folio", 3);
+      const request = factory.open("folio", version);
       request.onupgradeneeded = () => {
         for (const name of ["recent", "notes", "ai"]) request.result.createObjectStore(name, { keyPath: "id" });
       };
       request.onsuccess = () => {
         const db = request.result;
-        const tx = db.transaction("notes", "readwrite");
+        const tx = db.transaction(["notes", "recent"], "readwrite");
         tx.objectStore("notes").put({ id: "old-doc", note: "from before", marks: [{ id: "m" }], updatedAt: 1 });
+        if (version === 4) tx.objectStore("recent").put({ id: "recent-doc", name: "saved.pdf", openedAt: 1, data: new Blob(["pdf"]) });
         tx.oncomplete = () => { db.close(); resolve(); };
         tx.onerror = () => reject(tx.error);
       };
       request.onerror = () => reject(request.error);
     });
 
-    const { getNotes } = await import("../../../recent");
+    const { getNotes, getRecent } = await import("../../../recent");
     const { saveOcrPage, getOcrPages } = await import("./ocrStore");
     expect((await getNotes("old-doc"))?.note).toBe("from before");
+    if (version === 4) expect((await getRecent("recent-doc"))?.name).toBe("saved.pdf");
     await saveOcrPage("old-doc", 1, [{ str: "new" }]);
     expect((await getOcrPages("old-doc")).get(1)).toEqual([{ str: "new" }]);
   });

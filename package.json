@@ -1,7 +1,7 @@
 {
   "name": "folio-pdf-reader",
   "private": true,
-  "version": "1.10.6",
+  "version": "1.10.9",
   "type": "module",
   "scripts": {
     "assets": "node scripts/copy-pdfjs-assets.mjs",
@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
+    "jszip": "^3.10.2",
     "mammoth": "^1.13.0"
   },
   "devDependencies": {
