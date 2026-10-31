@@ -1,6 +1,7 @@
 // End-to-end smoke test, run in CI on Windows, macOS, and Linux (and locally with `npm run smoke`):
 // launches the built app in Electron, opens the sample document, and checks that pages render, text is
-// selectable and highlightable, text boxes survive reopening, and the window chrome matches the platform.
+// selectable and highlightable, text boxes survive reopening, a scanned page can be recognized and saved with its text,
+// and the window chrome matches the platform.
 // Run `npm run build` first.
 import { _electron as electron } from "playwright-core";
 import { createRequire } from "node:module";
@@ -230,6 +231,46 @@ try {
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".freeTextEditor", { hasText: "Saved text box" }).waitFor({ timeout: 15_000 });
   console.log("ok  text box restored after reopening");
+
+  // A scanned page (an image, no text) is offered text recognition; once read, its words can be searched and selected.
+  // (Opened from the library by clicking, not with Ctrl+O: where the keyboard focus is after a text box was restored differs by platform.)
+  await page.getByTitle("Back to library").click();
+  const [chooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.getByRole("button", { name: /Open a PDF/ }).click(),
+  ]);
+  await chooser.setFiles(path.join(root, "scripts", "fixtures", "scanned-sample.pdf"));
+  await page.getByText("This looks like a scan").waitFor({ timeout: 30_000 });
+  assert.equal(await page.locator(".textLayer span:not(.markedContent)").count(), 0);
+  await page.getByRole("button", { name: "Recognize text" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".textLayer span:not(.markedContent)").length > 60, null, { timeout: 180_000 });
+  assert.match(await page.locator(".textLayer").first().innerText(), /Scanned\s+pages\s+become\s+searchable/);
+  console.log("ok  scanned page recognized");
+
+  // Saving a copy puts the recognized text into the file: reopened, it has the text at once and is not offered again.
+  const scannedCopy = path.join(env.FOLIO_TEST_USER_DATA, "scanned-copy.pdf");
+  await app.evaluate(({ session }, file) => {
+    globalThis.folioScanSaved = new Promise((resolve) => session.defaultSession.once("will-download", (_event, item) => {
+      item.setSavePath(file);
+      item.once("done", (_done, state) => resolve(state));
+    }));
+  }, scannedCopy);
+  await page.keyboard.press("ControlOrMeta+s");
+  await page.getByText("Saved a copy with the recognized text").waitFor({ timeout: 60_000 });
+  assert.equal(await app.evaluate(() => globalThis.folioScanSaved), "completed");
+  assert.equal(readFileSync(scannedCopy).subarray(0, 5).toString("latin1"), "%PDF-");
+  await page.getByTitle("Back to library").click();
+  const [copyChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.getByRole("button", { name: /Open a PDF/ }).click(),
+  ]);
+  await copyChooser.setFiles(scannedCopy);
+  await page.waitForFunction(() => document.title.startsWith("scanned-copy.pdf"), null, { timeout: 30_000 });
+  await page.waitForFunction(() => document.querySelectorAll(".textLayer span:not(.markedContent)").length > 60, null, { timeout: 30_000 });
+  assert.match(await page.locator(".textLayer").first().innerText(), /Scanned\s+pages\s+become\s+searchable/);
+  await page.waitForTimeout(2000); // a scan is looked for after the page is shown
+  assert.equal(await page.getByText("This looks like a scan").count(), 0);
+  console.log("ok  saved copy carries the recognized text");
 
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });

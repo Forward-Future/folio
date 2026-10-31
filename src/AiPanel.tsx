@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { Icon } from "./icons";
 import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
+import { ocrSession } from "./lib/ocr";
 import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
 
 const AiMarkdown = lazy(() => import("./AiMarkdown").then((module) => ({ default: module.AiMarkdown })));
@@ -25,30 +26,35 @@ const CLAUDE_MODELS = [
 ];
 
 // ── Document text ───────────────────────────────────────────────────────────────────────
-const textCache = new WeakMap<PDFDocumentProxy, Promise<{ text: string; truncated: boolean }>>();
+export type DocText = { text: string; truncated: boolean; recognized: boolean };
+// Keyed by the OCR version too: pages of a scan gain text while it is being recognized.
+const textCache = new WeakMap<PDFDocumentProxy, { version: number; text: Promise<DocText> }>();
 
-function documentText(pdf: PDFDocumentProxy) {
-  let cached = textCache.get(pdf);
-  if (!cached) {
-    cached = (async () => {
-      let text = "";
-      let truncated = false;
-      for (let n = 1; n <= pdf.numPages; n++) {
-        const content = await (await pdf.getPage(n)).getTextContent();
-        const page = content.items.map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : " ") : "")).join("")
-          .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-        const block = `[Page ${n}]\n${page}\n\n`;
-        if (text.length + block.length > MAX_DOC_CHARS) {
-          truncated = true;
-          break;
-        }
-        text += block;
+export function documentText(pdf: PDFDocumentProxy) {
+  const session = ocrSession(pdf);
+  const version = session?.version ?? 0;
+  const hit = textCache.get(pdf);
+  if (hit?.version === version) return hit.text;
+  // Text recognized earlier counts too, whether it is kept alongside the document or was saved into it.
+  const recognized = !!session && (session.embedded.size > 0 || [...session.pages.values()].some((items) => items.length));
+  const text = (async () => {
+    let text = "";
+    let truncated = false;
+    for (let n = 1; n <= pdf.numPages; n++) {
+      const content = await (await pdf.getPage(n)).getTextContent();
+      const page = content.items.map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : " ") : "")).join("")
+        .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+      const block = `[Page ${n}]\n${page}\n\n`;
+      if (text.length + block.length > MAX_DOC_CHARS) {
+        truncated = true;
+        break;
       }
-      return { text, truncated };
-    })();
-    textCache.set(pdf, cached);
-  }
-  return cached;
+      text += block;
+    }
+    return { text, truncated, recognized };
+  })();
+  textCache.set(pdf, { version, text });
+  return text;
 }
 
 // ── Panel ─────────────────────────────────────────────────────────────────────────────────
