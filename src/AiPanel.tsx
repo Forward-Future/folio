@@ -51,24 +51,6 @@ function documentText(pdf: PDFDocumentProxy) {
   return cached;
 }
 
-function instructions(name: string, doc: { text: string; truncated: boolean }) {
-  const hasText = doc.text.replace(/\[Page \d+\]/g, "").trim().length > 0;
-  return [
-    `You are the reading assistant in Folio, a PDF reader. The user is reading "${name}".`,
-    hasText
-      ? `Its extracted text is below between <document> tags, with [Page N] markers.${doc.truncated ? " The document is long, so only the beginning is included; say so if a question may depend on later pages." : ""}`
-      : "This PDF has no extractable text (it may be scanned images), so you can only answer from the passages the user quotes.",
-    "Guidelines:",
-    "- Answer from the document. If it doesn't contain the answer, say so plainly; you may add general knowledge if it helps, clearly labeled as such.",
-    "- Cite page numbers like (p. 12) when you use specific information from the document.",
-    "- When the user quotes a passage, focus on that passage and use the rest of the document as context.",
-    "- Be concise. Use short paragraphs, and bullet lists where they help. Use light Markdown: **bold**, lists, and `code`.",
-    "- Write mathematical notation in LaTeX: \\( ... \\) for inline math and \\[ ... \\] for display equations. Do not put equations in code blocks.",
-    "",
-    hasText ? `<document>\n${doc.text}</document>` : "",
-  ].join("\n");
-}
-
 // ── Panel ─────────────────────────────────────────────────────────────────────────────────
 const conversations = new Map<string, Message[]>();
 
@@ -96,6 +78,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const [signingIn, setSigningIn] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const busyRef = useRef<string | null>(null);
+  const preparing = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -175,24 +158,38 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  const ready = provider === "chatgpt" ? chatgptConnected : !!status?.claude.installed && status.claude.loggedIn;
+  const ready = loaded && (provider === "chatgpt" ? chatgptConnected : !!status?.claude.installed && status.claude.loggedIn);
+
+  useEffect(() => () => { preparing.current = null; }, []);
+  const stop = () => {
+    if (!busy) return;
+    if (preparing.current !== busy) { void ai?.cancel(busy); return; }
+    preparing.current = null;
+    busyRef.current = null;
+    setBusy(null);
+    setMessages(list => list.slice(0, -1));
+  };
 
   const send = useCallback(async (question: string) => {
     if (!ai || !question.trim() || busyRef.current || !ready) return;
-    const doc = await documentText(pdf);
-    const userContent = context
-      ? `About this passage from page ${context.page}:\n"""\n${context.text}\n"""\n\n${question.trim()}`
-      : question.trim();
-    const history: Message[] = [...messages.filter((m) => !m.error && m.content), { role: "user", content: userContent }];
+    const turn: Message = { role: "user", content: question.trim(), ...(context ? { context } : {}) };
+    const history = [...messages.filter((m) => !m.error && m.content), turn];
     const id = crypto.randomUUID();
+    preparing.current = id;
     busyRef.current = id;
     setBusy(id);
-    setMessages([...messages, { role: "user", content: question.trim(), context: context ?? undefined }, { role: "assistant", content: "" }]);
+    setMessages([...messages, turn, { role: "assistant", content: "" }]);
     setInput("");
     onClearContext();
     try {
-      await ai.ask({ id, provider, model, instructions: instructions(docName, doc), messages: history.map(({ role, content }) => ({ role, content })) });
+      const doc = await documentText(pdf);
+      if (preparing.current !== id) return;
+      preparing.current = null;
+      await ai.ask({ id, provider, model, document: { name: docName, ...doc },
+        messages: history.map(({ role, content, context }) => ({ role, content, ...(context ? { context } : {}) })) });
     } catch {
+      if (busyRef.current !== id) return;
+      preparing.current = null;
       busyRef.current = null;
       setBusy(null);
       setMessages((list) => {
@@ -347,7 +344,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
             }}
           />
           {busy ? (
-            <button type="button" className="send-btn" onClick={() => void ai?.cancel(busy)} title="Stop" aria-label="Stop">
+            <button type="button" className="send-btn" onClick={stop} title="Stop" aria-label="Stop">
               <Icon name="stop" size={15} />
             </button>
           ) : (

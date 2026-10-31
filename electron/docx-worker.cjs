@@ -2,6 +2,8 @@
 // It runs in a utility process of its own, so a document built to exhaust memory or stall the parser (a small file
 // can unpack into gigabytes) takes down only this process, not Folio.
 const fs = require("node:fs");
+const { boundedParts } = require("./docx-parts.cjs");
+const { readRegular } = require("./document-files.cjs");
 
 // Folio's own layout: a printed page with Word's usual defaults.
 const DOCUMENT_CSS = `
@@ -23,10 +25,13 @@ const escapeHtml = (text) => text.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<"
 process.parentPort.on("message", async ({ data: { source, output, title } }) => {
   try {
     // Images come out as data: URLs, so the page needs nothing else.
-    const body = (await require("mammoth").convertToHtml({ path: source })).value;
-    fs.writeFileSync(output, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${DOCUMENT_CSS}</style></head><body>${body}</body></html>`);
+    const file = await boundedParts(await readRegular(source));
+    const body = (await require("mammoth").convertToHtml({ file }, { externalFileAccess: false })).value;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${DOCUMENT_CSS}</style></head><body>${body}</body></html>`;
+    file.checkHtml(html);
+    await fs.promises.writeFile(output, html, { flag: "wx", mode: 0o600 });
     process.parentPort.postMessage({});
   } catch (error) {
-    process.parentPort.postMessage({ error: String(error?.stack || error) });
+    process.parentPort.postMessage({ error: String(error?.message || error).slice(0, 2048), userMessage: error?.userMessage });
   }
 });

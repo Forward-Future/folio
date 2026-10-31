@@ -60,6 +60,7 @@ export class MarkupController {
   #viewer: PDFViewer;
   #ui: UIManager | null = null;
   #docId: string | null = null;
+  #generation = 0;
   #persist = false;
   #note = "";
   /** Saved marks whose page hasn't rendered yet, keyed by page index. */
@@ -83,16 +84,20 @@ export class MarkupController {
       this.#ui = uiManager;
     });
     // pdf.js asks the host app to enter highlight mode when highlighting a selection.
-    bus.on("showannotationeditorui", ({ mode }: { mode: number }) => {
-      this.#viewer.annotationEditorMode = { mode };
+    bus.on("showannotationeditorui", ({ source, mode }: { source: UIManager; mode: number }) => {
+      if (source === this.#ui) this.#viewer.annotationEditorMode = { mode };
     });
     document.addEventListener("selectionchange", () => {
       const selection = document.getSelection();
       const anchor = selection?.anchorNode instanceof Element ? selection.anchorNode : selection?.anchorNode?.parentElement;
       const text = selection && !selection.isCollapsed ? selection.toString().replace(/\s+/g, " ").trim() : "";
-      if (text && anchor?.closest(".textLayer")) this.#lastSelection = { text, at: Date.now() };
+      if (this.#docId && text && anchor?.closest(".textLayer") && this.#viewer.viewer?.contains(anchor)) {
+        this.#lastSelection = { text, at: Date.now() };
+      }
     });
-    bus.on("annotationeditorlayerrendered", ({ pageNumber }: { pageNumber: number }) => void this.#restorePage(pageNumber - 1));
+    bus.on("annotationeditorlayerrendered", ({ source, pageNumber }: { source: unknown; pageNumber: number }) => {
+      if (source === this.#viewer.getPageView(pageNumber - 1)) void this.#restorePage(pageNumber - 1);
+    });
     for (const name of ["annotationeditorstateschanged", "annotationeditormodechanged", "editingaction"]) {
       bus.on(name, () => this.scheduleSync());
     }
@@ -104,16 +109,12 @@ export class MarkupController {
 
   /** Loads saved markup for a newly opened document. Password-protected documents aren't persisted. */
   async load(docId: string, persist: boolean) {
-    // Save the outgoing document first (its editors are still live at this point).
-    this.sync();
-    this.flush();
+    this.unload();
+    const generation = this.#generation;
     this.#docId = docId;
-    this.#persist = persist;
-    this.#pending.clear();
-    this.#known.clear();
-    this.#note = "";
     const saved = persist ? await getNotes(docId) : undefined;
-    if (this.#docId !== docId) return;
+    if (generation !== this.#generation) return;
+    this.#persist = persist;
     this.#note = saved?.note ?? "";
     for (const mark of saved?.marks ?? []) {
       this.#known.set(mark.id, mark);
@@ -131,6 +132,14 @@ export class MarkupController {
     // that schedules a sync, so it would otherwise be lost.
     this.sync();
     this.flush();
+    this.#generation++;
+    this.#persist = false;
+    this.#ui = null;
+    this.quickHighlighting = false;
+    this.#restoring.clear();
+    this.#lastSelection = { text: "", at: 0 };
+    const selection = document.getSelection();
+    if (selection?.anchorNode && this.#viewer.viewer?.contains(selection.anchorNode)) selection.removeAllRanges();
     this.#docId = null;
     this.#pending.clear();
     this.#known.clear();
@@ -143,7 +152,7 @@ export class MarkupController {
     const layer = this.#ui?.getLayer(page);
     if (!marks?.length || !layer || this.#restoring.has(page)) return;
     this.#restoring.add(page);
-    const docId = this.#docId;
+    const generation = this.#generation;
     try {
       let added = false;
       // Marks pdf.js couldn't bring back stay pending, which keeps their saved records (and Notes entries) intact.
@@ -154,7 +163,7 @@ export class MarkupController {
         // (the same steps pdf.js takes when it duplicates a page).
         const textBox = mark.type === "freetext";
         const editor = await layer.deserialize({ ...mark.data, deleted: false, annotationElementId: null, isCopy: textBox }).catch(() => null);
-        if (this.#docId !== docId) continue;
+        if (generation !== this.#generation) return;
         if (!editor) {
           missed.push(mark);
           continue;
@@ -174,12 +183,10 @@ export class MarkupController {
       }
       // pdf.js hides an editor layer that was empty when its page rendered, and saved marks arrive after that.
       if (added) layer.div.hidden = false;
-      if (this.#docId === docId) {
-        if (missed.length) this.#pending.set(page, missed);
-        else this.#pending.delete(page);
-      }
+      if (missed.length) this.#pending.set(page, missed);
+      else this.#pending.delete(page);
     } finally {
-      this.#restoring.delete(page);
+      if (generation === this.#generation) this.#restoring.delete(page);
     }
     this.scheduleSync();
   }
@@ -312,9 +319,11 @@ export class MarkupController {
    * need these added to include every mark.
    */
   async unrenderedMarks(pdf: PDFDocumentProxy): Promise<Record<string, unknown>[]> {
+    const generation = this.#generation;
     const marks: Record<string, unknown>[] = [];
     for (const [pageIndex, pending] of this.#pending) {
       const [, , pageRight] = (await pdf.getPage(pageIndex + 1)).view;
+      if (generation !== this.#generation) throw new Error("The document changed.");
       for (const mark of pending) {
         const data: Record<string, unknown> = { ...mark.data, pageIndex, deleted: false };
         const top = (mark.data.rect as number[] | undefined)?.[3];
@@ -328,6 +337,7 @@ export class MarkupController {
 
   /** Highlights the current text selection in one click. Resolves to the new mark's id. */
   async highlightSelection(color: string): Promise<string | null> {
+    const generation = this.#generation;
     const ui = this.#ui;
     const selection = document.getSelection();
     if (!ui || !selection || selection.isCollapsed) return null;
@@ -335,7 +345,10 @@ export class MarkupController {
     // afterwards, and pdf.js drops a highlight (and the selection) on a page without one. Wait for the layer.
     const anchor = selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode?.parentElement;
     const page = Number((anchor?.closest(".page") as HTMLElement | null)?.dataset.pageNumber);
-    for (let i = 0; i < 200 && page && !ui.getLayer(page - 1); i++) await new Promise((r) => setTimeout(r, 25));
+    for (let i = 0; i < 200 && page && !ui.getLayer(page - 1); i++) {
+      await new Promise((r) => setTimeout(r, 25));
+      if (generation !== this.#generation) return null;
+    }
     if (selection.isCollapsed) return null;
     this.sync();
     const before = new Set(this.#liveEditors().map((e) => e.id));
@@ -352,6 +365,7 @@ export class MarkupController {
       let created: Editor | undefined;
       for (let i = 0; i < 400 && !created; i++) {
         await new Promise((r) => setTimeout(r, 25));
+        if (generation !== this.#generation) return null;
         created = this.#liveEditors().find((e) => !before.has(e.id) && !e.isEmpty());
       }
       // pdf.js focuses the new highlight. Leaving highlight mode with it focused moves focus to the current page's
@@ -361,11 +375,11 @@ export class MarkupController {
       if (focused instanceof HTMLElement && focused.closest(".annotationEditorLayer")) focused.blur();
       this.#viewer.annotationEditorMode = { mode: AnnotationEditorType.NONE };
       await new Promise((r) => setTimeout(r, 0));
-      if (!created) return null;
+      if (!created || generation !== this.#generation) return null;
       this.sync();
       return created.__folioMark ?? null;
     } finally {
-      this.quickHighlighting = false;
+      if (generation === this.#generation) this.quickHighlighting = false;
     }
   }
 
