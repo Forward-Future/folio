@@ -1,7 +1,44 @@
 # Changelog
 
-## 1.10.4
+## 1.10.9
 
+- Opening a Word document now checks the source and converted PDF before reusing a saved copy. Folio also
+  protects private output files and limits the work a document can cause during conversion.
+- PDF imports enforce the size limit before buffering the whole file and accept up to 10,000 pages. Desktop URL
+  imports check the address they actually connect to, including redirects and images on imported webpages.
+- Recent previews, annotations and Ask AI conversations follow the full document contents. Folio keeps older
+  records for PDFs over 2 MiB on disk when it cannot safely match them. Ask AI keeps document text separate from its instructions.
+- The release process verifies the source tag, build and platform artifacts. Linux package users receive a second
+  trusted apt key through an update signed by the existing key. Install this release before the signing-key switch.
+
+## 1.10.8
+
+- Clicking a link in a PDF shows where it goes and asks before opening your browser or mail app. A PDF can make a link
+  invisible and as large as the page, so any click could open a site.
+- A pasted or dropped link fills in **Open from URL** instead of opening straight away, so you can check it first.
+- Links and webpages can't reach your computer or local network (your router, a NAS, a dev server) unless you say so.
+  Before, a web address that only pointed there by name got through.
+- Word documents that Folio converts itself are read in a separate process. A document built to use up memory now
+  fails with a message instead of closing Folio. LibreOffice converts with macros and linked content turned off.
+
+## 1.10.7
+
+- Highlighting keeps working after your first highlight. Before, it could stop until you reopened the document, and
+  on a busy computer a highlight could be dropped.
+
+## 1.10.6
+
+- Open Word documents (.docx and .doc) in Folio: right-click and choose **Open with → Folio**, use **Open**, or drop
+  one in. Folio converts it to a PDF, saves it next to the original ("Report.docx" gets "Report.pdf"), and opens it.
+  It uses Microsoft Word or LibreOffice when installed, otherwise its own converter for .docx. Word stays the
+  default app for double-clicking.
+
+## 1.10.5
+
+- Ask AI shows equations as math, in answers and in saved chats.
+- Printing no longer marks unsaved highlights and signatures as saved, so Folio still asks before you open another
+  document over them.
+- Highlighting text on a page that's still loading works. Before, it could drop the highlight and your selection.
 - Opening a PDF uses less memory by avoiding an extra copy of the document.
 - Downloads include fewer unused resources without changing Folio's language or PDF support.
 - The Ask AI welcome card stays inside its panel instead of covering the document.

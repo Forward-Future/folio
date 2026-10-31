@@ -1,8 +1,10 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
 import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
 import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
+
+const AiMarkdown = lazy(() => import("./AiMarkdown").then((module) => ({ default: module.AiMarkdown })));
 
 export interface AiContext {
   text: string;
@@ -49,68 +51,6 @@ function documentText(pdf: PDFDocumentProxy) {
   return cached;
 }
 
-function instructions(name: string, doc: { text: string; truncated: boolean }) {
-  const hasText = doc.text.replace(/\[Page \d+\]/g, "").trim().length > 0;
-  return [
-    `You are the reading assistant in Folio, a PDF reader. The user is reading "${name}".`,
-    hasText
-      ? `Its extracted text is below between <document> tags, with [Page N] markers.${doc.truncated ? " The document is long, so only the beginning is included; say so if a question may depend on later pages." : ""}`
-      : "This PDF has no extractable text (it may be scanned images), so you can only answer from the passages the user quotes.",
-    "Guidelines:",
-    "- Answer from the document. If it doesn't contain the answer, say so plainly; you may add general knowledge if it helps, clearly labeled as such.",
-    "- Cite page numbers like (p. 12) when you use specific information from the document.",
-    "- When the user quotes a passage, focus on that passage and use the rest of the document as context.",
-    "- Be concise. Use short paragraphs, and bullet lists where they help. Use only light Markdown: **bold**, lists, and `code`.",
-    "",
-    hasText ? `<document>\n${doc.text}</document>` : "",
-  ].join("\n");
-}
-
-// ── Light Markdown rendering (no HTML is ever injected) ──────────────────────────────────
-function inline(text: string, onPage: (n: number) => void): ReactNode[] {
-  const out: ReactNode[] = [];
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\((?:p|pp|page|pages)\.?\s*(\d+)(?:[–-]\d+)?\))/gi;
-  let last = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text))) {
-    if (match.index > last) out.push(text.slice(last, match.index));
-    const token = match[0];
-    if (token.startsWith("**")) out.push(<strong key={out.length}>{token.slice(2, -2)}</strong>);
-    else if (token.startsWith("`")) out.push(<code key={out.length}>{token.slice(1, -1)}</code>);
-    else {
-      const n = Number(match[2]);
-      out.push(<button key={out.length} className="page-ref" onClick={() => onPage(n)} title={`Go to page ${n}`}>{token}</button>);
-    }
-    last = match.index + token.length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
-
-function Markdown({ text, onPage }: { text: string; onPage: (n: number) => void }) {
-  const blocks: ReactNode[] = [];
-  const lines = text.split("\n");
-  for (let i = 0; i < lines.length; ) {
-    const line = lines[i];
-    if (!line.trim()) { i++; continue; }
-    const bullet = /^\s*(?:[-*•]|\d+[.)])\s+/;
-    if (bullet.test(line)) {
-      const ordered = /^\s*\d/.test(line);
-      const items: string[] = [];
-      while (i < lines.length && bullet.test(lines[i])) items.push(lines[i++].replace(bullet, ""));
-      const List = ordered ? "ol" : "ul";
-      blocks.push(<List key={blocks.length}>{items.map((item, k) => <li key={k}>{inline(item, onPage)}</li>)}</List>);
-      continue;
-    }
-    const heading = /^#{1,4}\s+(.*)/.exec(line);
-    if (heading) { blocks.push(<p key={blocks.length}><strong>{inline(heading[1], onPage)}</strong></p>); i++; continue; }
-    const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !bullet.test(lines[i]) && !/^#{1,4}\s/.test(lines[i])) para.push(lines[i++]);
-    blocks.push(<p key={blocks.length}>{para.map((p, k) => <Fragment key={k}>{k > 0 && <br />}{inline(p, onPage)}</Fragment>)}</p>);
-  }
-  return <>{blocks}</>;
-}
-
 // ── Panel ─────────────────────────────────────────────────────────────────────────────────
 const conversations = new Map<string, Message[]>();
 
@@ -138,6 +78,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const [signingIn, setSigningIn] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const busyRef = useRef<string | null>(null);
+  const preparing = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -217,24 +158,38 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  const ready = provider === "chatgpt" ? chatgptConnected : !!status?.claude.installed && status.claude.loggedIn;
+  const ready = loaded && (provider === "chatgpt" ? chatgptConnected : !!status?.claude.installed && status.claude.loggedIn);
+
+  useEffect(() => () => { preparing.current = null; }, []);
+  const stop = () => {
+    if (!busy) return;
+    if (preparing.current !== busy) { void ai?.cancel(busy); return; }
+    preparing.current = null;
+    busyRef.current = null;
+    setBusy(null);
+    setMessages(list => list.slice(0, -1));
+  };
 
   const send = useCallback(async (question: string) => {
     if (!ai || !question.trim() || busyRef.current || !ready) return;
-    const doc = await documentText(pdf);
-    const userContent = context
-      ? `About this passage from page ${context.page}:\n"""\n${context.text}\n"""\n\n${question.trim()}`
-      : question.trim();
-    const history: Message[] = [...messages.filter((m) => !m.error && m.content), { role: "user", content: userContent }];
+    const turn: Message = { role: "user", content: question.trim(), ...(context ? { context } : {}) };
+    const history = [...messages.filter((m) => !m.error && m.content), turn];
     const id = crypto.randomUUID();
+    preparing.current = id;
     busyRef.current = id;
     setBusy(id);
-    setMessages([...messages, { role: "user", content: question.trim(), context: context ?? undefined }, { role: "assistant", content: "" }]);
+    setMessages([...messages, turn, { role: "assistant", content: "" }]);
     setInput("");
     onClearContext();
     try {
-      await ai.ask({ id, provider, model, instructions: instructions(docName, doc), messages: history.map(({ role, content }) => ({ role, content })) });
+      const doc = await documentText(pdf);
+      if (preparing.current !== id) return;
+      preparing.current = null;
+      await ai.ask({ id, provider, model, document: { name: docName, ...doc },
+        messages: history.map(({ role, content, context }) => ({ role, content, ...(context ? { context } : {}) })) });
     } catch {
+      if (busyRef.current !== id) return;
+      preparing.current = null;
       busyRef.current = null;
       setBusy(null);
       setMessages((list) => {
@@ -345,7 +300,9 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
                     )}
                   </div>
                 ) : m.content ? (
-                  <Markdown text={m.content} onPage={onGoToPage} />
+                  <Suspense fallback={<p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}>
+                    <AiMarkdown text={m.content} onPage={onGoToPage} />
+                  </Suspense>
                 ) : (
                   <div className="typing" aria-label="Thinking"><span /><span /><span /></div>
                 )}
@@ -387,7 +344,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
             }}
           />
           {busy ? (
-            <button type="button" className="send-btn" onClick={() => void ai?.cancel(busy)} title="Stop" aria-label="Stop">
+            <button type="button" className="send-btn" onClick={stop} title="Stop" aria-label="Stop">
               <Icon name="stop" size={15} />
             </button>
           ) : (

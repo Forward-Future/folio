@@ -58,13 +58,12 @@ function UpdateLine({ status }: { status: UpdateStatus }) {
 interface Props {
   onPick: () => void;
   onOpenUrl: () => void;
-  onOpenBytes: (name: string, data: Uint8Array) => void;
-  onError: (message: string) => void;
+  onOpenBlob: (name: string, data: Blob) => Promise<boolean>;
   onSample: () => void;
   loading: boolean;
 }
 
-export function Welcome({ onPick, onOpenUrl, onOpenBytes, onError, onSample, loading }: Props) {
+export function Welcome({ onPick, onOpenUrl, onOpenBlob, onSample, loading }: Props) {
   const [recent, setRecent] = useState<RecentFile[]>([]);
   const [version, setVersion] = useState<string | null>(null);
 
@@ -81,12 +80,7 @@ export function Welcome({ onPick, onOpenUrl, onOpenBytes, onError, onSample, loa
 
   // A stored blob that can't be read back is dead weight: drop the entry so it doesn't keep failing.
   const reopen = async (f: RecentFile) => {
-    try {
-      onOpenBytes(f.name, new Uint8Array(await f.data.arrayBuffer()));
-    } catch {
-      await forget(f.id);
-      onError(`Couldn't reopen “${f.name}”. It was removed from Recent.`);
-    }
+    if (!await onOpenBlob(f.name, f.data)) await forget(f.id);
   };
 
   const forget = async (id: string) => {
@@ -108,7 +102,8 @@ export function Welcome({ onPick, onOpenUrl, onOpenBytes, onError, onSample, loa
           </div>
           <div className="dropzone-text">
             <strong>{loading ? "Opening…" : "Open a PDF"}</strong>
-            <span>Drop a PDF, a link, or a webpage anywhere, or click to browse</span>
+            <span>{window.folioDesktop ? "Drop a PDF, a Word document, a link, or a webpage anywhere, or click to browse"
+              : "Drop a PDF, a link, or a webpage anywhere, or click to browse"}</span>
           </div>
           <kbd>{keys("Ctrl O")}</kbd>
         </button>

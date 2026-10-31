@@ -1,19 +1,33 @@
 // Minimal bridge between the Folio page and the desktop shell.
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("folioDesktop", {
-  /** Called with { name, data: Uint8Array } whenever a PDF is opened from Explorer. */
+  /** Called with (name, data, note?) whenever a PDF is opened from Explorer, or a Word document has been converted. */
   onOpenFile(callback) {
-    const listener = (_e, file) => callback(file.name, new Uint8Array(file.data));
+    const listener = (_e, file) => callback(file.name, new Uint8Array(file.data), file.note ?? undefined);
     ipcRenderer.on("folio:open-file", listener);
     return () => ipcRenderer.removeListener("folio:open-file", listener);
   },
+  /** Called with the file name when a Word document starts converting, and with a message if it fails. */
+  onConverting(callback) {
+    const listener = (_e, file) => callback(file.name);
+    ipcRenderer.on("folio:converting", listener);
+    return () => ipcRenderer.removeListener("folio:converting", listener);
+  },
+  onOpenFailed(callback) {
+    const listener = (_e, failure) => callback(failure.message);
+    ipcRenderer.on("folio:open-failed", listener);
+    return () => ipcRenderer.removeListener("folio:open-failed", listener);
+  },
+  /** Converts a picked or dropped Word document; it arrives through onOpenFile. */
+  openDocument: (file) => ipcRenderer.invoke("folio:open-document", webUtils.getPathForFile(file)),
   ready: () => ipcRenderer.invoke("folio:ready"),
   platform: process.platform,
   openDownload: () => ipcRenderer.invoke("folio:open-download"),
-  /** Downloads a PDF from an http(s) link; resolves to { name, data: Uint8Array }. */
+  /** Downloads a PDF from an http(s) link; resolves to { name, data: Uint8Array }, or null if the user said no. */
   async fetchPdf(url) {
     const file = await ipcRenderer.invoke("folio:fetch-pdf", url);
+    if (file.cancelled) return null;
     if (file.error) throw new Error(file.error);
     return { name: file.name, data: new Uint8Array(file.data) };
   },

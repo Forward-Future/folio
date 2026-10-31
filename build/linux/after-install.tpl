@@ -60,7 +60,13 @@ fi
 # and the key that signs it, unless the administrator already configured or removed them deliberately.
 FOLIO_KEYRING='/usr/share/keyrings/folio-archive-keyring.gpg'
 FOLIO_SOURCE='/etc/apt/sources.list.d/folio.list'
-install -m 0644 '/opt/${sanitizedProductName}/resources/folio-archive-keyring.gpg' "$FOLIO_KEYRING" || true
+# An upgrade is complete only once apt can use the new keyring. Preserve the old file on errors.
+key_tmp=$(mktemp /usr/share/keyrings/.folio-archive-keyring.XXXXXX) || exit 1
+if ! install -m 0644 '/opt/${sanitizedProductName}/resources/folio-archive-keyring.gpg' "$key_tmp" ||
+   ! mv -fT -- "$key_tmp" "$FOLIO_KEYRING"; then
+  rm -f -- "$key_tmp"
+  exit 1
+fi
 if [ ! -e "$FOLIO_SOURCE" ] && [ ! -e '/etc/apt/sources.list.d/folio.list.disabled' ]; then
   echo "deb [arch=amd64 signed-by=$FOLIO_KEYRING] https://github.com/Forward-Future/folio-releases/releases/latest/download ./" > "$FOLIO_SOURCE" || true
 fi

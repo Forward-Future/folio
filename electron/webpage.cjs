@@ -4,6 +4,8 @@
 const { BrowserWindow, session } = require("electron");
 const crypto = require("node:crypto");
 const { safePdfName } = require("./filenames.cjs");
+const { guardSession } = require("./network.cjs");
+const { MAX_DOCUMENT_BYTES } = require("./document-files.cjs");
 
 const TOTAL_TIMEOUT_MS = 60_000;
 // Pages are laid out like a desktop browser window: 1280 CSS px wide, no margins.
@@ -71,47 +73,40 @@ const PREPARE_PAGE = `(async () => {
 })()`;
 
 /**
- * Loads `rawUrl` and prints it to PDF. `isLocalHost(hostname)` identifies loopback/private hosts:
- * a public page may not make requests into the local network.
+ * Loads `rawUrl` and prints it to PDF. Local access is limited to the origin and addresses the user approved.
  * Resolves to { name, data } or { error }.
  */
-async function captureWebpage(rawUrl, isLocalHost) {
+async function captureWebpage(rawUrl, approvedLocal) {
   const url = new URL(rawUrl);
   const ses = session.fromPartition(`folio-webpage-${crypto.randomUUID()}`); // in-memory only
   ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   ses.setPermissionCheckHandler(() => false);
   ses.on("will-download", (event) => event.preventDefault());
-  const publicPage = !isLocalHost(url.hostname);
-  ses.webRequest.onBeforeRequest((details, callback) => {
-    let target;
-    try { target = new URL(details.url); } catch { return callback({ cancel: true }); }
-    const web = target.protocol === "http:" || target.protocol === "https:";
-    if (!web && target.protocol !== "data:" && target.protocol !== "blob:") return callback({ cancel: true });
-    if (web && publicPage && isLocalHost(target.hostname)) return callback({ cancel: true });
-    callback({});
-  });
+  const guard = await guardSession(ses, session.defaultSession, approvedLocal);
 
-  const win = new BrowserWindow({
-    show: false,
-    width: PAGE_WIDTH_PX,
-    height: PAGE_HEIGHT_PX,
-    useContentSize: true,
-    webPreferences: {
-      session: ses,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: true,
-      spellcheck: false,
-      backgroundThrottling: false,
-    },
-  });
-  const contents = win.webContents;
-  contents.setAudioMuted(true);
-  contents.setWindowOpenHandler(() => ({ action: "deny" }));
-  contents.on("will-navigate", (event, next) => { if (!/^https?:/i.test(next)) event.preventDefault(); });
-
+  let win;
   try {
+    win = new BrowserWindow({
+      show: false,
+      width: PAGE_WIDTH_PX,
+      height: PAGE_HEIGHT_PX,
+      useContentSize: true,
+      webPreferences: {
+        session: ses,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        webSecurity: true,
+        spellcheck: false,
+        backgroundThrottling: false,
+      },
+    });
+    const contents = win.webContents;
+    contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
+    contents.setAudioMuted(true);
+    contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    contents.on("will-navigate", (event, next) => { if (!/^https?:/i.test(next)) event.preventDefault(); });
+
     // Lay the page out with its screen styles, not its print stylesheet. (Emulation needs a loaded
     // document first: setting it on a fresh window crashes Electron 45.)
     try {
@@ -140,13 +135,15 @@ async function captureWebpage(rawUrl, isLocalHost) {
         generateDocumentOutline: true,
         generateTaggedPDF: true,
       });
+      if (data.length > MAX_DOCUMENT_BYTES) return { error: "The converted webpage is larger than 300 MB." };
       return { name: safePdfName(contents.getTitle(), new URL(contents.getURL() || url.toString()).hostname), data };
     })(), TOTAL_TIMEOUT_MS, "timeout");
   } catch (error) {
     if (error?.message === "timeout") return { error: "The webpage took too long to load." };
     return { error: `Couldn't load that webpage${error?.code ? ` (${error.code})` : ""}.` };
   } finally {
-    win.destroy();
+    win?.destroy();
+    guard.close();
     void ses.clearStorageData().catch(() => {});
   }
 }
