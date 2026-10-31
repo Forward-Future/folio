@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
 import { Icon } from "./icons";
 
@@ -89,26 +89,28 @@ function OutlineNode({ item, onSelect, depth }: { item: OutlineItem; onSelect: (
 
 function Thumbnails({ pdf, page, rotation, onSelect }: { pdf: PDFDocumentProxy; page: number; rotation: number; onSelect: (n: number) => void }) {
   const listRef = useRef<HTMLDivElement>(null);
-  const [ratio, setRatio] = useState(1.294);
+  const [sizes, setSizes] = useState<PageSize[] | null>(null);
   const [range, setRange] = useState({ start: 0, end: 12 });
-  const rowHeight = Math.ceil(THUMB_W * ratio) + 48;
+  const layout = useMemo(() => thumbLayout(sizes, pdf.numPages, rotation), [sizes, pdf, rotation]);
 
+  // Every page's own size, so a drawing sheet or a landscape page isn't squeezed into page 1's shape.
   useEffect(() => {
     let cancelled = false;
-    pdf.getPage(1).then((p) => {
-      const vp = p.getViewport({ scale: 1, rotation: (p.rotate + rotation) % 360 });
-      if (!cancelled) setRatio(vp.height / vp.width);
-    }).catch(() => {});
+    setSizes(null);
+    Promise.all(Array.from({ length: pdf.numPages }, (_, i) => pdf.getPage(i + 1).then((p) => {
+      const vp = p.getViewport({ scale: 1, rotation: p.rotate });
+      return { width: vp.width, height: vp.height };
+    }))).then((all) => { if (!cancelled) setSizes(all); }).catch(() => {});
     return () => { cancelled = true; };
-  }, [pdf, rotation]);
+  }, [pdf]);
 
   useEffect(() => {
     const scroll = listRef.current!.parentElement!;
     let frame = 0;
     const measure = () => {
       frame = 0;
-      const start = Math.min(pdf.numPages - 1, Math.max(0, Math.floor(scroll.scrollTop / rowHeight) - 4));
-      const end = Math.min(pdf.numPages, Math.ceil((scroll.scrollTop + scroll.clientHeight) / rowHeight) + 4);
+      const start = Math.min(pdf.numPages - 1, Math.max(0, rowAt(layout.tops, scroll.scrollTop) - 4));
+      const end = Math.min(pdf.numPages, rowAt(layout.tops, scroll.scrollTop + scroll.clientHeight) + 1 + 4);
       setRange(previous => previous.start === start && previous.end === end ? previous : { start, end });
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
@@ -121,42 +123,93 @@ function Thumbnails({ pdf, page, rotation, onSelect }: { pdf: PDFDocumentProxy; 
       observer.disconnect();
       scroll.removeEventListener("scroll", schedule);
     };
-  }, [pdf, rowHeight]);
+  }, [pdf, layout]);
 
   // Keep the active thumbnail in view as the reader scrolls.
   useEffect(() => {
     const scroll = listRef.current!.parentElement!;
-    const top = (page - 1) * rowHeight;
+    const top = layout.tops[page - 1] ?? 0;
+    const rowHeight = (layout.tops[page] ?? top) - top;
     if (top < scroll.scrollTop || top + rowHeight > scroll.scrollTop + scroll.clientHeight) {
       scroll.scrollTop = Math.max(0, top - (scroll.clientHeight - rowHeight) / 2);
       scroll.dispatchEvent(new Event("scroll"));
     }
-  }, [pdf, page, rowHeight]);
+  }, [pdf, page, layout]);
 
+  const total = layout.tops[pdf.numPages] ?? 0;
+  // The first render, before anything is measured, can ask for more rows than a short document has.
+  const end = Math.min(range.end, pdf.numPages);
   return (
     <div className="thumbs" ref={listRef} style={{ gap: 0 }}>
-      <div aria-hidden="true" style={{ height: range.start * rowHeight, flexShrink: 0 }} />
-      {Array.from({ length: Math.max(0, range.end - range.start) }, (_, index) => (
-        <Thumb key={`${range.start + index}-${rotation}`} pdf={pdf} n={range.start + index + 1} ratio={ratio} rotation={rotation} active={page === range.start + index + 1} onSelect={onSelect} />
-      ))}
-      <div aria-hidden="true" style={{ height: Math.max(0, pdf.numPages - range.end) * rowHeight, flexShrink: 0 }} />
+      <div aria-hidden="true" style={{ height: layout.tops[range.start] ?? 0, flexShrink: 0 }} />
+      {Array.from({ length: Math.max(0, end - range.start) }, (_, index) => {
+        const n = range.start + index + 1;
+        return <Thumb key={`${n}-${rotation}`} pdf={pdf} n={n} size={layout.frames[n - 1]} rotation={rotation} active={page === n} onSelect={onSelect} />;
+      })}
+      <div aria-hidden="true" style={{ height: Math.max(0, total - (layout.tops[end] ?? total)), flexShrink: 0 }} />
     </div>
   );
 }
 
 const THUMB_W = 132;
+// The tallest a thumbnail may be, so one long page can't fill the sidebar.
+const THUMB_MAX_H = 212;
+// Room below each thumbnail for its padding and page number.
+const THUMB_ROW_EXTRA = 48;
+// Thumbnails share one scale so pages keep their relative sizes, but none gets too small to recognize.
+const THUMB_MIN = 40;
+
+interface PageSize { width: number; height: number }
+
+// One scale for every page, set by the largest page, so a letter page looks smaller than an 11x17 sheet beside it.
+// A document of one page size comes out exactly as before: THUMB_W wide.
+function thumbLayout(sizes: PageSize[] | null, count: number, rotation: number) {
+  const turned = rotation % 180 !== 0;
+  const pages = Array.from({ length: count }, (_, i) => {
+    const s = sizes?.[i] ?? { width: 612, height: 792 };
+    return turned ? { width: s.height, height: s.width } : s;
+  });
+  // A loop rather than Math.max(...pages), which overflows the stack on very long documents.
+  let maxW = 1;
+  let maxH = 1;
+  for (const p of pages) {
+    maxW = Math.max(maxW, p.width);
+    maxH = Math.max(maxH, p.height);
+  }
+  const scale = Math.min(THUMB_W / maxW, THUMB_MAX_H / maxH);
+  const frames = pages.map((p) => {
+    const lift = Math.max(1, THUMB_MIN / Math.min(p.width * scale, p.height * scale));
+    const width = Math.min(THUMB_W, Math.round(p.width * scale * lift));
+    return { width, height: Math.round(width * (p.height / p.width)) };
+  });
+  const tops = [0];
+  for (const f of frames) tops.push(tops[tops.length - 1] + f.height + THUMB_ROW_EXTRA);
+  return { frames, tops };
+}
+
+// The row that contains offset y, by binary search over the rows' top edges.
+function rowAt(tops: number[], y: number) {
+  let lo = 0;
+  let hi = tops.length - 2;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (tops[mid] <= y) lo = mid;
+    else hi = mid - 1;
+  }
+  return Math.max(0, lo);
+}
 
 const Thumb = memo(function Thumb({
   pdf,
   n,
-  ratio,
+  size,
   rotation,
   active,
   onSelect,
 }: {
   pdf: PDFDocumentProxy;
   n: number;
-  ratio: number;
+  size: { width: number; height: number };
   rotation: number;
   active: boolean;
   onSelect: (n: number) => void;
@@ -173,7 +226,7 @@ const Thumb = memo(function Thumb({
       (entries) => {
         if (!entries[0].isIntersecting) return;
         io.disconnect();
-        renderThumbnail(pdf, n, canvasRef.current!, THUMB_W, rotation, controller.signal)
+        renderThumbnail(pdf, n, canvasRef.current!, size.width, rotation, controller.signal)
           .then(() => !cancelled && setReady(true))
           .catch(() => {});
       },
@@ -185,11 +238,11 @@ const Thumb = memo(function Thumb({
       controller.abort();
       io.disconnect();
     };
-  }, [pdf, n, rotation]);
+  }, [pdf, n, rotation, size.width]);
 
   return (
-    <button ref={ref} data-page={n} className={`thumb ${active ? "on" : ""}`} style={{ height: Math.ceil(THUMB_W * ratio) + 48, flexShrink: 0 }} onClick={() => onSelect(n)} aria-label={`Page ${n}`}>
-      <div className="thumb-frame" style={{ width: THUMB_W, height: THUMB_W * ratio, flexShrink: 0 }}>
+    <button ref={ref} data-page={n} className={`thumb ${active ? "on" : ""}`} style={{ height: size.height + THUMB_ROW_EXTRA, flexShrink: 0 }} onClick={() => onSelect(n)} aria-label={`Page ${n}`}>
+      <div className="thumb-frame" style={{ width: size.width, height: size.height, flexShrink: 0 }}>
         <canvas ref={canvasRef} style={{ opacity: ready ? 1 : 0 }} />
       </div>
       <span className="thumb-num">{n}</span>
