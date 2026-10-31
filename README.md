@@ -41,8 +41,9 @@ Or build Folio yourself from source (below).
 - **Local files:** open a PDF with the file picker, drag and drop it anywhere in Folio, or use **Open with → Folio**
   from your file manager. The desktop app keeps one window, bringing an already-running copy forward when you open
   another PDF.
-- **PDF URLs:** drop a link, paste it with `Ctrl+V` outside a text field, or choose **Open from URL**
-  (`Ctrl+Shift+O`). Folio downloads and opens the PDF, follows redirects, and uses the server's filename when available.
+- **PDF URLs:** choose **Open from URL** (`Ctrl+Shift+O`), or drop a link or paste it with `Ctrl+V` outside a text
+  field to fill it in, then press **Open**. Folio downloads and opens the PDF, follows redirects, and uses the server's
+  filename when available. Folio asks once more before opening an address on your computer or local network.
 - **Webpage to PDF:** use the same URL workflow for a webpage. Folio converts it into a PDF with selectable text,
   ready for highlights, notes, and Ask AI. The conversion preserves the site's on-screen layout, backgrounds,
   transparency, colors, and images instead of switching to its print styles.
