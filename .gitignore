@@ -5,3 +5,4 @@ release
 release-test
 release-*/
 dev-app-update.yml
+public/ocr

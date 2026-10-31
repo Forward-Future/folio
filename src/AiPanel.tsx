@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { Icon } from "./icons";
 import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
+import { ocrSession } from "./lib/ocr";
 import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
 
 const AiMarkdown = lazy(() => import("./AiMarkdown").then((module) => ({ default: module.AiMarkdown })));
@@ -25,39 +26,45 @@ const CLAUDE_MODELS = [
 ];
 
 // ── Document text ───────────────────────────────────────────────────────────────────────
-const textCache = new WeakMap<PDFDocumentProxy, Promise<{ text: string; truncated: boolean }>>();
+export type DocText = { text: string; truncated: boolean; recognized: boolean };
+// Keyed by the OCR version too: pages of a scan gain text while it is being recognized.
+const textCache = new WeakMap<PDFDocumentProxy, { version: number; text: Promise<DocText> }>();
 
-function documentText(pdf: PDFDocumentProxy) {
-  let cached = textCache.get(pdf);
-  if (!cached) {
-    cached = (async () => {
-      let text = "";
-      let truncated = false;
-      for (let n = 1; n <= pdf.numPages; n++) {
-        const content = await (await pdf.getPage(n)).getTextContent();
-        const page = content.items.map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : " ") : "")).join("")
-          .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-        const block = `[Page ${n}]\n${page}\n\n`;
-        if (text.length + block.length > MAX_DOC_CHARS) {
-          truncated = true;
-          break;
-        }
-        text += block;
+export function documentText(pdf: PDFDocumentProxy) {
+  const session = ocrSession(pdf);
+  const version = session?.version ?? 0;
+  const hit = textCache.get(pdf);
+  if (hit?.version === version) return hit.text;
+  // Text recognized earlier counts too, whether it is kept alongside the document or was saved into it.
+  const recognized = !!session && (session.embedded.size > 0 || [...session.pages.values()].some((items) => items.length));
+  const text = (async () => {
+    let text = "";
+    let truncated = false;
+    for (let n = 1; n <= pdf.numPages; n++) {
+      const content = await (await pdf.getPage(n)).getTextContent();
+      const page = content.items.map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : " ") : "")).join("")
+        .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+      const block = `[Page ${n}]\n${page}\n\n`;
+      if (text.length + block.length > MAX_DOC_CHARS) {
+        truncated = true;
+        break;
       }
-      return { text, truncated };
-    })();
-    textCache.set(pdf, cached);
-  }
-  return cached;
+      text += block;
+    }
+    return { text, truncated, recognized };
+  })();
+  textCache.set(pdf, { version, text });
+  return text;
 }
 
-function instructions(name: string, doc: { text: string; truncated: boolean }) {
+export function instructions(name: string, doc: DocText) {
   const hasText = doc.text.replace(/\[Page \d+\]/g, "").trim().length > 0;
   return [
     `You are the reading assistant in Folio, a PDF reader. The user is reading "${name}".`,
     hasText
       ? `Its extracted text is below between <document> tags, with [Page N] markers.${doc.truncated ? " The document is long, so only the beginning is included; say so if a question may depend on later pages." : ""}`
       : "This PDF has no extractable text (it may be scanned images), so you can only answer from the passages the user quotes.",
+    ...(doc.recognized ? ["Some or all of this text was read from scanned pages by OCR, so it may contain recognition errors (wrong letters, split or merged words). Allow for that, and say so if a figure or name looks uncertain."] : []),
     "Guidelines:",
     "- Answer from the document. If it doesn't contain the answer, say so plainly; you may add general knowledge if it helps, clearly labeled as such.",
     "- Cite page numbers like (p. 12) when you use specific information from the document.",
