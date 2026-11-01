@@ -380,6 +380,20 @@ kbd {
   color: #fff;
   background: var(--accent);
 }
+.thumb[draggable="true"] { cursor: grab; }
+.thumb.drop-target { background: var(--active); box-shadow: inset 0 0 0 2px var(--accent); }
+.organize-head { padding: 12px 12px 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.organize-head p { color: var(--text-2); line-height: 1.45; margin: 5px 0 8px; }
+.organize-head .page-field { padding: 0; }
+.organize-head input { width: 4.5em; }
+.organize-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--line);
+}
 
 .outline {
   list-style: none;

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.11.0
+
+- Turn on **Scroll one page at a time** in Settings to turn pages with each mouse wheel click or trackpad swipe.
+- **Copy response** copies an Ask AI answer with its Markdown formatting and page citations.
+- Choose **Reorder pages** in Pages or Outline, drag a page or enter its new position, then save and open the
+  reordered PDF copy. Bookmarks, annotations and filled form fields follow their pages.
+
 ## 1.10.9
 
 - Opening a Word document now checks the source and converted PDF before reusing a saved copy. Folio also

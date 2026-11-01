@@ -5,10 +5,11 @@ import {
   PDFFindController,
   PDFLinkService,
   PDFViewer,
+  ScrollMode,
   SpreadMode,
 } from "./viewer";
 import { AnnotationEditorParamsType, AnnotationEditorType } from "pdfjs-dist";
-import { loadPdf, thumbnailDataUrl, type PDFDocumentProxy } from "./pdf";
+import { loadPdf, reorderPdf, thumbnailDataUrl, type PDFDocumentProxy } from "./pdf";
 import { contentKey, getRecent, MAX_RECENT_FILE_BYTES, saveRecent, updateLastPage } from "./recent";
 import { readPdfBlob, readPdfResponse } from "./pdfInput";
 import { activeDocument, FIT_SCALES, readView, setActiveDocument, writeView, type ReadingView } from "./session";
@@ -32,6 +33,7 @@ import { SettingsDialog } from "./SettingsDialog";
 import { ChangelogDialog } from "./ChangelogDialog";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
+import { enableWheelPaging } from "./wheelPaging";
 
 type Tool = "select" | "highlight" | "ink" | "freetext";
 
@@ -79,6 +81,8 @@ interface OpenDoc {
   /** The file's size; its bytes live in pdf.js's worker (pdf.getData()) rather than in a second copy here. */
   size: number;
   pdf: PDFDocumentProxy;
+  /** Used only in memory when reopening an annotated snapshot for page reordering. */
+  password?: string;
 }
 
 interface Pending {
@@ -106,7 +110,8 @@ export default function App() {
   const docRef = useRef<OpenDoc | null>(null);
   const markupRef = useRef<MarkupController | null>(null);
   const persistRef = useRef(false);
-  const dirtyRef = useRef(false);
+  const unsavedRef = useRef(false);
+  const exporting = useRef<PDFDocumentProxy | null>(null);
 
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const [loading, setLoading] = useState(false);
@@ -114,6 +119,9 @@ export default function App() {
   const [pageInput, setPageInput] = useState("1");
   const [numPages, setNumPages] = useState(0);
   const [scale, setScale] = useState(1);
+  const [wheelPaging, setWheelPaging] = useState(() => localStorage.getItem("folio:wheel-paging") === "1");
+  const wheelPagingRef = useRef(wheelPaging);
+  wheelPagingRef.current = wheelPaging;
   const [rotation, setRotation] = useState(0);
   const [sidebar, setSidebar] = useState(() => localStorage.getItem("folio:sidebar") !== "0" && window.innerWidth > 760);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -136,6 +144,9 @@ export default function App() {
   colorsRef.current = colors;
   const pageRef = useRef(1);
   const [dirty, setDirty] = useState(false);
+  const [pageDraft, setPageDraft] = useState<{ order: number[]; copy?: Uint8Array } | null>(null);
+  const pageOrder = pageDraft?.order.some((n, i) => n !== i + 1) ? pageDraft.order : undefined;
+  const unsaved = dirty || (!!pageOrder && !pageDraft?.copy);
   const [focus, setFocus] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [dialog, setDialog] = useState<"info" | "shortcuts" | "about" | "url" | "settings" | "changelog" | null>(null);
@@ -174,11 +185,10 @@ export default function App() {
   }, [doc, page]);
 
   docRef.current = doc;
-  dirtyRef.current = dirty;
+  unsavedRef.current = unsaved;
   preferencesRef.current = { sidebar, spread };
 
-  /** Opening another document drops unsaved work (a placed signature, markup on a password-protected PDF), so ask first. */
-  const mayReplaceDocument = () => !dirtyRef.current || confirm("You have unsaved annotations. Open another document anyway?");
+  const mayReplaceDocument = () => !unsavedRef.current || confirm("You have unsaved changes. Open another document anyway?");
 
   const toastTimer = useRef(0);
   const flash = useCallback((msg: string) => {
@@ -217,6 +227,7 @@ export default function App() {
     eventBus.on("pagesinit", () => {
       restoringRef.current = true;
       const saved = restoreRef.current;
+      if (wheelPagingRef.current) viewer.scrollMode = ScrollMode.PAGE;
       viewer.spreadMode = (saved?.spread ?? spreadRef.current) ? SpreadMode.ODD : SpreadMode.NONE;
       viewer.pagesRotation = saved?.rotation ?? 0;
       viewer.currentScaleValue = saved?.scale ?? (window.innerWidth < 900 ? "page-width" : "auto");
@@ -275,6 +286,12 @@ export default function App() {
     return () => { stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
   }, []);
 
+  useEffect(() => {
+    const viewer = viewerRef.current!;
+    if (viewer.pagesCount) viewer.scrollMode = wheelPaging ? ScrollMode.PAGE : ScrollMode.VERTICAL;
+    if (wheelPaging) return enableWheelPaging(containerRef.current!, viewer);
+  }, [wheelPaging, doc]);
+
   // ── Opening documents ───────────────────────────────────────────────
   const beginOpen = useCallback(() => {
     opening.current?.abort();
@@ -309,7 +326,7 @@ export default function App() {
         }
 
         const prev = docRef.current;
-        const next: OpenDoc = { id, name, size: data.byteLength, pdf };
+        const next: OpenDoc = { id, name, size: data.byteLength, pdf, password };
         docRef.current = next;
         // Password-protected documents aren't stored by Folio (same rule as Recent).
         persistRef.current = !password;
@@ -323,10 +340,15 @@ export default function App() {
         prev?.pdf.loadingTask.destroy();
 
         // Markup is saved automatically; only documents Folio can't store count as having unsaved changes.
-        (pdf.annotationStorage as { onSetModified: unknown }).onSetModified = () => { if (!persistRef.current) setDirty(true); };
-        (pdf.annotationStorage as { onResetModified: unknown }).onResetModified = () => setDirty(false);
+        (pdf.annotationStorage as { onSetModified: unknown }).onSetModified = () => {
+          if (docRef.current === next && !persistRef.current) setDirty(true);
+        };
+        (pdf.annotationStorage as { onResetModified: unknown }).onResetModified = () => {
+          if (docRef.current === next) setDirty(false);
+        };
 
         setDoc(next);
+        setPageDraft(null);
         setNumPages(pdf.numPages);
         setPage(lastPageRef.current);
         setPageInput(String(lastPageRef.current));
@@ -462,7 +484,7 @@ export default function App() {
   }, [beginOpen, openBytes]);
 
   const closeDoc = useCallback(() => {
-    if (dirty && !confirm("You have unsaved annotations. Close anyway?")) return;
+    if (unsavedRef.current && !confirm("You have unsaved changes. Close anyway?")) return;
     opening.current?.abort();
     setActiveDocument(null);
     markupRef.current!.unload();
@@ -474,11 +496,12 @@ export default function App() {
     docRef.current?.pdf.loadingTask.destroy();
     docRef.current = null;
     setDoc(null);
+    setPageDraft(null);
     setDirty(false);
     setSearchOpen(false);
     setFocus(false);
     document.title = "Folio";
-  }, [dirty]);
+  }, []);
 
   // Remember where the reader left off.
   useEffect(() => {
@@ -702,59 +725,71 @@ export default function App() {
   }, []);
 
   const currentBytes = async () => {
-    if (!doc) return null;
+    if (!doc || exporting.current === doc.pdf) return null;
+    exporting.current = doc.pdf;
+    const signal = opening.current!.signal;
     // Marks on pages that haven't been drawn yet aren't in pdf.js's annotation storage; add them for this copy only.
     // (pdf.js saves only entries keyed with its editor prefix.)
     const storage = doc.pdf.annotationStorage;
-    const unrendered = (await markupRef.current?.unrenderedMarks(doc.pdf)) ?? [];
-    const keys = unrendered.map((data, i) => {
-      const key = `pdfjs_internal_editor_folio-unrendered-${i}`;
-      storage.setValue(key, data);
-      return key;
-    });
+    const keys: string[] = [];
     try {
+      const unrendered = await markupRef.current!.unrenderedMarks(doc.pdf);
+      for (const data of unrendered) {
+        const key = `pdfjs_internal_editor_folio-unrendered-${keys.length}`;
+        storage.setValue(key, data);
+        keys.push(key);
+      }
       const annotated = storage.size > 0;
+      if (pageOrder) return { bytes: await reorderPdf(doc.pdf, pageOrder, signal, doc.password), annotated };
       return { bytes: annotated ? await doc.pdf.saveDocument() : await doc.pdf.getData(), annotated };
     } finally {
       for (const key of keys) storage.remove(key);
+      if (exporting.current === doc.pdf) exporting.current = null;
     }
   };
 
+  const copyName = pageOrder && doc ? doc.name.replace(/\.pdf$/i, "") + " (reordered).pdf" : doc?.name ?? "document.pdf";
   const saveBytes = (bytes: Uint8Array) => {
     const url = URL.createObjectURL(pdfBlob(bytes));
     const a = document.createElement("a");
     a.href = url;
-    a.download = doc ? (doc.name.toLowerCase().endsWith(".pdf") ? doc.name : `${doc.name}.pdf`) : "document.pdf";
+    a.download = copyName.toLowerCase().endsWith(".pdf") ? copyName : `${copyName}.pdf`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
 
   const download = async () => {
-    let copy: Awaited<ReturnType<typeof currentBytes>>;
     try {
-      copy = await currentBytes();
+      const copy = await currentBytes();
+      if (!copy || docRef.current !== doc) return;
+      saveBytes(copy.bytes);
+      setError(null);
+      if (pageOrder) {
+        setPageDraft(draft => draft?.order === pageOrder ? { order: pageOrder, copy: copy.bytes } : draft);
+        flash("Downloading reordered copy");
+      } else {
+        flash(copy.annotated ? "Saved a copy with your highlights and notes" : "Download started");
+      }
     } catch {
-      setError("Couldn't save a copy of this document.");
-      return;
+      if (docRef.current === doc) {
+        if (dirty) setDirty(true);
+        setError("Couldn't save a copy of this document.");
+      }
     }
-    if (!copy) return;
-    saveBytes(copy.bytes);
-    flash(copy.annotated ? "Saved a copy with your highlights and notes" : "Download started");
   };
 
   const print = async () => {
     // pdf.js marks the document as saved once it has written the bytes, but printing saves nothing.
-    const unsaved = dirtyRef.current;
     let copy: Awaited<ReturnType<typeof currentBytes>>;
     try {
       copy = await currentBytes();
     } catch {
-      setError("Couldn't print this document.");
+      if (docRef.current === doc) setError("Couldn't print this document.");
       return;
     } finally {
-      if (unsaved) setDirty(true);
+      if (dirty && docRef.current === doc) setDirty(true);
     }
-    if (!copy) return;
+    if (!copy || docRef.current !== doc) return;
     const { bytes } = copy;
     const url = URL.createObjectURL(pdfBlob(bytes));
     const frame = document.createElement("iframe");
@@ -846,11 +881,11 @@ export default function App() {
 
   // Warn before losing unsaved annotations.
   useEffect(() => {
-    if (!dirty) return;
+    if (!unsaved) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => e.preventDefault();
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty]);
+  }, [unsaved]);
 
   // ── Keyboard shortcuts ──────────────────────────────────────────────
   useEffect(() => {
@@ -1040,7 +1075,7 @@ export default function App() {
               <IconButton icon="sidebar" label={keys("Toggle sidebar (Ctrl+\\)")} active={sidebar} onClick={() => setSidebar(!sidebar)} />
               <div className="doc-title" title={doc.name}>
                 <span>{doc.name.replace(/\.pdf$/i, "")}</span>
-                {dirty && <span className="dirty-dot" title="Unsaved annotations" />}
+                {unsaved && <span className="dirty-dot" title="Unsaved changes" />}
               </div>
             </>
           )}
@@ -1099,6 +1134,12 @@ export default function App() {
             page={page}
             rotation={rotation}
             onSelectPage={goTo}
+            order={pageDraft?.order ?? null}
+            onOrder={order => setPageDraft(order ? { order } : null)}
+            onSaveOrder={download}
+            onOpenCopy={pageDraft?.copy ? () => {
+              if (mayReplaceDocument()) void openBytes(copyName, pageDraft.copy!, doc.password);
+            } : undefined}
             onSelectDest={(dest) => linkRef.current!.goToDestination(dest as string)}
             tab={sidebarTab}
             onTab={setSidebarTab}
@@ -1292,7 +1333,13 @@ export default function App() {
       {dialog === "info" && doc && <InfoDialog key={doc.pdf.loadingTask.docId} pdf={doc.pdf} name={doc.name} size={doc.size} onClose={() => setDialog(null)} />}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} onOpenSettings={() => setDialog("settings")} />}
-      {dialog === "settings" && <SettingsDialog theme={theme} onTheme={setThemeTo} night={night} onNight={setNightTo} onOpenChangelog={() => setDialog("changelog")} onClose={() => setDialog(null)} />}
+      {dialog === "settings" && <SettingsDialog theme={theme} onTheme={setThemeTo} night={night} onNight={setNightTo}
+        wheelPaging={wheelPaging} onWheelPaging={(next) => {
+          setWheelPaging(next);
+          try { localStorage.setItem("folio:wheel-paging", next ? "1" : "0"); }
+          catch { flash("Page scrolling changed, but couldn't save the preference."); }
+        }}
+        onOpenChangelog={() => setDialog("changelog")} onClose={() => setDialog(null)} />}
       {/* Closing goes back to Settings, where the changelog is opened from. */}
       {dialog === "changelog" && <ChangelogDialog onClose={() => setDialog("settings")} />}
       {doc && imageView && <ImageViewer pdf={doc.pdf} target={imageView} onClose={() => setImageView(null)} />}
@@ -1317,7 +1364,7 @@ export default function App() {
           <button
             className="btn primary"
             onClick={() => {
-              if (dirty && !confirm("You have unsaved annotations. Restart anyway?")) return;
+              if (unsaved && !confirm("You have unsaved changes. Restart anyway?")) return;
               window.folioDesktop?.installUpdate();
             }}
           >

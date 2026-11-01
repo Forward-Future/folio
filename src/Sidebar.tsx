@@ -8,6 +8,10 @@ interface Props {
   rotation: number;
   onSelectPage: (n: number) => void;
   onSelectDest: (dest: unknown) => void;
+  order: number[] | null;
+  onOrder: (order: number[] | null) => void;
+  onSaveOrder: () => Promise<void>;
+  onOpenCopy?: () => void;
   tab: SidebarTab;
   onTab: (tab: SidebarTab) => void;
   notes: ReactNode;
@@ -16,7 +20,8 @@ interface Props {
 
 export type SidebarTab = "pages" | "outline" | "notes";
 
-export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, tab, onTab: setTab, notes, noteCount }: Props) {
+export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order, onOrder, onSaveOrder, onOpenCopy,
+  tab, onTab: setTab, notes, noteCount }: Props) {
   const [outline, setOutline] = useState<OutlineItem[] | null>(null);
 
   useEffect(() => {
@@ -24,6 +29,10 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, tab, 
     pdf.getOutline().then((o) => setOutline((o as OutlineItem[] | null) ?? []));
   }, [pdf]);
 
+  if (order) return (
+    <PageOrganizer pdf={pdf} page={page} rotation={rotation} onSelect={onSelectPage}
+      order={order} onOrder={onOrder} onSave={onSaveOrder} onOpenCopy={onOpenCopy} />
+  );
   return (
     <aside className={`sidebar tab-${tab}`}>
       <div className="sidebar-tabs" role="tablist">
@@ -55,6 +64,13 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, tab, 
           </ul>
         )}
       </div>
+      {tab !== "notes" && pdf.numPages > 1 && (
+        <div className="organize-actions">
+          <button className="link small" onClick={() => onOrder(Array.from({ length: pdf.numPages }, (_, i) => i + 1))}>
+            <Icon name="grid" size={14} /> Reorder pages
+          </button>
+        </div>
+      )}
     </aside>
   );
 }
@@ -87,11 +103,86 @@ function OutlineNode({ item, onSelect, depth }: { item: OutlineItem; onSelect: (
   );
 }
 
-function Thumbnails({ pdf, page, rotation, onSelect }: { pdf: PDFDocumentProxy; page: number; rotation: number; onSelect: (n: number) => void }) {
+interface ThumbnailProps {
+  pdf: PDFDocumentProxy;
+  page: number;
+  rotation: number;
+  onSelect: (n: number) => void;
+}
+
+function PageOrganizer({ pdf, page, rotation, onSelect, order, onOrder, onSave, onOpenCopy }: ThumbnailProps & {
+  order: number[];
+  onOrder: Props["onOrder"];
+  onSave: Props["onSaveOrder"];
+  onOpenCopy?: () => void;
+}) {
+  const [selected, setSelected] = useState(page);
+  const [saving, setSaving] = useState(false);
+  const position = order.indexOf(selected) + 1;
+  const changed = order.some((n, i) => n !== i + 1);
+
+  const select = (n: number) => { setSelected(n); onSelect(n); };
+  const move = (source: number, to: number) => {
+    if (saving || !Number.isInteger(to) || to < 1 || to > order.length) return;
+    const from = order.indexOf(source);
+    if (from < 0 || from === to - 1) return;
+    const next = order.slice();
+    next.splice(from, 1);
+    next.splice(to - 1, 0, source);
+    onOrder(next);
+    select(source);
+  };
+  const save = async () => {
+    if (saving || !changed) return;
+    setSaving(true);
+    try {
+      await onSave();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <aside className="sidebar" aria-label="Reorder pages">
+      <div className="organize-head">
+        <strong>Reorder pages</strong>
+        <p>Drag a page to its new position, or enter a position below. Save the order as a new PDF.</p>
+        <form className="page-field" onSubmit={e => {
+          e.preventDefault();
+          move(selected, (e.currentTarget.elements.namedItem("position") as HTMLInputElement).valueAsNumber);
+        }}>
+          <label htmlFor="page-position">Move page {selected} to</label>
+          <input key={`${selected}-${position}`} id="page-position" name="position" type="number" required
+            min={1} max={order.length} defaultValue={position} disabled={saving} />
+          <button className="link small" disabled={saving}>Move</button>
+        </form>
+      </div>
+      <div className="sidebar-scroll">
+        <Thumbnails pdf={pdf} page={selected} rotation={rotation} onSelect={select} order={order} onMove={saving ? undefined : move} />
+      </div>
+      <div className="organize-actions">
+        <button className="btn ghost" onClick={() => onOrder(null)} disabled={saving}>{onOpenCopy ? "Done" : "Cancel"}</button>
+        <button className="btn primary" onClick={save} disabled={!changed || saving}>{saving ? "Saving…" : "Save reordered copy"}</button>
+      </div>
+      {onOpenCopy && <div className="organize-actions"><button className="link small" onClick={onOpenCopy}>
+        <Icon name="book" size={14} /> Open reordered copy
+      </button></div>}
+    </aside>
+  );
+}
+
+function Thumbnails({ pdf, page, rotation, onSelect, order, onMove }: ThumbnailProps & {
+  order?: number[];
+  onMove?: (source: number, to: number) => void;
+}) {
   const listRef = useRef<HTMLDivElement>(null);
+  const dragType = `application/x-folio-page-${pdf.loadingTask.docId.toLowerCase()}`;
+  const [dropTarget, setDropTarget] = useState<number | null>(null);
   const [ratio, setRatio] = useState(1.294);
   const [range, setRange] = useState({ start: 0, end: 12 });
   const rowHeight = Math.ceil(THUMB_W * ratio) + 48;
+  const activeIndex = order ? order.indexOf(page) : page - 1;
+  const thumbPage = (target: EventTarget) => Number((target as Element).closest<HTMLElement>(".thumb")?.dataset.page);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,19 +217,47 @@ function Thumbnails({ pdf, page, rotation, onSelect }: { pdf: PDFDocumentProxy; 
   // Keep the active thumbnail in view as the reader scrolls.
   useEffect(() => {
     const scroll = listRef.current!.parentElement!;
-    const top = (page - 1) * rowHeight;
+    const top = activeIndex * rowHeight;
     if (top < scroll.scrollTop || top + rowHeight > scroll.scrollTop + scroll.clientHeight) {
       scroll.scrollTop = Math.max(0, top - (scroll.clientHeight - rowHeight) / 2);
       scroll.dispatchEvent(new Event("scroll"));
     }
-  }, [pdf, page, rowHeight]);
+  }, [pdf, activeIndex, rowHeight]);
 
   return (
-    <div className="thumbs" ref={listRef} style={{ gap: 0 }}>
+    <div className="thumbs" ref={listRef} style={{ gap: 0 }}
+      onDragStart={e => {
+        if (!onMove) return;
+        const source = thumbPage(e.target);
+        if (!source) return;
+        // The virtual list may unmount the source before dragend. Keep this drag out of the file opener.
+        e.stopPropagation();
+        e.dataTransfer.clearData();
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData(dragType, String(source));
+      }}
+      onDragOver={e => {
+        if (!onMove || !e.dataTransfer.types.includes(dragType)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        setDropTarget(thumbPage(e.target) || null);
+      }}
+      onDragLeave={e => { if (!(e.relatedTarget instanceof Node) || !e.currentTarget.contains(e.relatedTarget)) setDropTarget(null); }}
+      onDrop={e => {
+        if (!onMove || !order || !e.dataTransfer.types.includes(dragType)) return;
+        e.preventDefault();
+        const target = thumbPage(e.target);
+        if (target) onMove(Number(e.dataTransfer.getData(dragType)), order.indexOf(target) + 1);
+        setDropTarget(null);
+      }}
+      onDragEnd={() => setDropTarget(null)}>
       <div aria-hidden="true" style={{ height: range.start * rowHeight, flexShrink: 0 }} />
-      {Array.from({ length: Math.max(0, range.end - range.start) }, (_, index) => (
-        <Thumb key={`${range.start + index}-${rotation}`} pdf={pdf} n={range.start + index + 1} ratio={ratio} rotation={rotation} active={page === range.start + index + 1} onSelect={onSelect} />
-      ))}
+      {Array.from({ length: Math.max(0, Math.min(range.end, pdf.numPages) - range.start) }, (_, i) => {
+        const index = range.start + i;
+        const n = order?.[index] ?? index + 1;
+        return <Thumb key={`${n}-${rotation}`} pdf={pdf} n={n} ratio={ratio} rotation={rotation} active={page === n}
+          position={order ? index + 1 : undefined} draggable={!!onMove} dropTarget={dropTarget === n} onSelect={onSelect} />;
+      })}
       <div aria-hidden="true" style={{ height: Math.max(0, pdf.numPages - range.end) * rowHeight, flexShrink: 0 }} />
     </div>
   );
@@ -152,6 +271,9 @@ const Thumb = memo(function Thumb({
   ratio,
   rotation,
   active,
+  position,
+  draggable,
+  dropTarget,
   onSelect,
 }: {
   pdf: PDFDocumentProxy;
@@ -159,6 +281,9 @@ const Thumb = memo(function Thumb({
   ratio: number;
   rotation: number;
   active: boolean;
+  position?: number;
+  draggable: boolean;
+  dropTarget: boolean;
   onSelect: (n: number) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
@@ -188,11 +313,13 @@ const Thumb = memo(function Thumb({
   }, [pdf, n, rotation]);
 
   return (
-    <button ref={ref} data-page={n} className={`thumb ${active ? "on" : ""}`} style={{ height: Math.ceil(THUMB_W * ratio) + 48, flexShrink: 0 }} onClick={() => onSelect(n)} aria-label={`Page ${n}`}>
+    <button ref={ref} data-page={n} draggable={draggable} className={`thumb ${active ? "on" : ""} ${dropTarget ? "drop-target" : ""}`}
+      style={{ height: Math.ceil(THUMB_W * ratio) + 48, flexShrink: 0 }} onClick={() => onSelect(n)}
+      aria-label={position ? `Page ${n}, position ${position}` : `Page ${n}`}>
       <div className="thumb-frame" style={{ width: THUMB_W, height: THUMB_W * ratio, flexShrink: 0 }}>
         <canvas ref={canvasRef} style={{ opacity: ready ? 1 : 0 }} />
       </div>
-      <span className="thumb-num">{n}</span>
+      <span className="thumb-num">{position ? `${position} · Page ${n}` : n}</span>
     </button>
   );
 });

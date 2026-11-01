@@ -40,6 +40,22 @@ export async function loadPdf(data: Uint8Array, signal: AbortSignal, password?: 
   }
 }
 
+/** Writes every original page once, in the order shown in the organizer. */
+export async function reorderPdf(pdf: PDFDocumentProxy, order: number[], signal: AbortSignal, password?: string) {
+  // pdf.js takes each source page's destination index, the inverse of the thumbnail list.
+  const pageIndices: number[] = [];
+  order.forEach((source, index) => { pageIndices[source - 1] = index; });
+  // Extraction alone doesn't commit form values. Reorder a saved snapshot when there are edits.
+  const snapshot = pdf.annotationStorage.size ? await loadPdf(await pdf.saveDocument(), signal, password) : pdf;
+  try {
+    const bytes = await snapshot.extractPages([{ document: null, pageIndices }]);
+    if (!bytes?.length) throw new Error("Page reordering failed.");
+    return bytes;
+  } finally {
+    if (snapshot !== pdf) await snapshot.loadingTask.destroy();
+  }
+}
+
 /** Renders a page into a canvas sized to `width` CSS pixels. */
 export async function renderThumbnail(
   doc: PDFDocumentProxy,

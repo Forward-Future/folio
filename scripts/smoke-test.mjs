@@ -9,6 +9,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { checkReaderTools } from "./smoke-reader-tools.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -218,6 +219,10 @@ try {
   console.log("ok  changelog opens from Settings");
 
   // A text box is saved automatically and comes back, text and all, when the document is opened again.
+  // The sample can reopen at the previous reading position. Bring its first page into view so pdf.js builds its editor layer.
+  const pageField = page.getByLabel("Page number", { exact: true });
+  await pageField.fill("1");
+  await pageField.press("Enter");
   await page.locator('button[title^="Text ("]').click();
   // Clicked in the middle of the page's visible part: a fixed spot near the top lands under the toolbar's color
   // picker in a small window, as on CI runners.
@@ -233,6 +238,7 @@ try {
 
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });
+  await checkReaderTools(app, page, env.FOLIO_TEST_USER_DATA);
 
   // A Word document opens converted to PDF (by Word, LibreOffice, or Folio itself, whichever the computer has),
   // and the PDF is saved next to it. Opening the document again reuses that PDF.

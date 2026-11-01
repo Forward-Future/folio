@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
+import { copyText } from "./clipboard";
 import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
 import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
@@ -53,6 +54,23 @@ function documentText(pdf: PDFDocumentProxy) {
 
 // ── Panel ─────────────────────────────────────────────────────────────────────────────────
 const conversations = new Map<string, Message[]>();
+
+function CopyResponse({ text }: { text: string }) {
+  const [label, setLabel] = useState("Copy response");
+  useEffect(() => {
+    if (label === "Copy response") return;
+    const timer = window.setTimeout(() => setLabel("Copy response"), 2200);
+    return () => window.clearTimeout(timer);
+  }, [label]);
+
+  return (
+    <button className="link small copy-response" title="Copy response as Markdown"
+      onClick={async () => setLabel(await copyText(text) ? "Copied" : "Copy failed")}>
+      <Icon name={label === "Copied" ? "check" : "copy"} size={13} />
+      <span aria-live="polite">{label}</span>
+    </button>
+  );
+}
 
 interface Props {
   pdf: PDFDocumentProxy;
@@ -300,9 +318,12 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
                     )}
                   </div>
                 ) : m.content ? (
-                  <Suspense fallback={<p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}>
-                    <AiMarkdown text={m.content} onPage={onGoToPage} />
-                  </Suspense>
+                  <>
+                    <Suspense fallback={<p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}>
+                      <AiMarkdown text={m.content} onPage={onGoToPage} />
+                    </Suspense>
+                    {(!busy || i < messages.length - 1) && <CopyResponse text={m.content} />}
+                  </>
                 ) : (
                   <div className="typing" aria-label="Thinking"><span /><span /><span /></div>
                 )}

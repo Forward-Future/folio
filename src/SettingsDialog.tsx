@@ -9,6 +9,8 @@ interface Props {
   onTheme: (theme: "light" | "dark") => void;
   night: boolean;
   onNight: (on: boolean) => void;
+  wheelPaging: boolean;
+  onWheelPaging: (on: boolean) => void;
   onOpenChangelog: () => void;
   onClose: () => void;
 }
@@ -62,7 +64,7 @@ function Choice<T extends string>({ value, options, onChange, label }: { value: 
   );
 }
 
-export function SettingsDialog({ theme, onTheme, night, onNight, onOpenChangelog, onClose }: Props) {
+export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, onWheelPaging, onOpenChangelog, onClose }: Props) {
   const desktop = window.folioDesktop;
   const ai = desktop?.ai;
   const [error, setError] = useState<string | null>(null);
@@ -106,6 +108,12 @@ export function SettingsDialog({ theme, onTheme, night, onNight, onOpenChangelog
           </Row>
           <Row label="Night reading" hint="Dims bright pages for reading in the dark. Images keep their colors.">
             <Switch label="Night reading" checked={night} onChange={onNight} />
+          </Row>
+        </Section>
+
+        <Section title="Reading">
+          <Row label="Scroll one page at a time" hint="Turn a page with each mouse wheel click or trackpad swipe.">
+            <Switch label="Scroll one page at a time" checked={wheelPaging} onChange={onWheelPaging} />
           </Row>
         </Section>
 

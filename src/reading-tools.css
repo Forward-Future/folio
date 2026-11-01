@@ -411,6 +411,7 @@
   min-width: 0;
 }
 .msg.assistant { flex-shrink: 0; }
+.msg .copy-response { margin-top: 6px; color: var(--text-3); }
 .msg h1, .msg h2, .msg h3, .msg h4, .msg h5, .msg h6 {
   margin: 12px 0 8px;
   font-size: inherit;

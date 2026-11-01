@@ -64,9 +64,10 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
 ### Read and navigate
 
 - **Continuous scrolling** with selectable text, previous/next controls, and a page-number field for jumping directly
-  to a page.
+  to a page. Enable **Settings → Reading → Scroll one page at a time** to turn pages with the mouse wheel.
 - **Pages and Outline tabs:** browse page thumbnails or the PDF's existing outline/bookmarks; hide the sidebar when
   you want more reading space.
+- **Reorder pages** from either sidebar tab. Drag thumbnails or enter a new position, then save and open the reordered PDF copy.
 - **Search as you type:** match case or whole words, see the current match and total count, browse per-page snippets
   and match counts, and move between matches with `Enter` / `Shift+Enter`.
 - **Flexible views:** fit to width, fit to page, automatic sizing, preset zoom levels, zoom buttons, `Ctrl+wheel` /
@@ -114,6 +115,7 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
 - **Whole-document or passage questions:** open the Ask AI panel from the toolbar, select text and choose **Ask AI**,
   or ask about an existing highlight.
 - **Streaming answers** with clickable page citations that jump back to the source page.
+- **Copy response** copies a finished AI answer with its Markdown formatting and page citations.
 - **Rendered mathematics:** inline and display LaTeX equations, with wide equations scrolling within the chat panel.
   Supports `\( ... \)`, `\[ ... \]`, `$x$`, and `$$ ... $$`; existing saved answers render too.
 - **Provider and model selection**, a stop button for an in-progress answer, and a **+** button to start a fresh
