@@ -1,6 +1,7 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
 import { Icon } from "./icons";
+import { anchoredScrollTop, loadPageSizes, rowAt, thumbLayout, THUMB_ROW_EXTRA, type PageSize } from "./thumbnails";
 
 interface Props {
   pdf: PDFDocumentProxy;
@@ -178,28 +179,65 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove }: ThumbnailP
   const listRef = useRef<HTMLDivElement>(null);
   const dragType = `application/x-folio-page-${pdf.loadingTask.docId.toLowerCase()}`;
   const [dropTarget, setDropTarget] = useState<number | null>(null);
-  const [ratio, setRatio] = useState(1.294);
+  const [sizes, setSizes] = useState<(PageSize | undefined)[] | null>(null);
   const [range, setRange] = useState({ start: 0, end: 12 });
-  const rowHeight = Math.ceil(THUMB_W * ratio) + 48;
+  const rangeRef = useRef(range);
+  rangeRef.current = range;
+  const orderRef = useRef(order);
+  orderRef.current = order;
+  const loaderRef = useRef<ReturnType<typeof loadPageSizes> | null>(null);
+  // Rows follow the organizer's order, so a moved page takes its own shape with it.
+  const layout = useMemo(() => thumbLayout(sizes, pdf.numPages, rotation, order), [sizes, pdf, rotation, order]);
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   const activeIndex = order ? order.indexOf(page) : page - 1;
   const thumbPage = (target: EventTarget) => Number((target as Element).closest<HTMLElement>(".thumb")?.dataset.page);
 
+  // Every page's own size, so a drawing sheet or a landscape page isn't squeezed into page 1's shape.
+  // Sizes arrive a few at a time, visible rows first, and are applied once per frame.
   useEffect(() => {
-    let cancelled = false;
-    pdf.getPage(1).then((p) => {
-      const vp = p.getViewport({ scale: 1, rotation: (p.rotate + rotation) % 360 });
-      if (!cancelled) setRatio(vp.height / vp.width);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [pdf, rotation]);
+    setSizes(null);
+    const known: (PageSize | undefined)[] = new Array(pdf.numPages);
+    let frame = 0;
+    const loader = loadPageSizes(pdf, (index, size) => {
+      known[index] = size;
+      if (!frame) frame = requestAnimationFrame(() => {
+        frame = 0;
+        setSizes(known.slice());
+      });
+    });
+    loaderRef.current = loader;
+    loader.prioritize(rangeRef.current.start, rangeRef.current.end, orderRef.current);
+    return () => {
+      loader.stop();
+      cancelAnimationFrame(frame);
+      if (loaderRef.current === loader) loaderRef.current = null;
+    };
+  }, [pdf]);
+
+  useEffect(() => {
+    loaderRef.current?.prioritize(range.start, range.end, order);
+  }, [range, order]);
+
+  // As sizes arrive, rows above the viewport change height. Keep the row at the top of the list where it was
+  // so the thumbnails don't drift while the reader looks at them.
+  const anchorRef = useRef({ pdf, tops: layout.tops });
+  useLayoutEffect(() => {
+    const previous = anchorRef.current;
+    anchorRef.current = { pdf, tops: layout.tops };
+    if (previous.pdf !== pdf || previous.tops === layout.tops) return;
+    const scroll = listRef.current!.parentElement!;
+    const next = anchoredScrollTop(previous.tops, layout.tops, scroll.scrollTop);
+    if (Math.abs(next - scroll.scrollTop) >= 1) scroll.scrollTop = next;
+  }, [pdf, layout]);
 
   useEffect(() => {
     const scroll = listRef.current!.parentElement!;
     let frame = 0;
     const measure = () => {
       frame = 0;
-      const start = Math.min(pdf.numPages - 1, Math.max(0, Math.floor(scroll.scrollTop / rowHeight) - 4));
-      const end = Math.min(pdf.numPages, Math.ceil((scroll.scrollTop + scroll.clientHeight) / rowHeight) + 4);
+      const start = Math.min(pdf.numPages - 1, Math.max(0, rowAt(layout.tops, scroll.scrollTop) - 4));
+      const end = Math.min(pdf.numPages, rowAt(layout.tops, scroll.scrollTop + scroll.clientHeight) + 1 + 4);
       setRange(previous => previous.start === start && previous.end === end ? previous : { start, end });
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
@@ -212,18 +250,25 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove }: ThumbnailP
       observer.disconnect();
       scroll.removeEventListener("scroll", schedule);
     };
-  }, [pdf, rowHeight]);
+  }, [pdf, layout]);
 
-  // Keep the active thumbnail in view as the reader scrolls.
+  // Keep the active thumbnail in view as the reader scrolls. Not on every size update, or the list would
+  // snap back to the active page while the reader scrolls it during loading.
   useEffect(() => {
+    if (activeIndex < 0) return;
+    const { tops } = layoutRef.current;
     const scroll = listRef.current!.parentElement!;
-    const top = activeIndex * rowHeight;
+    const top = tops[activeIndex] ?? 0;
+    const rowHeight = (tops[activeIndex + 1] ?? top) - top;
     if (top < scroll.scrollTop || top + rowHeight > scroll.scrollTop + scroll.clientHeight) {
       scroll.scrollTop = Math.max(0, top - (scroll.clientHeight - rowHeight) / 2);
       scroll.dispatchEvent(new Event("scroll"));
     }
-  }, [pdf, activeIndex, rowHeight]);
+  }, [pdf, activeIndex, rotation]);
 
+  const total = layout.tops[pdf.numPages] ?? 0;
+  // The first render, before anything is measured, can ask for more rows than a short document has.
+  const end = Math.min(range.end, pdf.numPages);
   return (
     <div className="thumbs" ref={listRef} style={{ gap: 0 }}
       onDragStart={e => {
@@ -251,24 +296,22 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove }: ThumbnailP
         setDropTarget(null);
       }}
       onDragEnd={() => setDropTarget(null)}>
-      <div aria-hidden="true" style={{ height: range.start * rowHeight, flexShrink: 0 }} />
-      {Array.from({ length: Math.max(0, Math.min(range.end, pdf.numPages) - range.start) }, (_, i) => {
+      <div aria-hidden="true" style={{ height: layout.tops[range.start] ?? 0, flexShrink: 0 }} />
+      {Array.from({ length: Math.max(0, end - range.start) }, (_, i) => {
         const index = range.start + i;
         const n = order?.[index] ?? index + 1;
-        return <Thumb key={`${n}-${rotation}`} pdf={pdf} n={n} ratio={ratio} rotation={rotation} active={page === n}
+        return <Thumb key={`${n}-${rotation}`} pdf={pdf} n={n} size={layout.frames[index]} rotation={rotation} active={page === n}
           position={order ? index + 1 : undefined} draggable={!!onMove} dropTarget={dropTarget === n} onSelect={onSelect} />;
       })}
-      <div aria-hidden="true" style={{ height: Math.max(0, pdf.numPages - range.end) * rowHeight, flexShrink: 0 }} />
+      <div aria-hidden="true" style={{ height: Math.max(0, total - (layout.tops[end] ?? total)), flexShrink: 0 }} />
     </div>
   );
 }
 
-const THUMB_W = 132;
-
 const Thumb = memo(function Thumb({
   pdf,
   n,
-  ratio,
+  size,
   rotation,
   active,
   position,
@@ -278,7 +321,7 @@ const Thumb = memo(function Thumb({
 }: {
   pdf: PDFDocumentProxy;
   n: number;
-  ratio: number;
+  size: { width: number; height: number };
   rotation: number;
   active: boolean;
   position?: number;
@@ -298,7 +341,7 @@ const Thumb = memo(function Thumb({
       (entries) => {
         if (!entries[0].isIntersecting) return;
         io.disconnect();
-        renderThumbnail(pdf, n, canvasRef.current!, THUMB_W, rotation, controller.signal)
+        renderThumbnail(pdf, n, canvasRef.current!, size.width, rotation, controller.signal)
           .then(() => !cancelled && setReady(true))
           .catch(() => {});
       },
@@ -310,13 +353,13 @@ const Thumb = memo(function Thumb({
       controller.abort();
       io.disconnect();
     };
-  }, [pdf, n, rotation]);
+  }, [pdf, n, rotation, size.width]);
 
   return (
     <button ref={ref} data-page={n} draggable={draggable} className={`thumb ${active ? "on" : ""} ${dropTarget ? "drop-target" : ""}`}
-      style={{ height: Math.ceil(THUMB_W * ratio) + 48, flexShrink: 0 }} onClick={() => onSelect(n)}
+      style={{ height: size.height + THUMB_ROW_EXTRA, flexShrink: 0 }} onClick={() => onSelect(n)}
       aria-label={position ? `Page ${n}, position ${position}` : `Page ${n}`}>
-      <div className="thumb-frame" style={{ width: THUMB_W, height: THUMB_W * ratio, flexShrink: 0 }}>
+      <div className="thumb-frame" style={{ width: size.width, height: size.height, flexShrink: 0 }}>
         <canvas ref={canvasRef} style={{ opacity: ready ? 1 : 0 }} />
       </div>
       <span className="thumb-num">{position ? `${position} · Page ${n}` : n}</span>

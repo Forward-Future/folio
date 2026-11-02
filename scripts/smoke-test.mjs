@@ -272,6 +272,49 @@ try {
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });
   await checkReaderTools(app, page, env.FOLIO_TEST_USER_DATA);
 
+  // Thumbnails keep each page's shape and relative size: letter portrait, letter landscape, and an 11x17 sheet.
+  const mixed = pdfWithPageSizes([[612, 792], [792, 612], [1224, 792]]);
+  await app.evaluate(({ BrowserWindow }, data) =>
+    BrowserWindow.getAllWindows()[0].webContents.send("folio:open-file", { name: "Mixed sizes.pdf", data: Buffer.from(data) }), [...mixed]);
+  await page.waitForFunction(() => document.title.startsWith("Mixed sizes.pdf"), null, { timeout: 15_000 });
+  if (!(await page.locator(".sidebar").count())) await page.keyboard.press("ControlOrMeta+Backslash");
+  await page.getByRole("tab", { name: "Pages" }).click();
+  // Waits until the page sizes have loaded and the third thumbnail is wider than the first.
+  await page.waitForFunction(() => {
+    const f = [...document.querySelectorAll(".thumb-frame")];
+    return f.length === 3 && f[2].getBoundingClientRect().width > f[0].getBoundingClientRect().width;
+  }, null, { timeout: 15_000 });
+  const frames = await page.locator(".thumb-frame").evaluateAll((els) => els.map((el) => {
+    const r = el.getBoundingClientRect();
+    return { width: r.width, height: r.height };
+  }));
+  const near = (a, b) => Math.abs(a - b) <= 1;
+  assert.ok(frames[0].height > frames[0].width, `letter portrait thumbnail isn't portrait: ${JSON.stringify(frames[0])}`);
+  assert.ok(frames[1].width > frames[1].height, `letter landscape thumbnail isn't landscape: ${JSON.stringify(frames[1])}`);
+  assert.ok(near(frames[0].width, frames[1].height) && near(frames[0].height, frames[1].width),
+    `letter pages aren't the same size turned: ${JSON.stringify(frames)}`);
+  // 11x17 landscape is 11in tall like portrait letter, and 17in wide against letter's 8.5in.
+  assert.ok(near(frames[2].height, frames[0].height) && Math.abs(frames[2].width / frames[0].width - 2) < 0.05,
+    `11x17 thumbnail isn't to scale with letter: ${JSON.stringify(frames)}`);
+  console.log("ok  thumbnails keep each page's shape and size:", frames.map((f) => `${Math.round(f.width)}x${Math.round(f.height)}`).join(", "));
+
+  // In the page organizer, a moved page takes its own shape to its new row: drag the 11x17 sheet to the top.
+  await page.getByRole("button", { name: "Reorder pages" }).click();
+  const organized = (n) => page.locator(`.thumb[data-page="${n}"]`);
+  await organized(3).dragTo(organized(1));
+  assert.equal(await organized(3).getAttribute("aria-label"), "Page 3, position 1");
+  const rows = await page.locator(".thumb").evaluateAll((els) => els.map((el) => {
+    const r = el.querySelector(".thumb-frame").getBoundingClientRect();
+    return { page: Number(el.dataset.page), top: el.getBoundingClientRect().top, width: r.width, height: r.height };
+  }));
+  assert.deepEqual(rows.map((r) => r.page), [3, 1, 2]);
+  assert.ok(rows[0].top < rows[1].top && rows[1].top < rows[2].top, `rows are out of order: ${JSON.stringify(rows)}`);
+  const sameFrame = (row, frame) => near(row.width, frame.width) && near(row.height, frame.height);
+  assert.ok(sameFrame(rows[0], frames[2]) && sameFrame(rows[1], frames[0]) && sameFrame(rows[2], frames[1]),
+    `reordered thumbnails lost their shape: ${JSON.stringify(rows)}`);
+  await page.getByRole("button", { name: "Cancel" }).click();
+  console.log("ok  reordered thumbnails keep each page's shape:", rows.map((r) => `page ${r.page} ${Math.round(r.width)}x${Math.round(r.height)}`).join(", "));
+
   // A Word document opens converted to PDF (by Word, LibreOffice, or Folio itself, whichever the computer has),
   // and the PDF is saved next to it. Opening the document again reuses that PDF.
   const folder = mkdtempSync(path.join(tmpdir(), "folio-word-"));
@@ -394,4 +437,24 @@ try {
   console.log(`PASS (${process.platform})`);
 } finally {
   await app.close();
+}
+
+// A blank PDF whose pages have the given [width, height] sizes in points.
+function pdfWithPageSizes(sizes) {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${sizes.map((_, i) => `${i + 3} 0 R`).join(" ")}] /Count ${sizes.length} >>`,
+    ...sizes.map(([w, h]) => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] >>`),
+  ];
+  let body = "%PDF-1.4\n";
+  const offsets = objects.map((object, i) => {
+    const offset = body.length;
+    body += `${i + 1} 0 obj\n${object}\nendobj\n`;
+    return offset;
+  });
+  const xref = body.length;
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  body += offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("");
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(body, "latin1");
 }
