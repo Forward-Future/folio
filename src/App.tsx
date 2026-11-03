@@ -186,6 +186,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   const [aiContext, setAiContext] = useState<AiContext | null>(null);
   const [ocr, setOcr] = useState<OcrSession | null>(null);
   const [ocrVersion, setOcrVersion] = useState(0);
+  const [ocrPhase, setOcrPhase] = useState<"running" | "done">("done");
 
   useLayoutEffect(() => {
     if (active && window.folioDesktop && !focus && !dialog && !signing && !pending && !imageView) {
@@ -258,7 +259,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         viewer.scrollPageIntoView({ pageNumber: restoredPage, destArray: [null, { name: "XYZ" }, saved.left, saved.top, null] });
       }
       restoringRef.current = false;
-      pageOcrRef.current = recognizeScannedPages(eventBus, viewer, setTextStatus);
+      pageOcrRef.current = recognizeScannedPages(eventBus, viewer, setTextStatus, setOcrPhase);
     });
     eventBus.on("updateviewarea", ({ location }: { location: { pageNumber: number; top: number; left: number } }) => {
       const current = docRef.current;
@@ -512,7 +513,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
     if (!ocr) return;
     return ocr.onPage(() => setOcrVersion(ocr.version));
   }, [ocr]);
-  useOcrSearchRefresh({ session: ocr, searchOpen, phase: "done", version: ocrVersion, find: findRef, bus: busRef });
+  useOcrSearchRefresh({ session: ocr, searchOpen, phase: ocrPhase, version: ocrVersion, find: findRef, bus: busRef });
 
   // Remember where the reader left off.
   useEffect(() => {
@@ -779,7 +780,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
       setError(null);
       if (pageOrder) {
         setPageDraft(draft => draft?.order === pageOrder ? { order: pageOrder, copy: withText.bytes } : draft);
-        flash("Downloading reordered copy");
+        flash(withText.problem ? savedMessage({ markup: copy.annotated, ...withText }) : "Downloading reordered copy", withText.problem ? 6000 : undefined);
       } else {
         flash(savedMessage({ markup: copy.annotated, ...withText }), withText.problem ? 6000 : undefined);
       }

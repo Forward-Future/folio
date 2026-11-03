@@ -150,26 +150,53 @@ export async function updateLastPage(id: string, lastPage: number) {
   } catch {}
 }
 
+// Active readers must not write old OCR back after the user removes it in another tab.
+export function ocrEpoch(id: string) {
+  try { return `${localStorage.getItem("folio:ocr:all") ?? ""}|${localStorage.getItem(`folio:ocr:${id}`) ?? ""}`; }
+  catch { return null; }
+}
+function invalidateOcr(id?: string) {
+  // When storage cannot be read, OCR writes are already disabled. If it can be read but not changed, fail
+  // rather than allowing an open reader to restore data after deletion.
+  if (ocrEpoch(id ?? "") === null) return;
+  localStorage.setItem(id ? `folio:ocr:${id}` : "folio:ocr:all", `${Date.now()}-${Math.random()}`);
+}
+
+/** Removes saved OCR without deleting recent documents, annotations, or conversations. */
+export async function clearRecognizedText() {
+  invalidateOcr();
+  await tx("readwrite", s => s.clear(), OCR);
+}
+
 export async function clearRecent() {
+  invalidateOcr();
   try {
     const db = await open();
-    const stores = db.objectStoreNames.contains(LEGACY) ? [STORE, LEGACY] : [STORE];
+    const stores = db.objectStoreNames.contains(LEGACY) ? [STORE, LEGACY, OCR] : [STORE, OCR];
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction(stores, "readwrite");
       for (const name of stores) transaction.objectStore(name).clear();
       transaction.oncomplete = () => resolve();
       transaction.onabort = () => reject(transaction.error);
     });
-  } catch {
-    /* ignore */
+  } catch (error) {
+    throw error;
   }
 }
 
 export async function removeRecent(id: string) {
+  invalidateOcr(id);
   try {
-    await tx("readwrite", (s) => s.delete(id));
-  } catch {
-    /* ignore */
+    const db = await open();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction([STORE, OCR], "readwrite");
+      transaction.objectStore(STORE).delete(id);
+      transaction.objectStore(OCR).delete(IDBKeyRange.bound(`${id}#`, `${id}#\uffff`));
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error);
+    });
+  } catch (error) {
+    throw error;
   }
 }
 

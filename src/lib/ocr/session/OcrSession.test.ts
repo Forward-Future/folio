@@ -145,7 +145,7 @@ describe("restore", () => {
     const session = new OcrSession(makePdf([makePage(), makePage(), makePage()]), "doc-key");
     await session.restore();
     expect(mocks.getOcrPages).toHaveBeenCalledWith("doc-key");
-    expect([...session.pages.keys()]).toEqual([1, 3]);
+    expect([...session.pages.keys()]).toEqual([1]);
     expect(session.version).toBe(1);
   });
 
@@ -210,6 +210,12 @@ describe("recording the reader OCR result", () => {
     expect(listener).toHaveBeenCalledOnce();
     expect(session.version).toBe(1);
     expect((await readAll((await pdf.getPage(1)).streamTextContent()))[0].items[0].str).toBe("recognized");
+  });
+  it("does not keep an empty result that would block a later successful read", () => {
+    const session = new OcrSession(makePdf([makePage()]), null);
+    session.record(1, []);
+    session.record(1, [{ str: "later" }]);
+    expect(session.pages.get(1)).toEqual([{ str: "later" }]);
   });
   it("does not retain late results after closing", () => {
     const session = new OcrSession(makePdf([makePage()]), "key");

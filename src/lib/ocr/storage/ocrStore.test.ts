@@ -6,6 +6,8 @@ async function freshStore() {
   vi.resetModules();
   vi.stubGlobal("indexedDB", new IDBFactory());
   vi.stubGlobal("IDBKeyRange", IDBKeyRange);
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) });
   return { ...(await import("../../../recent")), ...(await import("./ocrStore")) };
 }
 
@@ -59,6 +61,58 @@ describe("recognized text storage", () => {
     expect((await getOcrPages("sha256:abc:100")).size).toBe(2);
   });
 
+  it("removes recognized text when a document is removed from Recent", async () => {
+    const { saveOcrPage, getOcrPages, removeRecent } = await freshStore();
+    await saveOcrPage("doc", 1, [{ str: "private" }]);
+    await saveOcrPage("other", 1, [{ str: "keep" }]);
+    await removeRecent("doc");
+    expect((await getOcrPages("doc")).size).toBe(0);
+    expect((await getOcrPages("other")).size).toBe(1);
+  });
+
+  it("clears saved OCR text when Recent is cleared", async () => {
+    const { saveOcrPage, getOcrPages, clearRecent } = await freshStore();
+    await saveOcrPage("doc", 1, [{ str: "private" }]);
+    await clearRecent();
+    expect((await getOcrPages("doc")).size).toBe(0);
+  });
+
+  it("clears recognized text independently without clearing notes", async () => {
+    const { saveOcrPage, getOcrPages, clearRecognizedText, saveNotes, getNotes } = await freshStore();
+    await saveOcrPage("doc", 1, [{ str: "private" }]);
+    await saveNotes({ id: "doc", note: "keep", marks: [], updatedAt: 1 });
+    await clearRecognizedText();
+    expect((await getOcrPages("doc")).size).toBe(0);
+    expect((await getNotes("doc"))?.note).toBe("keep");
+  });
+
+  it("does not persist OCR when storage invalidation cannot be checked", async () => {
+    const { saveOcrPage, getOcrPages } = await freshStore();
+    vi.stubGlobal("localStorage", { getItem: () => { throw new Error("unavailable"); } });
+    await saveOcrPage("doc", 1, [{ str: "private" }]);
+    expect((await getOcrPages("doc")).size).toBe(0);
+  });
+
+  it("reports an invalidation failure instead of falsely claiming deletion", async () => {
+    const { clearRecognizedText } = await freshStore();
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => { throw new Error("quota"); } });
+    await expect(clearRecognizedText()).rejects.toThrow("quota");
+  });
+
+  it("does not resurrect OCR from a reader open before data was cleared", async () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
+    const store = await freshStore();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
+    const { saveOcrPage, getOcrPages, clearRecent, ocrEpoch } = store;
+    const previousEpoch = ocrEpoch("doc");
+    await clearRecent();
+    await saveOcrPage("doc", 1, [{ str: "old session" }], previousEpoch);
+    expect((await getOcrPages("doc")).size).toBe(0);
+    await saveOcrPage("doc", 1, [{ str: "new session" }], ocrEpoch("doc"));
+    expect((await getOcrPages("doc")).size).toBe(1);
+  });
+
   it("is stored with the other per-document data, not instead of it", async () => {
     const { saveOcrPage, saveNotes, getNotes } = await freshStore();
     await saveNotes({ id: "doc", note: "keep me", marks: [], updatedAt: 1 });
@@ -91,6 +145,8 @@ describe("upgrading an existing library", () => {
       request.onerror = () => reject(request.error);
     });
 
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) });
     const { getNotes, getRecent } = await import("../../../recent");
     const { saveOcrPage, getOcrPages } = await import("./ocrStore");
     expect((await getNotes("old-doc"))?.note).toBe("from before");

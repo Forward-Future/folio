@@ -1,6 +1,7 @@
 // Stores and exposes the reader’s recognized text for search, AI, and searchable PDF copies.
 import type { PDFDocumentProxy } from "../../../pdf";
 import { PAGES_KEY, parsePages } from "../export/pageList";
+import { ocrEpoch } from "../../../recent";
 import { getOcrPages, saveOcrPage } from "../storage/ocrStore";
 import { withRecognized } from "../text/pages";
 import { STYLES } from "../text/words";
@@ -17,12 +18,14 @@ export class OcrSession {
   /** Bumped whenever a page gains text, so caches built from page text know to refresh. */
   version = 0;
   #key: string | null;
+  #epoch: string | null;
   #pageListeners = new Set<(page: number) => void>();
   #destroyed = false;
   /** `key` is the document's content id; without one (password-protected files) results stay in memory only. */
   constructor(pdf: PDFDocumentProxy, key: string | null) {
     this.pdf = pdf;
     this.#key = key;
+    this.#epoch = key ? ocrEpoch(key) : "";
     sessions.set(pdf, this);
     // Install the override before the viewer asks for any page.
     const getPage = pdf.getPage.bind(pdf);
@@ -50,9 +53,9 @@ export class OcrSession {
 
   /** Save the result of the reader's single OCR pass for search and export. */
   record(page: number, items: unknown[]) {
-    if (this.#destroyed || this.pages.has(page) || this.embedded.has(page)) return;
+    if (this.#destroyed || !items.length || this.pages.has(page) || this.embedded.has(page)) return;
     this.pages.set(page, items);
-    if (this.#key) void saveOcrPage(this.#key, page, items);
+    if (this.#key) void saveOcrPage(this.#key, page, items, this.#epoch);
     if (!items.length) return;
     this.version++;
     for (const listener of this.#pageListeners) listener(page);
@@ -62,7 +65,7 @@ export class OcrSession {
   async restore() {
     await this.#readEmbedded();
     if (!this.#key) return;
-    for (const [page, items] of await getOcrPages(this.#key)) this.pages.set(page, items);
+    for (const [page, items] of await getOcrPages(this.#key)) if (items.length) this.pages.set(page, items);
     if (this.pages.size) this.version++;
   }
 

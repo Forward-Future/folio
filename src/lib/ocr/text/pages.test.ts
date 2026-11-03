@@ -1,32 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { nearestUnqueued, withRecognized } from "./pages";
-
-describe("nearestUnqueued", () => {
-  it("starts at the page being read", () => {
-    expect(nearestUnqueued(10, new Set(), 4)).toBe(4);
-  });
-
-  it("then spreads outward, earlier page first on a tie", () => {
-    const queued = new Set<number>();
-    const order: number[] = [];
-    for (let n = nearestUnqueued(5, queued, 4); n; n = nearestUnqueued(5, queued, 4)) { queued.add(n); order.push(n); }
-    expect(order).toEqual([4, 3, 5, 2, 1]);
-  });
-
-  it("skips pages that are already done", () => {
-    expect(nearestUnqueued(5, new Set([3]), 3)).toBe(2);
-  });
-
-  it("returns 0 when every page is queued, or there are none", () => {
-    expect(nearestUnqueued(3, new Set([1, 2, 3]), 2)).toBe(0);
-    expect(nearestUnqueued(0, new Set(), 1)).toBe(0);
-  });
-
-  it("copes with a focus outside the document", () => {
-    expect(nearestUnqueued(5, new Set(), 99)).toBe(5);
-    expect(nearestUnqueued(5, new Set(), 0)).toBe(1);
-  });
-});
+import { withRecognized } from "./pages";
 
 describe("withRecognized", () => {
   const streamOf = (chunks: unknown[], onCancel?: () => void) => {

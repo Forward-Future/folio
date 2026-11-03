@@ -46,7 +46,16 @@ export async function startOcrWorker(signal: AbortSignal): Promise<OcrWorker> {
     const worker = await creation;
     try {
       signal.throwIfAborted();
-      await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
+      let stopConfig: (() => void) | undefined;
+      try {
+        await Promise.race([worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO }), new Promise<never>((_, reject) => {
+          stopConfig = () => reject(signal.reason);
+          if (signal.aborted) stopConfig();
+          else signal.addEventListener("abort", stopConfig, { once: true });
+        })]);
+      } finally {
+        if (stopConfig) signal.removeEventListener("abort", stopConfig);
+      }
       signal.throwIfAborted();
       initializing = false;
       return worker;

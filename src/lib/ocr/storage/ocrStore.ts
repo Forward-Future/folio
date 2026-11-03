@@ -1,5 +1,5 @@
 // Recognized text, kept locally in the same IndexedDB as Recent and notes (recent.ts owns the database and its schema).
-import { OCR, tx } from "../../../recent";
+import { OCR, ocrEpoch, tx } from "../../../recent";
 
 // One record per scanned page, keyed by the document's content id, so a scan is only read once.
 
@@ -21,9 +21,10 @@ export async function getOcrPages(docId: string): Promise<Map<number, unknown[]>
   return pages;
 }
 
-export async function saveOcrPage(docId: string, page: number, items: unknown[]) {
+export async function saveOcrPage(docId: string, page: number, items: unknown[], epoch = ocrEpoch(docId)) {
   try {
-    await tx("readwrite", (s) => s.put({ id: ocrId(docId, page), items }), OCR);
+    if (epoch === null) return;
+    await tx("readwrite", (s) => epoch === ocrEpoch(docId) ? s.put({ id: ocrId(docId, page), items }) : s.get(ocrId(docId, page)), OCR);
   } catch {
     /* best-effort, like notes */
   }

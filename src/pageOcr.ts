@@ -2,7 +2,10 @@ import { AnnotationMode, OPS, type PDFPageProxy } from "pdfjs-dist";
 import type { Worker as OcrWorker } from "tesseract.js";
 import { startOcrWorker } from "./ocrWorker";
 import { ocrSession } from "./lib/ocr/session/OcrSession";
-import { toItems } from "./lib/ocr/text/words";
+import { keepWords, toItems } from "./lib/ocr/text/words";
+import { area, boxOf, dropDuplicates } from "./lib/ocr/text/geometry";
+import { imageCover, isScanLike, SCAN_TEXT_COVER, textCover } from "./lib/ocr/text/scan";
+import type { Box, TextItem } from "./lib/ocr/types";
 import type { EventBus, PDFPageView, PDFViewer } from "./viewer";
 
 interface Word {
@@ -50,13 +53,14 @@ async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSig
     const lines = (data.blocks ?? []).flatMap(block => block.paragraphs.flatMap(p => p.lines));
     for (const line of lines) {
       const height = line.bbox.y1 - line.bbox.y0;
-      for (const [i, word] of line.words.entries()) {
+      const kept = keepWords(line.words);
+      for (const [i, word] of kept.entries()) {
         const width = ctx.measureText(word.text).width;
         if (!width || !height) continue;
         // pdf.js sizes its text layer in unrotated PDF units and rotates the whole layer for display.
         const [x, y] = viewport.convertToPdfPoint(word.bbox.x0, line.bbox.y0);
         words.push({
-          text: word.text, endOfLine: i === line.words.length - 1,
+          text: word.text, endOfLine: i === kept.length - 1,
           left: 100 * (x - xMin) / (xMax - xMin), top: 100 * (yMax - y) / (yMax - yMin),
           height: height / (scale * page.userUnit), scaleX: 100 * (word.bbox.x1 - word.bbox.x0) / (width * height),
         });
@@ -92,24 +96,38 @@ function addWords(view: PDFPageView, words: Word[]) {
   end.before(fragment);
 }
 
-/** Consume the stream one chunk at a time without retaining a whole page's text and fonts. */
-async function hasEmbeddedText(page: PDFPageProxy, signal: AbortSignal) {
+/** Retain only sparse native text; typed pages can be skipped without accumulating their entire text. */
+async function sparseNativeText(page: PDFPageProxy, signal: AbortSignal): Promise<TextItem[] | null> {
   const reader = page.streamTextContent().getReader();
-  let found = false;
+  const items: TextItem[] = [];
+  let coverage = 0;
+  let typed = false;
+  const pageArea = area(page.view as Box);
   try {
-    while (!signal.aborted) {
-      const { done, value } = await reader.read();
-      if (done) return found;
-      found ||= value.items.some((item: { str?: string }) => item.str?.trim());
+    for (;;) {
+      signal.throwIfAborted();
+      const { value, done } = await reader.read();
+      if (done) return typed ? null : items;
+      if (typed) continue;
+      for (const item of value.items) {
+        if (!("str" in item) || !item.str.trim()) continue;
+        const text = item as TextItem;
+        items.push(text);
+        coverage += area(boxOf(text));
+        if (pageArea > 0 && coverage / pageArea >= SCAN_TEXT_COVER) {
+          items.length = 0;
+          typed = true;
+          break;
+        }
+      }
     }
-    throw signal.reason;
   } finally {
     reader.releaseLock();
   }
 }
 
 /** Prepare the document sequentially, giving the reader's current page and its successor the next turns. */
-export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus: (text: string | null) => void) {
+export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus: (text: string | null) => void, onPhase: (phase: "running" | "done") => void) {
   const pdf = viewer.pdfDocument!;
   const controller = new AbortController();
   const { signal } = controller;
@@ -130,7 +148,8 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
     const n = viewer.currentPageNumber;
     const view: PDFPageView = viewer.getPageView(n - 1);
     const layer = view.textLayer?.div;
-    if (layer?.isConnected && !layer.hidden && layer.textContent.trim()) onStatus(null);
+    if (notices.get(n) === "ocrError") onStatus(`Text unavailable on page ${n}.`);
+    else if (layer?.isConnected && !layer.hidden && layer.textContent.trim()) onStatus(null);
     else if (notices.get(n) === "noWords") onStatus(`No readable text found on page ${n}.`);
     else if (notices.has(n)) onStatus(`Text unavailable on page ${n}.`);
     else if (active === n && recognizing) onStatus(`Recognizing text on page ${n}…`);
@@ -171,9 +190,17 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
     try {
       page = await pdf.getPage(n);
       signal.throwIfAborted();
-      if (await hasEmbeddedText(page, signal)) return;
+      const session = ocrSession(pdf);
+      if (session?.pages.has(n) || session?.embedded.has(n)) return;
+      const native = await sparseNativeText(page, signal);
+      if (!native) return;
       signal.throwIfAborted();
       if (!(await hasPageImage(page))) return;
+      const scan = await isScanLike(native.length, textCover(native, page.view as Box), async () => {
+        const { fnArray, argsArray } = await page!.getOperatorList({ annotationMode: AnnotationMode.DISABLE });
+        return imageCover(fnArray, argsArray, OPS, page!.view as Box);
+      });
+      if (!scan) return;
       signal.throwIfAborted();
       if (n !== viewer.currentPageNumber && pending.has(viewer.currentPageNumber)) {
         pending.add(n);
@@ -183,11 +210,17 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
       if (n === viewer.currentPageNumber) updateStatus();
       worker ??= startOcrWorker(signal).catch(error => { workerStartFailed = true; throw error; });
       const { words, items } = await readWords(page, await worker, signal);
+      const newItems = dropDuplicates(items, native.map(boxOf));
       signal.throwIfAborted();
-      if (words.length) {
+      if (words.length && newItems.length) {
         remember(n, words);
-        addWords(view, words);
-        ocrSession(pdf)?.record(n, items);
+        session?.record(n, newItems);
+        if (native.length) {
+          if (view.renderingState !== 0) {
+            view.reset({ keepAnnotationLayer: true, keepAnnotationEditorLayer: true, keepCanvasWrapper: true });
+            viewer.update();
+          }
+        } else addWords(view, words);
       } else {
         notices.set(n, "noWords");
       }
@@ -203,6 +236,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
         // Background renders aren't in the viewer's page buffer, so it won't release their images for us.
         if (!viewer.getCachedPageViews().has(view)) page?.cleanup();
         if (n === viewer.currentPageNumber) updateStatus();
+        if (!pending.size) onPhase("done");
         schedule();
       }
     }
@@ -218,7 +252,6 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
     const words = cache.get(n);
     if (words) addWords(view, words);
     else if (evicted.delete(n)) pending.add(n);
-    else if (view.textLayer?.div.textContent.trim() && !view.textLayer.div.querySelector(".ocr-word")) pending.delete(n);
     if (n === viewer.currentPageNumber) updateStatus();
     schedule();
   }, { signal });
@@ -243,6 +276,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
     onStatus(null);
     void worker?.then(w => w.terminate()).catch(() => {});
   }, { once: true });
+  onPhase("running");
   updateStatus();
   schedule();
   return {
@@ -254,6 +288,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
         if (notices.get(n) === "ocrError") notices.delete(n);
       }
       nextPage = viewer.currentPageNumber;
+      if (pending.size || active) onPhase("running");
       updateStatus();
       schedule();
     },

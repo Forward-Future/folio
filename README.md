@@ -139,7 +139,7 @@ Ask AI is optional and desktop-only. See [Using Ask AI](#using-ask-ai) for setup
 ### Pick up where you left off
 
 - **Recent library:** keep up to eight recently opened PDFs with thumbnail previews and the last page read; reopen
-  with one click, remove individual entries, or choose **Clear all**.
+  with one click, remove individual entries, or choose **Clear all**. Removing entries also removes their saved recognized text; **Clear all** removes all saved recognized text. You can also clear saved recognized text from Settings without removing documents.
 - **Startup restore:** reopen the last active document automatically when it is still in the recent library.
 - **Reading state:** remember each document's page, scroll position, zoom, rotation, sidebar visibility, and two-page
   mode.

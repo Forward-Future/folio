@@ -37,6 +37,20 @@ describe("OCR worker startup", () => {
     expect(browserWorker.terminate).toHaveBeenCalledOnce();
   });
 
+  it("settles startup when the document closes during configuration", async () => {
+    let release!: () => void;
+    const config = new Promise<void>(resolve => { release = resolve; });
+    const worker = { setParameters: vi.fn(() => config), terminate: vi.fn().mockResolvedValue(undefined) };
+    mocks.createWorker.mockImplementation(() => Promise.resolve(worker));
+    const controller = new AbortController();
+    const starting = startOcrWorker(controller.signal);
+    await vi.waitFor(() => expect(worker.setParameters).toHaveBeenCalledOnce());
+    controller.abort();
+    await expect(starting).rejects.toMatchObject({ name: "AbortError" });
+    expect(worker.terminate).toHaveBeenCalledOnce();
+    release();
+  });
+
   it("terminates an initialized worker if configuring it fails", async () => {
     const worker = { setParameters: vi.fn().mockRejectedValue(new Error("configuration failed")), terminate: vi.fn().mockResolvedValue(undefined) };
     mocks.createWorker.mockImplementation(() => {
