@@ -319,11 +319,34 @@ try {
 
   // A scanned page (an image, no text) is offered text recognition; once read, its words can be searched and selected.
   // (Opened from the library by clicking, not with Ctrl+O: where the keyboard focus is after a text box was restored differs by platform.)
+  // Simulate a real Tesseract language-load rejection, then verify the reader releases the worker and offers a retry.
+  await page.window.addInitScript(() => {
+    const post = Worker.prototype.postMessage;
+    const terminate = Worker.prototype.terminate;
+    Worker.prototype.terminate = function () {
+      if (this.folioFailedStartup) top.sessionStorage.setItem("folio-failed-worker-terminated", "yes");
+      return terminate.call(this);
+    };
+    Worker.prototype.postMessage = function (message, ...rest) {
+      if (message?.action === "loadLanguage" && !top.sessionStorage.getItem("folio-language-failed")) {
+        top.sessionStorage.setItem("folio-language-failed", "yes");
+        this.folioFailedStartup = true;
+        queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+          data: { workerId: message.workerId, jobId: message.jobId, action: message.action, status: "reject", data: "Test language failure" },
+        })));
+        return;
+      }
+      return post.call(this, message, ...rest);
+    };
+  });
   const [scanChooser] = await Promise.all([
     page.waitForEvent("filechooser"),
     page.keyboard.press("ControlOrMeta+o"),
   ]);
   await scanChooser.setFiles(path.join(root, "scripts", "fixtures", "scanned-sample.pdf"));
+  await page.getByRole("button", { name: "Try again" }).waitFor({ timeout: 60_000 });
+  assert.equal(await page.evaluate(() => top.sessionStorage.getItem("folio-failed-worker-terminated")), "yes");
+  await page.getByRole("button", { name: "Try again" }).click();
   await page.waitForFunction(() => document.querySelectorAll(".textLayer span:not(.markedContent)").length > 60, null, { timeout: 180_000 });
   assert.match(await page.locator(".textLayer").first().innerText(), /Scanned\s+pages\s+become\s+searchable/);
   console.log("ok  scanned page recognized");

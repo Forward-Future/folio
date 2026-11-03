@@ -1,5 +1,6 @@
 import { AnnotationMode, OPS, type PDFPageProxy } from "pdfjs-dist";
 import type { Worker as OcrWorker } from "tesseract.js";
+import { startOcrWorker } from "./ocrWorker";
 import { ocrSession } from "./lib/ocr/session/OcrSession";
 import { toItems } from "./lib/ocr/text/words";
 import type { EventBus, PDFPageView, PDFViewer } from "./viewer";
@@ -23,20 +24,6 @@ async function hasPageImage(page: PDFPageProxy) {
   // pdf.js records locations for ordinary images but not for stencil masks used by some monochrome scans.
   const { fnArray } = await page.getOperatorList({ annotationMode: AnnotationMode.DISABLE });
   return fnArray.some(op => IMAGE_OPS.has(op));
-}
-
-async function startWorker() {
-  const { createWorker, OEM, PSM } = await import("tesseract.js");
-  const base = `${import.meta.env.BASE_URL}ocr`;
-  // Language initialization errors in Tesseract are delivered to errorHandler.
-  const worker = await new Promise<OcrWorker>((resolve, reject) => {
-    createWorker("eng", OEM.LSTM_ONLY, {
-      workerPath: `${base}/worker.min.js`, workerBlobURL: false, corePath: base, langPath: base,
-      cacheMethod: "none", errorHandler: reject,
-    }).then(resolve, reject);
-  });
-  await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
-  return worker;
 }
 
 async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSignal): Promise<{ words: Word[]; items: ReturnType<typeof toItems> }> {
@@ -194,7 +181,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
       }
       recognizing = true;
       if (n === viewer.currentPageNumber) updateStatus();
-      worker ??= startWorker().catch(error => { workerStartFailed = true; throw error; });
+      worker ??= startOcrWorker(signal).catch(error => { workerStartFailed = true; throw error; });
       const { words, items } = await readWords(page, await worker, signal);
       signal.throwIfAborted();
       if (words.length) {
@@ -258,4 +245,17 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
   }, { once: true });
   updateStatus();
   schedule();
+  return {
+    retry() {
+      if (signal.aborted) return;
+      if (workerStartFailed) { worker = undefined; workerStartFailed = false; }
+      for (let n = 1; n <= pdf.numPages; n++) {
+        if (n !== active && !ocrSession(pdf)?.pages.has(n) && !ocrSession(pdf)?.embedded.has(n)) pending.add(n);
+        if (notices.get(n) === "ocrError") notices.delete(n);
+      }
+      nextPage = viewer.currentPageNumber;
+      updateStatus();
+      schedule();
+    },
+  };
 }

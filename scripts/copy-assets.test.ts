@@ -41,7 +41,7 @@ describe("the OCR runtime that ships with the app", () => {
   });
 
   it("uses main's shared OCR asset paths", () => {
-    const source = readFileSync(resolve(root, "src/pageOcr.ts"), "utf8");
+    const source = readFileSync(resolve(root, "src/ocrWorker.ts"), "utf8");
     expect(source).toContain('`${import.meta.env.BASE_URL}ocr`');
     expect(source).toContain('corePath: base, langPath: base');
   });

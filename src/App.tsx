@@ -121,6 +121,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   const markupRef = useRef<MarkupController | null>(null);
   const persistRef = useRef(false);
   const ocrRef = useRef<OcrSession | null>(null);
+  const pageOcrRef = useRef<{ retry(): void } | null>(null);
   const dirtyRef = useRef(false);
   const exporting = useRef<PDFDocumentProxy | null>(null);
 
@@ -257,7 +258,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         viewer.scrollPageIntoView({ pageNumber: restoredPage, destArray: [null, { name: "XYZ" }, saved.left, saved.top, null] });
       }
       restoringRef.current = false;
-      recognizeScannedPages(eventBus, viewer, setTextStatus);
+      pageOcrRef.current = recognizeScannedPages(eventBus, viewer, setTextStatus);
     });
     eventBus.on("updateviewarea", ({ location }: { location: { pageNumber: number; top: number; left: number } }) => {
       const current = docRef.current;
@@ -1153,6 +1154,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
                     { kind: "action", icon: "download", label: "Save a copy", shortcut: keys("Ctrl S"), onSelect: download },
                     { kind: "action", icon: "print", label: "Print", shortcut: keys("Ctrl P"), onSelect: print },
                     { kind: "action", icon: "info", label: "Document info", onSelect: () => setDialog("info") },
+                    { kind: "action", icon: "search", label: "Recognize text", onSelect: () => pageOcrRef.current?.retry() },
                     { kind: "divider" },
                     { kind: "toggle", icon: "moon", label: "PDF dark mode", checked: night, onSelect: () => setNightTo(!night) },
                     { kind: "action", icon: "expand", label: "Focus mode", shortcut: "F", onSelect: toggleFocus },
@@ -1209,7 +1211,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
             }}>
             <div ref={innerRef} className="pdfViewer" />
           </div>
-          {doc && <div className="page-text-status" role="status">{textStatus}</div>}
+          {doc && <div className="page-text-status" role="status">{textStatus}{textStatus?.startsWith("Text unavailable") && <button onClick={() => pageOcrRef.current?.retry()}>Try again</button>}</div>}
 
           {doc && searchOpen && (
             <>
