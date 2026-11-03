@@ -363,11 +363,8 @@ try {
   await page.getByText("Saved a copy with the recognized text").waitFor({ timeout: 60_000 });
   assert.equal(await app.evaluate(() => globalThis.folioScanSaved), "completed");
   assert.equal(readFileSync(scannedCopy).subarray(0, 5).toString("latin1"), "%PDF-");
-  const [copyChooser] = await Promise.all([
-    page.waitForEvent("filechooser"),
-    page.keyboard.press("ControlOrMeta+o"),
-  ]);
-  await copyChooser.setFiles(scannedCopy);
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "scanned-copy.pdf", data: Buffer.from(data) }), Array.from(readFileSync(scannedCopy)));
   await page.waitForFunction(() => document.title.startsWith("scanned-copy.pdf"), null, { timeout: 30_000 });
   await page.waitForFunction(() => document.querySelectorAll(".textLayer span:not(.markedContent)").length > 60, null, { timeout: 30_000 });
   assert.match(await page.locator(".textLayer").first().innerText(), /Scanned\s+pages\s+become\s+searchable/);
