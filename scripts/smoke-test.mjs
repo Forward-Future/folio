@@ -508,7 +508,7 @@ try {
 
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });
-  await checkReaderTools(app, page, env.FOLIO_TEST_USER_DATA);
+  await checkReaderTools(app, page, env.FOLIO_TEST_USER_DATA, shots);
 
   // A Word document opens converted to PDF (by Word, LibreOffice, or Folio itself, whichever the computer has),
   // and the PDF is saved next to it. Opening the document again reuses that PDF.

@@ -150,7 +150,7 @@ async function captureDownload(app, file) {
   }, file);
 }
 
-async function checkContentEditing(app, page, folder) {
+async function checkContentEditing(app, page, folder, shots) {
   // Two identical text runs and two placements of one image, also reused on the second page.
   const words = "BT /F 16 Tf 12 170 Td (Orig) Tj 29.34 0 Td (inal) Tj -29.34 -25 Td (Original) Tj ET";
   const images = "% /Logo Do\n/Artifact << /Details (literal /Logo Do) >> BDC q 10 20 24 40 re W n "
@@ -179,6 +179,8 @@ async function checkContentEditing(app, page, folder) {
   const item = name => sheet.getByRole("button", { name, exact: true });
   const input = sheet.getByRole("textbox", { name: "Edit text on page" });
   const save = page.getByRole("button", { name: "Save copy", exact: true });
+  await sheet.locator(".textLayer").getByText("Original", { exact: true }).first().waitFor();
+  await page.screenshot({ path: path.join(shots, "before-pdf-edit.png") });
   await openEditor();
   const rotation = page.getByTitle("Rotate (R)");
   await rotation.click();
@@ -262,6 +264,7 @@ async function checkContentEditing(app, page, folder) {
   await history.getByRole("heading", { name: "Version 3 This PDF" }).waitFor();
   assert.equal(await history.locator(".version-entry").count(), 3);
   await history.getByText("blue.png").waitFor();
+  await page.screenshot({ path: path.join(shots, "after-pdf-edit.png") });
   assert.equal(await history.locator("ins").innerText(), "Revised");
   const recovered = path.join(folder, "original-version.pdf");
   await captureDownload(app, recovered);
@@ -291,7 +294,7 @@ async function checkContentEditing(app, page, folder) {
   console.log("ok  fragmented embedded-font text in Folio's sample edits as a line and reopens in the reader");
 }
 
-export async function checkReaderTools(app, page, folder) {
+export async function checkReaderTools(app, page, folder, shots) {
   const settings = () => page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
   const wheelSwitch = page.getByRole("switch", { name: "Scroll one page at a time" });
   const wheel = options => page.locator(".viewer-container").evaluate((el, options) =>
@@ -417,5 +420,5 @@ export async function checkReaderTools(app, page, folder) {
   assert.equal(await page.locator('.page[data-page-number="2"] .textWidgetAnnotation input').inputValue(), "A filled field");
   console.log("ok  the normal Save shortcut and Open reordered copy preserve filled form fields");
   await checkScanSelection(app, page);
-  await checkContentEditing(app, page, folder);
+  await checkContentEditing(app, page, folder, shots);
 }
