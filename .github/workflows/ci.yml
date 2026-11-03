@@ -43,8 +43,9 @@ jobs:
       - name: Smoke test
         if: runner.os != 'Linux'
         run: npm run smoke
+      # Keep PR and temporary CI-run screenshots on the runner; only main retains its existing artifact.
       - uses: actions/upload-artifact@v7
-        if: always()
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: smoke-${{ matrix.os }}
           path: release/smoke/
