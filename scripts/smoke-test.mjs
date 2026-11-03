@@ -60,6 +60,12 @@ try {
   assert.match(await page.locator(".textLayer").first().innerText(), /A short tour of Folio/);
   console.log("ok  sample rendered with a text layer");
 
+  const toolbar = page.getByRole("toolbar", { name: "Tools" });
+  for (const name of ["Select", "Highlight", "Draw", "Text", "Sign", "Edit mode"]) await toolbar.getByRole("button", { name, exact: true }).waitFor();
+  await toolbar.getByRole("button", { name: "Edit mode", exact: true }).click();
+  await toolbar.getByRole("button", { name: "Highlight", exact: true }).waitFor();
+  await toolbar.getByRole("button", { name: "Exit edit mode", exact: true }).click();
+
   const docs = page.getByRole("tablist", { name: "Open documents" });
   assert.equal(await page.locator(".document-tabs").count(), 0);
   await page.getByRole("button", { name: "More", exact: true }).click();
@@ -564,7 +570,7 @@ try {
 
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });
-  await checkReaderTools(app, page, env.FOLIO_TEST_USER_DATA);
+  await checkReaderTools(app, page, env.FOLIO_TEST_USER_DATA, shots);
 
   // A Word document opens converted to PDF (by Word, LibreOffice, or Folio itself, whichever the computer has),
   // and the PDF is saved next to it. Opening the document again reuses that PDF.
@@ -697,6 +703,45 @@ try {
   });
   assert.match(closePrompt, process.platform === "darwin" ? /⌘S/ : /Ctrl\+S/);
   console.log("ok  the unsaved-work prompt shows this platform's Save shortcut");
+
+  // Closing Ask AI mid-answer stops the answer, like Stop: it doesn't run on unseen or come back unfinished. A stand-in
+  // provider starts each answer and never finishes it.
+  await app.evaluate(({ ipcMain, BrowserWindow }) => {
+    const ai = globalThis.folioAi = { asked: [], cancelled: [], reply: "" };
+    for (const channel of ["folio:ai-status", "folio:ai-ask", "folio:ai-cancel"]) ipcMain.removeHandler(channel);
+    ipcMain.handle("folio:ai-status", () => ({ chatgpt: { connected: false, email: "", name: "", welcomeSeen: true, encrypted: true },
+      claude: { installed: true, loggedIn: true, subscription: true, version: "test", authMethod: "claude.ai" } }));
+    ipcMain.handle("folio:ai-ask", (_event, request) => {
+      ai.asked.push(request.id);
+      if (ai.reply) BrowserWindow.getAllWindows()[0].webContents.send("folio:ai-event", { id: request.id, type: "delta", text: ai.reply });
+      return true;
+    });
+    ipcMain.handle("folio:ai-cancel", (_event, id) => { ai.cancelled.push(id); return true; });
+  });
+  await page.evaluate(() => localStorage.setItem("folio:ai-provider", "claude"));
+  const aiPanel = page.getByRole("complementary", { name: "Ask AI" });
+  const askAndClose = async (question, reply) => {
+    const asked = await app.evaluate((_electron, reply) => { globalThis.folioAi.reply = reply; return globalThis.folioAi.asked.length; }, reply);
+    await aiPanel.getByRole("textbox").fill(question);
+    await aiPanel.getByRole("textbox").press("Enter");
+    // Wait until the question has reached the provider, so the answer is under way rather than still being prepared.
+    for (let i = 0; i < 50 && (await app.evaluate(() => globalThis.folioAi.asked.length)) === asked; i++) await page.waitForTimeout(100);
+    if (reply) await aiPanel.getByText(reply).waitFor();
+    await aiPanel.getByRole("button", { name: "Close Ask AI" }).click();
+    await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+    await aiPanel.getByText(question).waitFor();
+  };
+  await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+  await askAndClose("First question", "Partial answer");
+  await askAndClose("Second question", "");
+  const aiCheck = await app.evaluate(() => globalThis.folioAi);
+  assert.equal(aiCheck.asked.length, 2);
+  assert.deepEqual(aiCheck.cancelled, aiCheck.asked, "closing Ask AI left an answer running");
+  assert.equal(await aiPanel.locator(".typing").count(), 0, "a stopped answer still shows as in progress");
+  assert.ok(await aiPanel.getByText("Partial answer").isVisible(), "the part already answered was dropped");
+  assert.equal(await aiPanel.getByRole("button", { name: "Stop" }).count(), 0, "the panel still thinks an answer is running");
+  await aiPanel.getByRole("button", { name: "Close Ask AI" }).click();
+  console.log("ok  closing Ask AI stops the answer in progress");
 
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);

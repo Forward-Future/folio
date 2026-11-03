@@ -122,6 +122,42 @@ describe("recognized text storage", () => {
 });
 
 describe("upgrading an existing library", () => {
+  it.each(["main", "ocr"])("upgrades the version 5 %s schema and retains existing data", async (schema) => {
+    vi.resetModules();
+    const factory = new IDBFactory();
+    vi.stubGlobal("indexedDB", factory);
+    vi.stubGlobal("IDBKeyRange", IDBKeyRange);
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) });
+    await new Promise<void>((resolve, reject) => {
+      const request = factory.open("folio", 5);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        for (const name of ["recent", "notes", "ai"]) db.createObjectStore(name, { keyPath: "id" });
+        if (schema === "main") {
+          db.createObjectStore("versions", { keyPath: "id" }).createIndex("byFamily", ["family", "number"], { unique: true });
+          db.createObjectStore("versionPdfs");
+        } else db.createObjectStore("ocr", { keyPath: "id" });
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction("notes", "readwrite");
+        tx.objectStore("notes").put({ id: "doc", note: "keep", marks: [], updatedAt: 1 });
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onerror = () => reject(tx.error);
+      };
+      request.onerror = () => reject(request.error);
+    });
+    const { getNotes, openFolioDatabase } = await import("../../../recent");
+    const { saveOcrPage, getOcrPages } = await import("./ocrStore");
+    expect((await getNotes("doc"))?.note).toBe("keep");
+    const db = await openFolioDatabase();
+    expect(["ocr", "versions", "versionPdfs"].every(name => db.objectStoreNames.contains(name))).toBe(true);
+    expect(db.transaction("versions").objectStore("versions").indexNames.contains("byFamily")).toBe(true);
+    await saveOcrPage("doc", 1, [{ str: "saved" }]);
+    expect((await getOcrPages("doc")).get(1)).toEqual([{ str: "saved" }]);
+  });
+
   it.each([3, 4])("upgrades a version %i library without losing notes", async (version) => {
     vi.resetModules();
     const factory = new IDBFactory();
