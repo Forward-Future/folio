@@ -1218,7 +1218,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
                   <span>{t.label}</span>
                 </button>
               ))}
-              <button onClick={startSigning} title="Add a signature"><Icon name="signature" size={16} /><span>Sign</span></button>
+              <button onClick={startSigning} aria-label="Sign" title="Add a signature"><Icon name="signature" size={16} /><span>Sign</span></button>
               <button className={contentEditing ? "on edit-mode-toggle" : "edit-mode-toggle"} aria-pressed={contentEditing}
                 aria-label={contentEditing ? "Exit edit mode" : "Edit mode"} title={contentEditing ? "Exit edit mode" : "Edit existing text and images"}
                 onClick={() => contentEditing ? leaveEditMode() : chooseTool("select", true)}>
