@@ -177,6 +177,16 @@ async function checkSignatureFields(app, page, folder) {
   const field = page.getByRole("button", { name: "Sign Applicant signature", exact: true });
   const initials = page.getByRole("button", { name: "Sign Approval initials", exact: true });
   const fieldPicker = page.getByRole("dialog", { name: "Sign Applicant signature", exact: true });
+  async function clickAtPageFraction(button, x, y) {
+    await button.scrollIntoViewIfNeeded();
+    const position = await button.evaluate((el, point) => {
+      const paper = el.closest(".page").querySelector(".canvasWrapper").getBoundingClientRect();
+      const bounds = el.getBoundingClientRect();
+      return { x: paper.x + point.x * paper.width - bounds.x - el.clientLeft,
+        y: paper.y + point.y * paper.height - bounds.y - el.clientTop };
+    }, { x, y });
+    await button.click({ position });
+  }
   await field.waitFor();
   await page.getByRole("button", { name: "Edit mode", exact: true }).click();
   await field.waitFor({ state: "hidden" });
@@ -197,9 +207,7 @@ async function checkSignatureFields(app, page, folder) {
   await page.evaluate(entries => { for (const [key, value] of entries) localStorage.setItem(key, value); }, saved);
   await page.getByTitle(/^Zoom in/).click();
   // Hit the PDF field's real center after zooming a rotated page with an offset crop box.
-  await field.scrollIntoViewIfNeeded();
-  const surface = await page.locator('.page[data-page-number="1"] .canvasWrapper').boundingBox();
-  await page.mouse.click(surface.x + surface.width * (132.5 - 30) / 300, surface.y + surface.height * (130 - 20) / 300);
+  await clickAtPageFraction(field, (132.5 - 30) / 300, (130 - 20) / 300);
   await fieldPicker.getByRole("button", { name: "Full name", exact: true }).waitFor();
   await page.keyboard.press("Escape");
   await fieldPicker.waitFor({ state: "hidden" });
@@ -228,6 +236,7 @@ async function checkSignatureFields(app, page, folder) {
   await page.keyboard.press("Escape");
   await hint.getByRole("button", { name: "Sign with Signature 1" }).click();
   await hint.waitFor({ state: "hidden" });
+  console.log("ok  native signature fields support capture, keyboard selection, zoom and undo");
 
   await page.getByTitle("Next page").click();
   await hint.getByRole("button", { name: "Review signature" }).click();
@@ -248,18 +257,19 @@ async function checkSignatureFields(app, page, folder) {
   const printedInitials = thirdPage.getByRole("button", { name: "Sign Initials", exact: true });
   await printed.waitFor();
   assert.equal(await thirdPage.locator(".signature-hit").count(), 3, "two printed lines and one native field");
-  const paper = await thirdPage.locator(".canvasWrapper").boundingBox();
   // Click the ink itself, first on the drawn rule, then on underscores beside the initials label.
-  await page.mouse.click(paper.x + paper.width * 130 / 300, paper.y + paper.height * (1 - 225 / 300));
+  await clickAtPageFraction(printed, 130 / 300, 1 - 225 / 300);
   await page.getByRole("dialog", { name: "Sign Signature", exact: true }).getByRole("button", { name: "Full name", exact: true }).click();
   await printed.waitFor({ state: "hidden" });
-  await page.mouse.click(paper.x + paper.width * 105 / 300, paper.y + paper.height * (1 - 139 / 300));
+  await clickAtPageFraction(printedInitials, 105 / 300, 1 - 139 / 300);
   await page.getByRole("dialog", { name: "Sign Initials", exact: true }).getByRole("button", { name: "Signature 1", exact: true }).click();
   await printedInitials.waitFor({ state: "hidden" });
+  await thirdPage.locator(".stampEditor canvas").nth(1).waitFor();
   assert.equal(await page.getByRole("dialog", { name: "Sign page 3", exact: true }).count(), 0);
   await page.keyboard.press("ControlOrMeta+z");
   await printedInitials.waitFor();
   await page.keyboard.press("ControlOrMeta+Shift+z");
+  await thirdPage.locator(".stampEditor canvas").nth(1).waitFor();
   await printedInitials.waitFor({ state: "hidden" });
   const file = path.join(folder, "signed-fields.pdf");
   await captureDownload(app, file);

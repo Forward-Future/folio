@@ -740,5 +740,12 @@ try {
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {
+  // A failed interaction can leave a dirty tab. Closing the disposable profile must not wait on a native prompt.
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.removeAllListeners("will-prevent-unload");
+      win.webContents.on("will-prevent-unload", event => event.preventDefault());
+    }
+  }).catch(() => {});
   await app.close();
 }

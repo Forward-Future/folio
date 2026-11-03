@@ -228,12 +228,22 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   useEffect(() => {
     if (!doc || contentEditing) return;
     let cancelled = false;
-    const timer = setTimeout(() => {
+    const bus = busRef.current;
+    const refresh = () => {
       void detectSignatureTargets(doc.pdf, page).then(targets => {
         if (!cancelled) setDetection({ pdf: doc.pdf, page, targets });
       }).catch(() => {});
-    }, 350);
-    return () => { cancelled = true; clearTimeout(timer); };
+    };
+    // Undo and redo change stamp coverage without changing the PDF page or the saved notes.
+    const timer = setTimeout(refresh, 350);
+    bus?.on("editingaction", refresh);
+    bus?.on("editingstateschanged", refresh);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      bus?.off("editingaction", refresh);
+      bus?.off("editingstateschanged", refresh);
+    };
   }, [doc, page, contentEditing]);
   useEffect(() => { setSigning(null); setDismissedSignaturePages([]); setDetection(null); }, [doc]);
 
