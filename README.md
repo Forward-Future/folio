@@ -124,7 +124,7 @@ Choose **Sign** in the toolbar to add a signature.
 - **Capture on paper:** sign with dark ink on white paper, then use your camera or upload a PNG, JPEG, or WebP photo.
 - **Clean up the image:** Folio removes the paper background and trims the image on your device. Use **Adjust crop and ink** if you need to refine it.
 - **Sign a detected field:** click an empty PDF signature field, then choose your saved signature or initials from the picker beside it. The chosen image fits the field. If you have no saved signatures yet, clicking the field opens capture with that field selected. A page with a single field also offers a signing shortcut at the bottom.
-- **Suggested placement:** Folio also recognizes printed labels such as **Approved by** and **Initials** in PDFs with embedded text. Click **Review signature** to see the suggested position.
+- **Suggested placement:** On PDFs with selectable text, click a printed line labeled **Signature** or **Initials** to pick a saved mark beside it. Folio recognizes drawn rules and underscores. When it finds only a possible signing area, **Review signature** lets you check the placement.
 - **Preview and position:** review the actual page, pick a suggestion or place the signature manually, and adjust its
   width before approving.
 - **Explicit approval:** click the sign button on a detected field or **Approve and add signature** in the preview. Signatures are visual stamps,

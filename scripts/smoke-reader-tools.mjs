@@ -152,15 +152,24 @@ async function captureDownload(app, file) {
 
 async function checkSignatureFields(app, page, folder) {
   const labels = "BT /F 12 Tf 30 190 Td (Approved by:) Tj 0 -110 Td (Initials) Tj ET";
+  const lines = [
+    "q 1 0 0 1 30 225 cm 0 0 m 200 0 l S Q BT /F 12 Tf 30 208 Td (Signature) Tj ET",
+    "BT /F 12 Tf 30 140 Td (Initials: ____________) Tj ET",
+    "30 65 m 170 65 l S BT /F 12 Tf 30 50 Td (Witness signature) Tj ET",
+    "BT /F 10 Tf 30 20 Td (Your signature confirms approval.) Tj ET",
+  ].join("\n");
   const form = testPdf([
-    "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 8 0 R] >> >>",
-    "<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>",
+    "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 8 0 R 11 0 R] >> >>",
+    "<< /Type /Pages /Count 3 /Kids [3 0 R 4 0 R 9 0 R] >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [20 30 320 330] /Rotate 90 /Annots [5 0 R 8 0 R] >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F 6 0 R >> >> /Contents 7 0 R >>",
     "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Applicant signature) /Rect [30 110 230 155] /P 3 0 R /F 4 >>",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     `<< /Length ${labels.length} >>\nstream\n${labels}\nendstream`,
     "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval initials) /Rect [45 60 107 92] /P 3 0 R /F 4 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [11 0 R] /Resources << /Font << /F 6 0 R >> >> /Contents 10 0 R >>",
+    `<< /Length ${lines.length} >>\nstream\n${lines}\nendstream`,
+    "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Witness signature) /Rect [30 65 170 105] /P 9 0 R /F 4 >>",
   ]);
   await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
     "folio:open-file", { name: "Signature fields.pdf", data: Buffer.from(data) }), form);
@@ -226,29 +235,57 @@ async function checkSignatureFields(app, page, folder) {
   assert.match(await placement.locator("option:checked").innerText(), /Approved by/);
   const approve = page.getByRole("button", { name: "Approve and add signature" });
   await approve.click();
-  await hint.getByRole("button", { name: "Review signature" }).click();
-  assert.match(await placement.locator("option:checked").innerText(), /Initials/);
-  await approve.click();
   await page.getByRole("dialog", { name: "Sign page 2" }).waitFor({ state: "hidden" });
+  const inferred = page.locator('.page[data-page-number="2"]').getByRole("button", { name: "Sign Initials", exact: true });
+  await inferred.click();
+  await page.getByRole("dialog", { name: "Sign Initials", exact: true }).getByRole("button", { name: "Signature 1", exact: true }).click();
+  await inferred.waitFor({ state: "hidden" });
   await hint.waitFor({ state: "hidden" });
+  await page.evaluate(entries => { for (const [key, value] of entries) localStorage.setItem(key, value); }, saved);
+  await page.getByTitle("Next page").click();
+  const thirdPage = page.locator('.page[data-page-number="3"]');
+  const printed = thirdPage.getByRole("button", { name: "Sign Signature", exact: true });
+  const printedInitials = thirdPage.getByRole("button", { name: "Sign Initials", exact: true });
+  await printed.waitFor();
+  assert.equal(await thirdPage.locator(".signature-hit").count(), 3, "two printed lines and one native field");
+  const paper = await thirdPage.locator(".canvasWrapper").boundingBox();
+  // Click the ink itself, first on the drawn rule, then on underscores beside the initials label.
+  await page.mouse.click(paper.x + paper.width * 130 / 300, paper.y + paper.height * (1 - 225 / 300));
+  await page.getByRole("dialog", { name: "Sign Signature", exact: true }).getByRole("button", { name: "Full name", exact: true }).click();
+  await printed.waitFor({ state: "hidden" });
+  await page.mouse.click(paper.x + paper.width * 105 / 300, paper.y + paper.height * (1 - 139 / 300));
+  await page.getByRole("dialog", { name: "Sign Initials", exact: true }).getByRole("button", { name: "Signature 1", exact: true }).click();
+  await printedInitials.waitFor({ state: "hidden" });
+  assert.equal(await page.getByRole("dialog", { name: "Sign page 3", exact: true }).count(), 0);
+  await page.keyboard.press("ControlOrMeta+z");
+  await printedInitials.waitFor();
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await printedInitials.waitFor({ state: "hidden" });
   const file = path.join(folder, "signed-fields.pdf");
   await captureDownload(app, file);
   await page.keyboard.press("ControlOrMeta+s");
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
-  assert.equal(readFileSync(file, "latin1").match(/\/Subtype\s*\/Stamp\b/g)?.length, 4);
+  assert.equal(readFileSync(file, "latin1").match(/\/Subtype\s*\/Stamp\b/g)?.length, 6);
   const stampCenters = await page.evaluate(async bytes => {
     const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
     try {
-      const annotations = await (await (await task.promise).getPage(1)).getAnnotations();
-      return annotations.filter(a => a.subtype === "Stamp").map(({ rect: [x1, y1, x2, y2] }) =>
-        [Math.round((x1 + x2) / 2), Math.round((y1 + y2) / 2)]);
+      const pdf = await task.promise;
+      return await Promise.all([1, 3].map(async number => {
+        const annotations = await (await pdf.getPage(number)).getAnnotations();
+        return annotations.filter(a => a.subtype === "Stamp").map(({ rect: [x1, y1, x2, y2] }) =>
+          [Math.round((x1 + x2) / 2), Math.round((y1 + y2) / 2)]);
+      }));
     } finally { await task.destroy(); }
   }, Array.from(readFileSync(file)));
-  assert.equal(stampCenters.length, 2);
+  const [nativeCenters, printedCenters] = stampCenters;
+  assert.equal(nativeCenters.length, 2);
   for (const [x, y] of [[130, 132.5], [76, 76]]) {
-    assert.ok(stampCenters.some(([cx, cy]) => Math.abs(cx - x) < 2 && Math.abs(cy - y) < 2), JSON.stringify(stampCenters));
+    assert.ok(nativeCenters.some(([cx, cy]) => Math.abs(cx - x) < 2 && Math.abs(cy - y) < 2), JSON.stringify(nativeCenters));
   }
-  console.log("ok  on-page pickers sign the clicked rotated field, support undo, and export each mark at its chosen field");
+  assert.equal(printedCenters.length, 2);
+  assert.ok(printedCenters.some(([x, y]) => Math.abs(x - 130) < 2 && Math.abs(y - 245) < 2), JSON.stringify(printedCenters));
+  assert.ok(printedCenters.some(([x, y]) => x > 98 && x < 113 && Math.abs(y - 154) < 2), JSON.stringify(printedCenters));
+  console.log("ok  on-page signing finds native fields, printed rules, underscores and standalone captions and exports marks at the chosen positions");
 }
 
 async function checkContentEditing(app, page, folder, shots) {

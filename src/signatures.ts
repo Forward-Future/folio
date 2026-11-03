@@ -1,31 +1,28 @@
 import { AnnotationEditorType } from "pdfjs-dist";
 import type { PDFDocumentProxy } from "./pdf";
 import type { PDFViewer } from "./viewer";
+import { printedSignatureTargets } from "./printedSignatureLines";
 
 export interface SignatureImage { url: string; width: number; height: number }
 export interface SavedSignature extends SignatureImage { key: string; name: string }
-export interface SignatureTarget { id: string; label: string; rect: number[]; kind: "field" | "label" }
-interface PageTargets {
-  fields: SignatureTarget[];
-  labels?: () => Promise<SignatureTarget[]>;
-}
-const cache = new WeakMap<PDFDocumentProxy, Map<number, Promise<PageTargets>>>();
+export interface SignatureTarget { id: string; label: string; rect: number[]; kind: "field" | "line" | "label" }
+const cache = new WeakMap<PDFDocumentProxy, Map<number, Promise<SignatureTarget[]>>>();
 
 export function uncoveredTargets(targets: SignatureTarget[], stamps: number[][]) {
   return targets.filter(({ rect }) => !stamps.some(stamp =>
     stamp[0] < rect[2] && stamp[2] > rect[0] && stamp[1] < rect[3] && stamp[3] > rect[1]));
 }
 
-export async function detectSignatureTargets(pdf: PDFDocumentProxy, pageNumber: number, fieldsOnly = false) {
+export async function detectSignatureTargets(pdf: PDFDocumentProxy, pageNumber: number) {
   let pages = cache.get(pdf);
   if (!pages) cache.set(pdf, pages = new Map());
   let result = pages.get(pageNumber);
   if (!result) {
-    result = (async (): Promise<PageTargets> => {
+    result = (async (): Promise<SignatureTarget[]> => {
       const page = await pdf.getPage(pageNumber);
       const annotations = await page.getAnnotations();
       const signedFields = await pdf.getSignatures();
-      if (signedFields?.length) return { fields: [] };
+      if (signedFields?.length) return [];
       const stamps = annotations.filter(annotation => annotation.subtype === "Stamp" && annotation.rect?.length === 4)
         .map(annotation => annotation.rect);
       const fields: SignatureTarget[] = annotations.filter(annotation => annotation.subtype === "Widget"
@@ -35,31 +32,16 @@ export async function detectSignatureTargets(pdf: PDFDocumentProxy, pageNumber: 
           rect: [Math.max(page.view[0], annotation.rect[0]), Math.max(page.view[1], annotation.rect[1]),
             Math.min(page.view[2], annotation.rect[2]), Math.min(page.view[3], annotation.rect[3])], kind: "field" }))
         .filter(target => target.rect[2] - target.rect[0] > 4 && target.rect[3] - target.rect[1] > 4);
-      if (fields.length) return { fields: uncoveredTargets(fields, stamps) };
-      // Inline fields are checked as pages render. Read the text only when the active page needs suggestions.
-      let labels: Promise<SignatureTarget[]> | undefined;
-      return { fields: [], labels: () => labels ??= page.getTextContent().then(text => {
-        const suggestions = text.items.flatMap((item, index): SignatureTarget[] => {
-          if (!("str" in item)) return [];
-          const label = item.str.trim();
-          const initials = /^(?:(?:your|signer['’]s|applicant['’]s)\s+)?initials\s*[:_]*$/i.test(label);
-          if (!(initials || /\b(signature|sign here|signed by)\b/i.test(label) || /^approved by\s*[:_]*$/i.test(label))
-            || /digital|electronic|verified|invalid/i.test(item.str)) return [];
-          const [left, bottom, right, top] = page.view;
-          const width = initials ? 64 : 180;
-          const positionX = Math.max(left, Math.min(item.transform[4], right - Math.min(width, right - left)));
-          const positionY = Math.max(bottom, Math.min(item.transform[5] + Math.max(item.height, 10) + 3, top - 42));
-          return [{ id: "label-" + index, label: item.str.trim().slice(0, 80) + " (suggested)",
-            rect: [positionX, positionY, Math.min(right, positionX + width), Math.min(top, positionY + 42)], kind: "label" }];
-        });
-        return uncoveredTargets(suggestions, stamps).slice(0, 12);
-      }).catch(reason => { labels = undefined; throw reason; }) };
+      // A printed caption for a native control must never create a second hit area, including over a locked field.
+      const widgets = annotations.filter(annotation => annotation.subtype === "Widget" && annotation.rect?.length === 4);
+      const printed = await printedSignatureTargets(page).catch(() => []);
+      const clear = uncoveredTargets(printed, [...stamps, ...widgets.map(widget => widget.rect)]);
+      return [...uncoveredTargets(fields, stamps), ...clear.filter(target => !fields.length || target.kind === "line")];
     })();
     pages.set(pageNumber, result);
     result.catch(() => pages!.delete(pageNumber));
   }
-  const targets = await result;
-  return !fieldsOnly && targets.labels ? targets.labels() : targets.fields;
+  return result;
 }
 
 export function fitSignature(signature: SignatureImage, bounds: number[]) {

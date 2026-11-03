@@ -83,8 +83,8 @@ function PageFields({ pdf, view, container, stampRects, onSign, onCapture }: Fie
   const close = useCallback(() => setPick(null), []);
   useEffect(() => {
     let current = true;
-    void detectSignatureTargets(pdf, view.id, true).then(targets => {
-      if (current) setFields(targets);
+    void detectSignatureTargets(pdf, view.id).then(targets => {
+      if (current) setFields(targets.filter(target => target.kind !== "label"));
     }).catch(() => {});
     return () => { current = false; };
   }, [pdf, view.id]);

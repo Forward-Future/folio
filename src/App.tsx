@@ -1542,7 +1542,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         targets={signing.field ? [signing.field] : signatureTargets} onClose={() => setSigning(null)}
         onApprove={(image, rect, name) => addSignature(signing.page, image, rect, name)} />}
       {active && doc && !contentEditing && tool === "select" && !signing && !dialog && signatureTargets.length > 0 && !dismissedSignaturePages.includes(page) &&
-        (signatureTargets.length === 1 || signatureTargets[0].kind === "label") &&
+        ((signatureTargets.length === 1 && signatureTargets[0].kind === "field") || signatureTargets.some(target => target.kind === "label")) &&
         <SignatureSuggestion key={doc.id + ":" + page + ":" + signatureTargets.length} targets={signatureTargets} page={page} onSign={(image, rect) => addSignature(page, image, rect)}
           onReview={startSigning} onDismiss={dismissSignatureSuggestion} />}
 
