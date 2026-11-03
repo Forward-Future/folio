@@ -21,7 +21,7 @@ export function SignatureSuggestion({ targets, page, onSign, onReview, onDismiss
     finally { setBusy(false); }
   };
   return <section className="signature-suggestion" aria-label="Signature suggestion">
-    <span>{field?.label || (targets[0].kind === "field" ? "Signature fields" : "Possible signature area")} on page {page}</span>
+    <span>{field?.label || "Possible signature area"} on page {page}</span>
     {saved.length > 1 && <select aria-label="Signature to add" value={key} disabled={busy} onChange={event => setKey(event.target.value)}>
       <option value="" disabled>Choose a signature</option>
       {saved.map(item => <option key={item.key} value={item.key}>{item.name}</option>)}
