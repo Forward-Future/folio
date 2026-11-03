@@ -201,9 +201,13 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   const [signing, setSigning] = useState<{ page: number; field?: SignatureTarget } | null>(null);
   const placingSignature = useRef(false);
+  const [pendingStamp, setPendingStamp] = useState<{ pdf: PDFDocumentProxy; index: number; previous: number[][] } | null>(null);
+  // PDF.js exposes the editor before its image is ready for undo. Keep the field in place until insertion completes.
+  const stampRects = (index: number) => pendingStamp && pendingStamp.pdf === doc?.pdf && pendingStamp.index === index
+    ? pendingStamp.previous : markupRef.current?.stampRects(index) ?? [];
   const [detection, setDetection] = useState<{ pdf: PDFDocumentProxy; page: number; targets: SignatureTarget[] } | null>(null);
   const signatureTargets = detection?.targets.length && detection.pdf === doc?.pdf && detection.page === page
-    ? uncoveredTargets(detection.targets, markupRef.current?.stampRects(page - 1) ?? []) : [];
+    ? uncoveredTargets(detection.targets, stampRects(page - 1)) : [];
   const [dismissedSignaturePages, setDismissedSignaturePages] = useState<number[]>([]);
   const [markup, setMarkup] = useState<MarkupState>({ marks: [], note: "", bookmarkedPages: null });
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("pages");
@@ -625,10 +629,14 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
     if (!doc || docRef.current !== doc || !active) throw new Error("The document changed. Open Sign again.");
     if (placingSignature.current) throw new Error("Another signature is being placed.");
     placingSignature.current = true;
+    setPendingStamp({ pdf: doc.pdf, index: pageNumber - 1, previous: stampRects(pageNumber - 1) });
     try {
       if (!(await chooseTool("select")) || docRef.current !== doc) throw new Error("The document changed. Open Sign again.");
       await placeSignature(viewerRef.current!, doc.pdf, pageNumber, image, rect, !!signing);
-    } finally { placingSignature.current = false; }
+    } finally {
+      placingSignature.current = false;
+      setPendingStamp(null);
+    }
     if (docRef.current !== doc) return;
     setDirty(true);
     if (rememberAs !== undefined) {
@@ -1546,14 +1554,14 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
       {dialog === "url" && <OpenUrlDialog key={linkDraft} initial={linkDraft} onClose={() => setDialog(null)} onSubmit={(url) => { setDialog(null); tabs.open([{ kind: "url", name: new URL(url).hostname, url }]); }} />}
       {active && doc && !contentEditing && tool === "select" && !dialog && !signing && !imageView && !pending && viewerRef.current && busRef.current &&
         <SignatureFields key={doc.id} pdf={doc.pdf} viewer={viewerRef.current} bus={busRef.current}
-          stampRects={index => markupRef.current?.stampRects(index) ?? []} onSign={addSignature}
+          stampRects={stampRects} placing={!!pendingStamp} onSign={addSignature}
           onCapture={(pageNumber, field) => setSigning({ page: pageNumber, field })} />}
       {doc && signing && <SignatureDialog key={doc.id + ":" + signing.page} pdf={doc.pdf} pageNumber={signing.page}
         targets={signing.field ? [signing.field] : signatureTargets} onClose={() => setSigning(null)}
         onApprove={(image, rect, name) => addSignature(signing.page, image, rect, name)} />}
       {active && doc && !contentEditing && tool === "select" && !signing && !dialog && signatureTargets.length > 0 && !dismissedSignaturePages.includes(page) &&
         ((signatureTargets.length === 1 && signatureTargets[0].kind === "field") || signatureTargets.some(target => target.kind === "label")) &&
-        <SignatureSuggestion key={doc.id + ":" + page + ":" + signatureTargets.length} targets={signatureTargets} page={page} onSign={(image, rect) => addSignature(page, image, rect)}
+        <SignatureSuggestion key={doc.id + ":" + page + ":" + signatureTargets.length} targets={signatureTargets} page={page} placing={!!pendingStamp} onSign={(image, rect) => addSignature(page, image, rect)}
           onReview={startSigning} onDismiss={dismissSignatureSuggestion} />}
 
       {updateVersion && (

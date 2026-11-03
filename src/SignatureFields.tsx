@@ -7,6 +7,7 @@ import { Icon } from "./icons";
 import { detectSignatureTargets, fitSignature, readSignatures, uncoveredTargets, type SavedSignature, type SignatureImage, type SignatureTarget } from "./signatures";
 
 interface FieldActions {
+  placing: boolean;
   stampRects: (pageIndex: number) => number[][];
   onSign: (page: number, image: SignatureImage, rect: number[]) => Promise<void>;
   onCapture: (page: number, target: SignatureTarget) => void;
@@ -23,11 +24,25 @@ function FieldPicker({ pick, close, onSign, container }: {
   useLayoutEffect(() => {
     const menu = card.current!;
     const anchor = pick.button;
+    let dismissTimer: number | undefined;
+    const outsideView = (a: DOMRect, stage: DOMRect) =>
+      a.bottom <= stage.top || a.top >= stage.bottom || a.right <= stage.left || a.left >= stage.right;
     const position = () => {
       // The page renderer can briefly detach the field during a zoom redraw.
-      if (!anchor.isConnected) return;
+      if (!anchor.isConnected || !anchor.offsetWidth || !anchor.offsetHeight) return;
       const a = anchor.getBoundingClientRect(), stage = container.getBoundingClientRect();
-      if (a.bottom <= stage.top || a.top >= stage.bottom || a.right <= stage.left || a.left >= stage.right) { close(); return; }
+      if (outsideView(a, stage)) {
+        menu.style.visibility = "hidden";
+        if (dismissTimer === undefined) dismissTimer = window.setTimeout(() => {
+          dismissTimer = undefined;
+          if (anchor.isConnected && anchor.offsetWidth && outsideView(anchor.getBoundingClientRect(), container.getBoundingClientRect())) close();
+          else position();
+        }, 350);
+        return;
+      }
+      window.clearTimeout(dismissTimer);
+      dismissTimer = undefined;
+      menu.style.visibility = "";
       const left = Math.max(8, Math.min(a.left, window.innerWidth - menu.offsetWidth - 8));
       const top = a.bottom + menu.offsetHeight + 6 <= window.innerHeight - 8 ? a.bottom + 6 : a.top - menu.offsetHeight - 6;
       menu.style.left = left + "px";
@@ -52,6 +67,7 @@ function FieldPicker({ pick, close, onSign, container }: {
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("keydown", onKey, true);
     return () => {
+      window.clearTimeout(dismissTimer);
       size.disconnect();
       container.removeEventListener("scroll", position);
       window.removeEventListener("resize", position);
@@ -74,7 +90,7 @@ function FieldPicker({ pick, close, onSign, container }: {
   </div>, document.body);
 }
 
-function PageFields({ pdf, view, container, stampRects, onSign, onCapture }: FieldActions & {
+function PageFields({ pdf, view, container, stampRects, placing, onSign, onCapture }: FieldActions & {
   pdf: PDFDocumentProxy; view: PageView; container: HTMLDivElement;
 }) {
   const [host] = useState(() => Object.assign(document.createElement("div"), { className: "signature-field-layer" }));
@@ -107,7 +123,7 @@ function PageFields({ pdf, view, container, stampRects, onSign, onCapture }: Fie
   return <>{createPortal(open.map(field => {
     const [left, bottom, right, top] = field.rect;
     const [x1, y1] = vp.convertToViewportPoint(left, bottom), [x2, y2] = vp.convertToViewportPoint(right, top);
-    return <button key={field.id} className="signature-hit" aria-label={"Sign " + field.label} title={field.label}
+    return <button key={field.id} className="signature-hit" aria-label={"Sign " + field.label} title={field.label} disabled={placing}
       aria-haspopup="dialog" aria-expanded={pick?.field === field} style={{
         left: Math.min(x1, x2) / vp.width * 100 + "%", top: Math.min(y1, y2) / vp.height * 100 + "%",
         width: Math.abs(x2 - x1) / vp.width * 100 + "%", height: Math.abs(y2 - y1) / vp.height * 100 + "%",

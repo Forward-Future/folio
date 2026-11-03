@@ -213,6 +213,7 @@ async function checkSignatureFields(app, page, folder) {
   await fieldPicker.waitFor({ state: "hidden" });
   assert.equal(await page.locator(".stampEditor").count(), 0);
   await field.press("Enter");
+  await fieldPicker.getByRole("button", { name: "Full name", exact: true }).waitFor();
   await page.keyboard.press("ControlOrMeta+=");
   await fieldPicker.getByRole("button", { name: "Full name", exact: true }).click();
   await field.waitFor({ state: "hidden" });
