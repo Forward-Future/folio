@@ -1299,7 +1299,7 @@ kbd {
 .signature-document { min-width: 0; align-self: start; display: grid; gap: 14px; padding: 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; }
 .signature-placement-controls { display: grid; gap: 12px; }
 .signature-field { display: grid; gap: 6px; color: var(--text-2); font-size: 11px; }
-.signature-field select { min-width: 0; width: 100%; padding: 8px; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: 7px; font: inherit; }
+.signature-field select, .signature-field input { min-width: 0; width: 100%; padding: 8px; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: 7px; font: inherit; }
 .signature-page-stage { display: flex; justify-content: center; min-width: 0; padding: 2px 0; }
 .signature-page { position: relative; max-width: 100%; background: white; box-shadow: var(--page-shadow); flex-shrink: 1; }
 .signature-page[data-placeable] { cursor: crosshair; }

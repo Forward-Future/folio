@@ -58,9 +58,21 @@ try {
   assert.match(await page.locator(".textLayer").first().innerText(), /A short tour of Folio/);
   console.log("ok  sample rendered with a text layer");
 
-  // Opening another document (here from the file manager) asks first when there's unsaved work, a placed signature,
-  // and keeps it if the reader says no.
-  const photo = await page.evaluate(() => {
+  const saveCopy = async (name) => {
+    const file = path.join(env.FOLIO_TEST_USER_DATA, name);
+    await app.evaluate(({ session }, file) => {
+      globalThis.folioCopySaved = new Promise((resolve) => session.defaultSession.once("will-download", (_event, item) => {
+        item.setSavePath(file);
+        item.once("done", (_done, state) => resolve(state));
+      }));
+    }, file);
+    await page.keyboard.press("ControlOrMeta+s");
+    assert.equal(await app.evaluate(() => globalThis.folioCopySaved), "completed");
+    return readFileSync(file, "latin1");
+  };
+
+  // A signature remembered by an earlier Folio can be used alongside a newly captured one.
+  const photos = await page.evaluate(() => {
     const canvas = Object.assign(document.createElement("canvas"), { width: 600, height: 200 });
     const g = canvas.getContext("2d");
     g.fillStyle = "#fff";
@@ -69,17 +81,64 @@ try {
     g.beginPath();
     g.moveTo(40, 150);
     g.bezierCurveTo(150, 10, 250, 190, 350, 60);
+    g.stroke();
+    const initials = canvas.toDataURL();
+    localStorage.setItem("folio:signature", JSON.stringify({ url: initials, width: canvas.width, height: canvas.height }));
     g.lineTo(560, 120);
     g.stroke();
-    return canvas.toDataURL("image/png").split(",")[1];
+    return { initials, fullName: canvas.toDataURL() };
   });
-  await page.getByTitle("Add a signature").click();
-  await page.locator('input[aria-label="Upload signature photo"]').setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(photo, "base64") });
-  await page.getByRole("button", { name: /Use this signature/ }).click();
-  await page.locator('select[aria-label="Signature placement"]').selectOption("manual");
-  await page.locator('[aria-label^="Place signature on page"]').click();
-  await page.getByRole("button", { name: /Approve and add signature/ }).click();
+  const sign = page.getByTitle("Add a signature");
+  const picker = page.getByRole("combobox", { name: "Saved signature" });
+  const uploadPhoto = async (url) => {
+    await page.getByLabel("Upload signature photo").setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(url.split(",")[1], "base64") });
+    await page.getByRole("button", { name: /Use this signature/ }).click();
+  };
+  const placeAt = async (x, y) => {
+    await page.getByRole("combobox", { name: "Signature placement" }).selectOption("manual");
+    await page.getByRole("button", { name: "Place signature on page 1" }).click({ position: { x, y } });
+  };
+  const approve = async () => {
+    await page.getByRole("button", { name: "Approve and add signature" }).click();
+    await page.getByRole("dialog", { name: "Sign page 1" }).waitFor({ state: "hidden" });
+  };
+  await sign.click();
+  assert.equal(await picker.locator("option:checked").textContent(), "Signature 1");
+  const originalPage = await page.getByAltText("Page 1 placement preview").getAttribute("src");
+  await uploadPhoto(photos.fullName);
+  const remember = page.getByRole("checkbox", { name: /Remember this signature/ });
+  await remember.check();
+  await page.getByLabel("Signature name", { exact: true }).fill("Full name");
+  const fullName = await page.getByAltText("Your signature preview").getAttribute("src");
+  await placeAt(70, 70);
+  await approve();
+  await sign.click();
+  assert.ok(await page.getByAltText("Page 1 placement preview").getAttribute("src") !== originalPage, "the preview omitted the first stamp");
+  await picker.selectOption({ label: "Full name" });
+  assert.ok(await page.getByAltText("Your signature preview").getAttribute("src") === fullName);
+  await placeAt(145, 180);
+  const proposedWidth = () => page.getByAltText("Proposed signature location").evaluate(image => image.style.width);
+  const width = await proposedWidth();
+  await picker.selectOption({ label: "Signature 1" });
+  assert.ok(await page.getByAltText("Your signature preview").getAttribute("src") !== fullName);
+  assert.equal(await proposedWidth(), width);
+  await approve();
+  assert.equal((await saveCopy("signed.pdf")).match(/\/Subtype\s*\/Stamp\b/g)?.length, 2);
+
+  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.getByRole("button", { name: "Forget Signature 1", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await sign.click();
+  assert.deepEqual(await picker.locator("option").allTextContents(), ["Full name"]);
+  await uploadPhoto(photos.initials);
+  await remember.check();
+  await placeAt(100, 130);
+  await approve();
+  await sign.click();
+  assert.deepEqual(await picker.locator("option:enabled").allTextContents(), ["Full name", "Signature 1"]);
+  await page.getByRole("button", { name: "Cancel" }).click();
   await page.locator(".dirty-dot").waitFor();
+  console.log("ok  saved signatures can be selected, exported together, and forgotten individually");
 
   // Printing saves nothing, so the signature stays marked as unsaved. The print frame is stubbed for the check, so no
   // system print dialog opens.
@@ -115,7 +174,7 @@ try {
   await openFromFileManager();
   await page.waitForFunction(stub => stub.messages.length === 1, confirmation, { timeout: 15_000 });
   assert.equal(await page.title(), "Folio sample.pdf — Folio");
-  assert.equal(await page.locator(".stampEditor").count(), 1);
+  assert.equal(await page.locator(".stampEditor").count(), 3);
   assert.ok(await page.locator(".dirty-dot").isVisible());
   await openFromFileManager();
   await page.waitForFunction(() => document.title.startsWith("Another.pdf"), null, { timeout: 15_000 });
@@ -205,16 +264,7 @@ try {
   await page.getByTitle("Back to library").click();
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
-  const copy = path.join(env.FOLIO_TEST_USER_DATA, "copy.pdf");
-  await app.evaluate(({ session }, file) => {
-    globalThis.folioCopySaved = new Promise((resolve) => session.defaultSession.once("will-download", (_event, item) => {
-      item.setSavePath(file);
-      item.once("done", (_done, state) => resolve(state));
-    }));
-  }, copy);
-  await page.keyboard.press("ControlOrMeta+s");
-  assert.equal(await app.evaluate(() => globalThis.folioCopySaved), "completed");
-  assert.equal(readFileSync(copy, "latin1").match(/\/Subtype\s*\/Highlight\b/g)?.length, 2);
+  assert.equal((await saveCopy("copy.pdf")).match(/\/Subtype\s*\/Highlight\b/g)?.length, 2);
   console.log("ok  saved copy includes marks on pages not drawn yet");
 
   await page.getByRole("button", { name: "More" }).click();

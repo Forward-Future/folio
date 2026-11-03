@@ -108,8 +108,8 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
 - **Explicit approval:** nothing is added until you click **Approve and add signature**. Signatures are visual stamps,
   not certificate-based digital signatures. Use **Save a copy** to keep a signed PDF; placed signatures are not part
   of Folio's automatic annotation restoration.
-- **Optional reuse:** choose to remember a signature on this computer; remove the saved image in
-  **Settings → Signature → Forget**.
+- **Optional reuse:** select **Remember this signature** and give it a name, such as “Initials”.
+  Open **Sign** again to choose a saved signature or capture another. Remove individual signatures in **Settings → Signatures**.
 
 ### Ask AI about a document
 
@@ -242,8 +242,8 @@ is there when you reopen the document; the **+** button in the panel starts over
 Stored locally in your user profile (`%APPDATA%\Folio` on Windows, `~/Library/Application Support/Folio` on macOS,
 `~/.config/Folio` on Linux): recently opened PDFs and their thumbnails (up to 8,
 removable from the home screen with **Clear all**; password-protected PDFs are never kept), highlights, notes, and
-Ask AI conversations for each document (except password-protected ones), reading positions, preferences, and, only if you choose to remember
-it, your signature image. Apart from the ChatGPT sign-in, this data isn't encrypted, so anyone with access to your
+Ask AI conversations for each document (except password-protected ones), reading positions, preferences, and any
+signature images you choose to remember. Apart from the ChatGPT sign-in, this data isn't encrypted, so anyone with access to your
 user account can read it.
 
 ## Building from source

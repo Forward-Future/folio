@@ -32,7 +32,7 @@ import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog
 import { SignatureDialog } from "./SignatureDialog";
 import { SettingsDialog } from "./SettingsDialog";
 import { ChangelogDialog } from "./ChangelogDialog";
-import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
+import { detectSignatureTargets, placeSignature, rememberSignature, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
 import { enableWheelPaging } from "./wheelPaging";
 
@@ -1350,9 +1350,14 @@ export default function App() {
       {doc && imageView && <ImageViewer pdf={doc.pdf} target={imageView} onClose={() => setImageView(null)} />}
       {dialog === "url" && <OpenUrlDialog key={linkDraft} initial={linkDraft} onClose={() => setDialog(null)} onSubmit={(url) => { setDialog(null); openUrl(url); }} />}
       {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}
-        onClose={() => setSigning(false)} onApprove={async (signature, rect) => {
+        onClose={() => setSigning(false)} onApprove={async (signature, rect, rememberAs) => {
           await placeSignature(viewerRef.current!, doc.pdf, page, signature, rect);
-          setDirty(true); setSignatureDismissed(true); flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
+          setDirty(true); setSignatureDismissed(true);
+          if (rememberAs !== undefined) {
+            try { rememberSignature(signature, rememberAs); }
+            catch { flash("Signature added to the page, but couldn't be remembered on this device."); return; }
+          }
+          flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
         }} />}
       {doc && !signing && signatureTargets.length > 0 && !signatureDismissed && <div className="signature-suggestion" role="status">
         <span>{signatureTargets[0].kind === "field" ? "Signature field detected" : "Possible signature area"} on page {page}</span>

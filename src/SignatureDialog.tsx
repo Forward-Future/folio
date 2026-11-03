@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy } from "./pdf";
-import type { PageViewport } from "pdfjs-dist";
+import { AnnotationMode, type PageViewport } from "pdfjs-dist";
 import { Modal } from "./Dialogs";
 import { keys } from "./platform";
 import { Icon } from "./icons";
-import { cleanSignature, fitSignature, readSignature, type SignatureImage, type SignatureTarget } from "./signatures";
+import { cleanSignature, fitSignature, nextSignatureName, positionSignature, readSignatures, type SignatureImage, type SignatureTarget } from "./signatures";
 
 export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }: {
   pdf: PDFDocumentProxy; pageNumber: number; targets: SignatureTarget[];
-  onApprove: (signature: SignatureImage, rect: number[]) => Promise<void>; onClose: () => void;
+  onApprove: (signature: SignatureImage, rect: number[], rememberAs?: string) => Promise<void>; onClose: () => void;
 }) {
-  const [signature, setSignature] = useState<SignatureImage | null>(readSignature);
-  const [saved, setSaved] = useState(() => !!readSignature());
+  const [signatures] = useState(readSignatures);
+  const [signature, setSignature] = useState<SignatureImage | null>(signatures.length === 1 ? signatures[0] : null);
+  const saved = signatures.find(item => item.url === signature?.url);
   const [remember, setRemember] = useState(false);
+  const [name, setName] = useState("");
   const [source, setSource] = useState<HTMLCanvasElement | null>(null);
   const [crop, setCrop] = useState<number[] | null>(null);
   const [threshold, setThreshold] = useState(180);
@@ -22,7 +24,7 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [targetId, setTargetId] = useState(targets[0]?.id || "manual");
-  const [manualRect, setManualRect] = useState<number[] | null>(null);
+  const [manualCenter, setManualCenter] = useState<number[] | null>(null);
   const [size, setSize] = useState(150);
   const [preview, setPreview] = useState<{ url: string; width: number; height: number; viewport: PageViewport } | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -33,8 +35,8 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
   const mounted = useRef(true);
   const dragStart = useRef<number[] | null>(null);
   const selected = targets.find(target => target.id === targetId);
-  const bounds = selected?.rect || manualRect;
-  const rect = signature && bounds ? fitSignature(signature, bounds) : null;
+  const rect = signature && (selected ? fitSignature(signature, selected.rect)
+    : manualCenter && preview && positionSignature(signature, size, manualCenter, preview.viewport.viewBox));
 
   useEffect(() => {
     mounted.current = true;
@@ -51,7 +53,7 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
       const canvas = document.createElement("canvas");
       canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
       if (cancelled) return;
-      const task = page.render({ canvas, viewport }); render = task;
+      const task = page.render({ canvas, viewport, annotationMode: AnnotationMode.ENABLE_STORAGE }); render = task;
       await task.promise;
       if (!cancelled) setPreview({ url: canvas.toDataURL(), width: viewport.width, height: viewport.height, viewport });
     })().catch(reason => { if (!cancelled) setError("Couldn't preview this page: " + String(reason)); });
@@ -104,7 +106,7 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
     const factor = Math.min(1, 1600 / Math.max(width, height));
     const canvas = document.createElement("canvas"); canvas.width = Math.round(width * factor); canvas.height = Math.round(height * factor);
     canvas.getContext("2d")!.drawImage(image, 0, 0, canvas.width, canvas.height);
-    setSource(canvas); setCrop([0, 0, canvas.width, canvas.height]); setRemember(false); setSaved(false); setSignature(null); setError("");
+    setSource(canvas); setCrop([0, 0, canvas.width, canvas.height]); setRemember(false); setName(""); setSignature(null); setError("");
   };
   const capture = () => {
     const video = videoRef.current;
@@ -121,7 +123,7 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
       const bitmap = await createImageBitmap(file);
       try { if (mounted.current && generation === captureGeneration.current) acceptSource(bitmap, bitmap.width, bitmap.height); }
       finally { bitmap.close(); }
-    } catch (reason) { if (mounted.current) setError((reason as Error).message); }
+    } catch (reason) { if (mounted.current && generation === captureGeneration.current) setError((reason as Error).message); }
   };
   const cropPoint = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -132,26 +134,13 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
     if (!signature || !rect || !preview || busy || source || camera || cameraStarting) return;
     setBusy(true); setError("");
     try {
-      await onApprove(signature, rect);
-      if (remember) {
-        try { localStorage.setItem("folio:signature", JSON.stringify(signature)); }
-        catch { setError("Signature added, but couldn't remember it on this device. Close to continue."); setBusy(false); return; }
-      }
+      await onApprove(signature, rect, remember && !saved ? name : undefined);
       onClose();
     } catch (reason) { setError((reason as Error).message); setBusy(false); }
   };
   const screenRect = preview && rect ? [...preview.viewport.convertToViewportPoint(rect[0], rect[1]), ...preview.viewport.convertToViewportPoint(rect[2], rect[3])] : null;
 
   const ready = !!signature && !source && !camera && !cameraStarting;
-  const placeAt = (pointX: number, pointY: number, width = size) => {
-    if (!signature || !preview) return;
-    const [left, bottom, right, top] = preview.viewport.viewBox;
-    width = Math.min(width, right - left, (top - bottom) * signature.width / signature.height);
-    const height = width * signature.height / signature.width;
-    const positionX = Math.max(left, Math.min(right - width, pointX - width / 2));
-    const positionY = Math.max(bottom, Math.min(top - height, pointY - height / 2));
-    setManualRect([positionX, positionY, positionX + width, positionY + height]);
-  };
 
   return <Modal title={"Sign page " + pageNumber} onClose={() => { if (!busy) onClose(); }}>
     <div className="signature-dialog">
@@ -165,7 +154,17 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
       <div className="signature-workspace-scroll"><fieldset disabled={busy} className="signature-workspace">
         <section className="signature-editor" aria-label="Signature capture">
           <div className="signature-section-head"><h3>Your signature</h3>{saved && ready && <span className="signature-badge">Saved on this device</span>}</div>
-          {!signature && !source && !camera && <div className="signature-empty">
+          {signatures.length > 0 && !source && !camera && <label className="signature-field">Saved signature
+            <select value={saved?.key ?? ""} disabled={cameraStarting} onChange={event => {
+              captureGeneration.current++;
+              setSignature(signatures.find(item => item.key === event.target.value) ?? null);
+              setRemember(false); setName(""); setError("");
+            }}>
+              {!saved && <option value="" disabled>{signature ? "New signature" : "Choose a signature"}</option>}
+              {signatures.map(item => <option key={item.key} value={item.key}>{item.name}</option>)}
+            </select>
+          </label>}
+          {!signatures.length && !signature && !source && !camera && <div className="signature-empty">
             <div className="signature-paper"><Icon name="signature" size={76} /></div>
             <h4>Start with pen and paper</h4><p>Sign white paper with dark ink, then capture or upload a photo.</p>
           </div>}
@@ -192,7 +191,10 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
             <button className="btn ghost" onClick={() => { setSource(null); setSignature(null); setError(""); }}>Choose another photo</button>
           </div>}
           {signature && !camera && <div className="signature-image"><img src={signature.url} alt="Your signature preview" /><span><Icon name="check" size={13} /> Background removed</span></div>}
-          {ready && <label className="signature-remember"><input type="checkbox" checked={remember} onChange={event => setRemember(event.target.checked)} /><span>Remember this signature<small>Only on this device. Forget it in Settings.</small></span></label>}
+          {ready && !saved && <label className="signature-remember"><input type="checkbox" checked={remember} onChange={event => setRemember(event.target.checked)} /><span>Remember this signature<small>Only on this device. Forget it in Settings.</small></span></label>}
+          {ready && !saved && remember && <label className="signature-field">Signature name
+            <input value={name} maxLength={64} placeholder={nextSignatureName(signatures)} onChange={event => setName(event.target.value)} />
+          </label>}
           <div className="signature-privacy"><Icon name="lock" size={14} /><span>Processed on this device. Never uploaded.</span></div>
           <details className="signature-details"><summary>About signatures and saved copies</summary><p>This adds a visual signature, not a digital certificate. Changes can affect existing digital signatures. Remembered signatures are stored unencrypted on this computer. Use {keys("Ctrl+Z")} to undo; Save copy exports the signed PDF.</p></details>
         </section>
@@ -200,11 +202,7 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
           <div className="signature-section-head"><h3>Page {pageNumber}</h3><span className="signature-badge">{selected ? "Suggested position" : "Page preview"}</span></div>
           {ready && <div className="signature-placement-controls">
             <label className="signature-field">Placement<select aria-label="Signature placement" value={targetId} onChange={event => setTargetId(event.target.value)}>{targets.map(target => <option key={target.id} value={target.id}>{target.label}</option>)}<option value="manual">Choose a position on this page</option></select></label>
-            {targetId === "manual" && <label className="signature-range">Signature width <input aria-label="Signature width" type="range" min="40" max="300" value={size} onChange={event => {
-              const width = +event.target.value;
-              setSize(width);
-              if (manualRect) placeAt((manualRect[0] + manualRect[2]) / 2, (manualRect[1] + manualRect[3]) / 2, width);
-            }} /></label>}
+            {targetId === "manual" && <label className="signature-range">Signature width <input aria-label="Signature width" type="range" min="40" max="300" value={size} onChange={event => setSize(+event.target.value)} /></label>}
           </div>}
           <div className="signature-page-stage">
             {preview ? <div className="signature-page" data-placeable={ready && targetId === "manual" || undefined} style={{ width: Math.min(280, preview.width), aspectRatio: preview.width / preview.height }}
@@ -212,18 +210,17 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
               onClick={event => {
                 if (!ready || targetId !== "manual") return;
                 const area = event.currentTarget.getBoundingClientRect();
-                const [pointX, pointY] = preview.viewport.convertToPdfPoint((event.clientX - area.left) * preview.width / area.width, (event.clientY - area.top) * preview.height / area.height);
-                placeAt(pointX, pointY);
+                setManualCenter(preview.viewport.convertToPdfPoint((event.clientX - area.left) * preview.width / area.width, (event.clientY - area.top) * preview.height / area.height));
               }} onKeyDown={event => {
                 if (!ready || targetId !== "manual" || !["Enter", " ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
                 event.preventDefault();
-                const area = manualRect || preview.viewport.viewBox;
-                placeAt((area[0] + area[2]) / 2 + (event.key === "ArrowLeft" ? -5 : event.key === "ArrowRight" ? 5 : 0), (area[1] + area[3]) / 2 + (event.key === "ArrowDown" ? -5 : event.key === "ArrowUp" ? 5 : 0));
+                const area = rect || preview.viewport.viewBox;
+                setManualCenter([(area[0] + area[2]) / 2 + (event.key === "ArrowLeft" ? -5 : event.key === "ArrowRight" ? 5 : 0), (area[1] + area[3]) / 2 + (event.key === "ArrowDown" ? -5 : event.key === "ArrowUp" ? 5 : 0)]);
               }}><img className="signature-page-background" src={preview.url} alt={"Page " + pageNumber + " placement preview"} />
                 {signature && screenRect && <img className="signature-placement" src={signature.url} alt="Proposed signature location" style={{ left: Math.min(screenRect[0], screenRect[2]) / preview.width * 100 + "%", top: Math.min(screenRect[1], screenRect[3]) / preview.height * 100 + "%", width: Math.abs(screenRect[2] - screenRect[0]) / preview.width * 100 + "%", height: Math.abs(screenRect[3] - screenRect[1]) / preview.height * 100 + "%" }} />}
               </div> : <div className="signature-page-loading" role="status"><Icon name="file" size={30} /><span>Loading page preview...</span></div>}
           </div>
-          <p className="signature-hint" id="signature-placement-hint" aria-live="polite">{!ready ? "Your signature will appear here for review." : selected ? "Signature field or line detected. Check the suggested position." : manualRect ? "Click to reposition, or use the arrow keys to fine-tune." : "Click the page to place your signature, or focus it and press Enter."}</p>
+          <p className="signature-hint" id="signature-placement-hint" aria-live="polite">{!ready ? "Your signature will appear here for review." : selected ? "Signature field or line detected. Check the suggested position." : manualCenter ? "Click to reposition, or use the arrow keys to fine-tune." : "Click the page to place your signature, or focus it and press Enter."}</p>
         </section>
       </fieldset></div>
       {error && <p className="form-error signature-error" role="alert">{error}</p>}

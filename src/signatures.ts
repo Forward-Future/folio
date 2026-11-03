@@ -3,6 +3,7 @@ import type { PDFDocumentProxy } from "./pdf";
 import type { PDFViewer } from "./viewer";
 
 export interface SignatureImage { url: string; width: number; height: number }
+export interface SavedSignature extends SignatureImage { key: string; name: string }
 export interface SignatureTarget { id: string; label: string; rect: number[]; kind: "field" | "label" }
 const cache = new WeakMap<PDFDocumentProxy, Map<number, Promise<SignatureTarget[]>>>();
 
@@ -50,6 +51,15 @@ export function fitSignature(signature: SignatureImage, bounds: number[]) {
   const positionX = bounds[0] + (width - fittedWidth) / 2;
   const positionY = bounds[1] + (height - fittedHeight) / 2;
   return [positionX, positionY, positionX + fittedWidth, positionY + fittedHeight];
+}
+
+export function positionSignature(signature: SignatureImage, size: number, center: number[], viewBox: number[]) {
+  const [left, bottom, right, top] = viewBox;
+  const width = Math.min(size, right - left, (top - bottom) * signature.width / signature.height);
+  const height = width * signature.height / signature.width;
+  const x = Math.max(left, Math.min(right - width, center[0] - width / 2));
+  const y = Math.max(bottom, Math.min(top - height, center[1] - height / 2));
+  return [x, y, x + width, y + height];
 }
 
 export async function placeSignature(viewer: PDFViewer, pdf: PDFDocumentProxy, pageNumber: number, signature: SignatureImage, rect: number[]) {
@@ -110,11 +120,42 @@ export function cleanSignature(source: HTMLCanvasElement, crop: number[], thresh
   return { url: trimmed.toDataURL("image/png"), width: trimmed.width, height: trimmed.height };
 }
 
-export function readSignature(): SignatureImage | null {
+const signatureKey = "folio:signature";
+
+function readSavedSignature(key: string): SavedSignature | null {
   try {
-    const value = JSON.parse(localStorage.getItem("folio:signature") || "null");
+    const value = JSON.parse(localStorage.getItem(key) || "null");
+    const name = key === signatureKey ? "Signature 1" : value?.name;
     return value && typeof value.url === "string" && value.url.startsWith("data:image/png;base64,")
       && value.url.length < 4000000 && Number.isFinite(value.width) && Number.isFinite(value.height)
-      && value.width > 0 && value.height > 0 ? value : null;
+      && value.width > 0 && value.height > 0 && typeof name === "string" && name.trim()
+      ? { key, name, url: value.url, width: value.width, height: value.height } : null;
   } catch { return null; }
+}
+
+export function readSignatures(): SavedSignature[] {
+  const signatures: SavedSignature[] = [];
+  try {
+    // Keep the original single signature in place. Each new image has its own key so tabs can save independently.
+    for (const key of Object.keys(localStorage)) {
+      if (key !== signatureKey && !key.startsWith(signatureKey + ":")) continue;
+      const signature = readSavedSignature(key);
+      if (signature) signatures.push(signature);
+    }
+  } catch { /* Signing still works when storage is unavailable. */ }
+  return signatures.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+}
+
+export function nextSignatureName(signatures: SavedSignature[]) {
+  let number = 1;
+  while (signatures.some(signature => signature.name === "Signature " + number)) number++;
+  return "Signature " + number;
+}
+
+export function rememberSignature(image: SignatureImage, name: string) {
+  const signatures = readSignatures();
+  if (signatures.some(signature => signature.url === image.url)) return;
+  localStorage.setItem(signatureKey + ":" + crypto.randomUUID(), JSON.stringify({
+    ...image, name: name.trim() || nextSignatureName(signatures),
+  }));
 }
