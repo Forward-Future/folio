@@ -51,6 +51,7 @@ const TOOL_MODES: Record<Tool, number> = {
 
 const TOOLS: { id: Tool; icon: IconName; label: string; key: string }[] = [
   { id: "select", icon: "cursor", label: "Select", key: "V" },
+  { id: "highlight", icon: "highlight", label: "Highlight", key: "H" },
   { id: "ink", icon: "pen", label: "Draw", key: "D" },
   { id: "freetext", icon: "text", label: "Text", key: "T" },
 ];
@@ -543,6 +544,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
     if (!v.pdfDocument) return;
     try {
       v.annotationEditorMode = { mode: TOOL_MODES[next] };
+      setPinned(null);
       setTool(next);
     } catch {
       flash("Annotations aren't supported for this document");
@@ -564,6 +566,8 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   };
 
   const chooseColor = (hex: string) => {
+    // The palette sets the color for the next passage. pdf.js leaves the last highlight selected.
+    if (tool === "highlight") markupRef.current?.clearEditorSelection();
     setColors((c) => ({ ...c, [tool]: hex }));
     const param = COLOR_PARAM[tool];
     if (param) busRef.current!.dispatch("switchannotationeditorparams", { source: null, type: param, value: hex });
@@ -1117,8 +1121,10 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
                 <button
                   key={t.id}
                   className={tool === t.id ? "on" : ""}
+                  aria-label={t.label}
+                  aria-pressed={tool === t.id}
                   onClick={() => chooseTool(t.id)}
-                  title={`${t.label} (${t.key})`}
+                  title={`${t.id === "highlight" ? "Automatically highlight selected text" : t.label} (${t.key})`}
                 >
                   <Icon name={t.icon} size={16} />
                   <span>{t.label}</span>
