@@ -283,7 +283,9 @@ try {
       setTimeout(() => post.call(this, message, ...rest), 2500);
     };
   });
-  await page.evaluate((n) => document.querySelector(`.page[data-page-number="${n}"]`).scrollIntoView(), lastPage);
+  const lastPageField = page.getByLabel("Page number", { exact: true });
+  await lastPageField.fill(String(lastPage));
+  await lastPageField.press("Enter");
   await page.locator(`.page[data-page-number="${lastPage}"] .textLayer span:not(.markedContent)`).first().evaluate((span) => {
     const range = document.createRange();
     range.selectNodeContents(span);
