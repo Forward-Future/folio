@@ -28,12 +28,14 @@ async function whyNot(pdf: PDFDocumentProxy): Promise<TextProblem | undefined> {
 }
 
 /** `bytes` with the session's recognized text added; `bytes` itself, unchanged, when there is none or it can't be added. */
-export async function copyWithText(session: OcrSession | null, bytes: Uint8Array): Promise<SavedCopy> {
-  if (!session || ![...session.pages.values()].some((items) => items.length)) return { bytes, embedded: false };
+export async function copyWithText(session: OcrSession | null, bytes: Uint8Array, order?: readonly number[]): Promise<SavedCopy> {
+  if (!session || (![...session.pages.values()].some((items) => items.length) && !(order && session.embedded.size))) return { bytes, embedded: false };
   try {
     const problem = await whyNot(session.pdf);
     if (problem) return { bytes, embedded: false, problem };
-    return { bytes: await embedRecognizedText(bytes, session.pages, session.embedded), embedded: true };
+    const pages = order ? new Map(order.flatMap((source, i) => session.pages.has(source) ? [[i + 1, session.pages.get(source)!] as const] : [])) : session.pages;
+    const embedded = order ? new Set(order.flatMap((source, i) => session.embedded.has(source) ? [i + 1] : [])) : session.embedded;
+    return { bytes: await embedRecognizedText(bytes, pages, embedded), embedded: true };
   } catch {
     return { bytes, embedded: false, problem: "failed" };
   }

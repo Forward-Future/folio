@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.12.2
+
+- Folio starts recognizing scanned text in the background when you open a PDF. Jumping to a page gives it priority.
+  A message above the page controls shows when its text is still being prepared.
+- Text selections stay visible on scans in **PDF dark mode**. You can start or end a drag just outside the printed words.
+- Three-digit page numbers fit in the page field, and the macOS unsaved-work prompt shows the Mac save shortcut.
+
+## 1.12.1
+
+- On Windows, click **Restart** once to update. Folio shows a progress message and reopens the updated copy when installation finishes.
+
+## 1.12.0
+
+- Select, copy, and highlight English text on scanned pages in the PDF you already have open. Folio runs OCR
+  on your device as those pages come into view, even offline.
+- Open **⋯ → PDF dark mode** to dim the pages while keeping photos and figures in color.
+
+## 1.11.0
+
+- Turn on **Scroll one page at a time** in Settings to turn pages with each mouse wheel click or trackpad swipe.
+- **Copy response** copies an Ask AI answer with its Markdown formatting and page citations.
+- Choose **Reorder pages** in Pages or Outline, drag a page or enter its new position, then save and open the
+  reordered PDF copy. Bookmarks, annotations and filled form fields follow their pages.
+
 ## 1.10.9
 
 - Opening a Word document now checks the source and converted PDF before reusing a saved copy. Folio also

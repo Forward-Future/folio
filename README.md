@@ -38,9 +38,8 @@ Or build Folio yourself from source (below).
 
 ### Open PDFs and web links
 
-- **Local files:** open a PDF with the file picker, drag and drop it anywhere in Folio, or use **Open with → Folio**
-  from your file manager. The desktop app keeps one window, bringing an already-running copy forward when you open
-  another PDF.
+- **Document tabs.** Pick or drop several PDFs together, or choose **More → New tab**. The tab strip appears beneath
+  the toolbar when two or more tabs are open. Each document keeps its page, zoom, and edits when you switch.
 - **PDF URLs:** choose **Open from URL** (`Ctrl+Shift+O`), or drop a link or paste it with `Ctrl+V` outside a text
   field to fill it in, then press **Open**. Folio downloads and opens the PDF, follows redirects, and uses the server's
   filename when available. Folio asks once more before opening an address on your computer or local network.
@@ -57,15 +56,6 @@ Or build Folio yourself from source (below).
   except on macOS. Installing Folio adds it to **Open with** for Word documents without making it their default app.
 - **Password-protected PDFs:** enter the password to read and annotate a protected document. These documents are not
   kept in the recent library, and their annotations and AI conversations are not persisted locally between sessions.
-- **Scanned PDFs:** when a document is a picture of pages with no text, Folio offers **Recognize text**. It reads the
-  pages on your device, starting with the one you're on, and you can keep reading meanwhile. Afterwards search, selection,
-  highlights, and Ask AI work on the scan, and a search that is open when recognition finishes is run again for you.
-  Recognition is English only for now, can make mistakes on poor scans (Ask AI is told when text came from
-  recognition), and is saved with the document so it only runs once. **Save a copy** adds the recognized text to the
-  copy as an invisible layer on top of the scan, so the copy can be searched and selected in any PDF reader and Folio
-  won't offer to recognize it again. That is left out, with a note, for encrypted files (they can't be
-  rewritten) and files with a signature field (rewriting could break a signature), and characters outside Western
-  European text may be saved as `?`. The PDF you opened isn't changed.
 - **Sample document:** try the built-in tour from the home screen without finding a PDF first.
 
 URL opening, webpage conversion, and Word conversion require the desktop app. Failed downloads leave your current document open.
@@ -73,19 +63,23 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
 ### Read and navigate
 
 - **Continuous scrolling** with selectable text, previous/next controls, and a page-number field for jumping directly
-  to a page.
+  to a page. Enable **Settings → Reading → Scroll one page at a time** to turn pages with the mouse wheel.
 - **Pages and Outline tabs:** browse page thumbnails or the PDF's existing outline/bookmarks; hide the sidebar when
   you want more reading space.
+- **Reorder pages** from either sidebar tab. Drag thumbnails or enter a new position, then save and open the reordered PDF copy.
 - **Search as you type:** match case or whole words, see the current match and total count, browse per-page snippets
   and match counts, and move between matches with `Enter` / `Shift+Enter`.
 - **Flexible views:** fit to width, fit to page, automatic sizing, preset zoom levels, zoom buttons, `Ctrl+wheel` /
   trackpad pinch, two-page spreads, and page rotation.
 - **Focus mode:** press `F` for distraction-free, fullscreen reading; press `Esc` to return.
-- **Light and dark themes**, plus an independent **Night reading** setting that dims bright pages while keeping
+- **Light and dark themes**, plus an independent **⋯ → PDF dark mode** setting that dims bright pages while keeping
   photos and figures in their original colors, including in thumbnails. Both settings survive restarts.
 
 ### Highlight, draw, and take notes
 
+- **Select text in scans.** Folio starts recognizing English text in the background when you open a PDF.
+  The page you jump to gets priority. A message above the page controls shows when text is still being prepared.
+  Once it clears, drag across the words to copy, highlight, or ask about a passage. Recognition runs offline.
 - **One-click highlights:** select text, then choose yellow, green, blue, pink, or red from the selection toolbar;
   `H` applies the current highlight color.
 - **Notes on passages:** type into the selection toolbar and press `Enter` to highlight with a note, or press `N`
@@ -123,6 +117,7 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
 - **Whole-document or passage questions:** open the Ask AI panel from the toolbar, select text and choose **Ask AI**,
   or ask about an existing highlight.
 - **Streaming answers** with clickable page citations that jump back to the source page.
+- **Copy response** copies a finished AI answer with its Markdown formatting and page citations.
 - **Rendered mathematics:** inline and display LaTeX equations, with wide equations scrolling within the chat panel.
   Supports `\( ... \)`, `\[ ... \]`, `$x$`, and `$$ ... $$`; existing saved answers render too.
 - **Provider and model selection**, a stop button for an in-progress answer, and a **+** button to start a fresh
@@ -182,6 +177,8 @@ On macOS, use `⌘` wherever this table says `Ctrl`. Press `?` with a document o
 | Action | Shortcut |
 | --- | --- |
 | Open a PDF / open a URL | `Ctrl+O` / `Ctrl+Shift+O` |
+| New tab / close tab | `Ctrl+T` / `Ctrl+W` |
+| Next tab / previous tab (Control on all platforms) | `Control+Tab` / `Control+Shift+Tab` |
 | Find / next match / previous match | `Ctrl+F` / `Enter` / `Shift+Enter` |
 | Highlight selection / write a note | `H` / `N` |
 | Remove a clicked highlight | `Delete` |
@@ -197,13 +194,8 @@ On macOS, use `⌘` wherever this table says `Ctrl`. Press `?` with a document o
 
 ### Current limits
 
-- Folio annotates PDFs; it does not edit their original text/layout or merge or reorder pages. Its only OCR is
-  **Recognize text** for scanned pages, in English.
-- Search, text selection, signature-label detection, and Ask AI depend on a PDF text layer. Image-only scans can be
-  viewed, drawn on, and signed straight away; to search or select their text, choose **Recognize text** first.
-- Recognition reads each page as one picture of at most 3,300 pixels on its longest side: Letter is read at 300 dpi, A4
-  at about 280, A3 at about 200, and an A1 sheet at about 100. Reading large sheets at a higher resolution, or in
-  tiles, found at most slightly more words in our tests and took up to three times as long.
+- Automatic OCR reads scanned pages in English on your device. Recognized text becomes available for selection,
+  document search and Ask AI. Saving a copy adds a searchable text layer when the file can safely be rewritten.
 - Ask AI uses extracted text, not page images, and includes up to about 400,000 characters of document text. Long
   documents may be truncated; AI answers can be wrong, so check the cited pages.
 - Folio opens PDFs up to 300 MiB and 10,000 pages. Webpage conversion uses a separate session, so pages behind a
@@ -240,11 +232,6 @@ network requests only to:
 - answer a question you ask in **Ask AI**. Only then, the document's text (up to about 400,000 characters), any passage
   you selected, and the conversation go to the provider you chose: OpenAI for ChatGPT, or Anthropic through your
   installed Claude Code. Their privacy terms apply to that data.
-
-Recognizing text in scanned PDFs happens entirely on your device: the recognition engine and its English model ship
-inside Folio and make no network requests. Recognized text is stored with the document on this computer, except for
-password-protected PDFs, which are never stored. When you save a copy of a scan, the recognized text becomes part of
-the copy you save.
 
 For ChatGPT, Folio stores its sign-in tokens in its data folder (below, under `ai`), encrypted with the system's
 credential protection (Windows data protection, the macOS Keychain, or the Linux secret store; if a Linux desktop has

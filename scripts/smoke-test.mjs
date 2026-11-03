@@ -10,6 +10,8 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { readerPage } from "./reader-page.mjs";
+import { checkReaderTools } from "./smoke-reader-tools.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -23,7 +25,7 @@ const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir
 delete env.ELECTRON_RUN_AS_NODE;
 // Containers often run as root, where Chromium's sandbox can't start. The made-up names stand in for web addresses
 // that lead to this computer (see the local network checks below).
-const args = [root, "--host-resolver-rules=MAP folio-local.test 127.0.0.1, MAP folio-rebind.test 127.0.0.1, MAP folio-pinned.test 127.0.0.2",
+const args = [root, "--mute-audio", "--host-resolver-rules=MAP folio-local.test 127.0.0.1, MAP folio-rebind.test 127.0.0.1, MAP folio-pinned.test 127.0.0.2",
   ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])];
 
 // The smallest .docx Word opens: one paragraph of `text`.
@@ -44,7 +46,8 @@ async function wordDocument(text) {
 const app = await electron.launch({ executablePath, args, env, timeout: 60_000 });
 const failures = [];
 try {
-  const page = await app.firstWindow();
+  const page = readerPage(await app.firstWindow());
+  assert.ok(await app.evaluate(({ app }) => app.commandLine.hasSwitch("mute-audio")));
   page.on("pageerror", (e) => failures.push(String(e)));
   await page.getByRole("button", { name: /Try a sample/ }).waitFor({ timeout: 30_000 });
 
@@ -57,8 +60,18 @@ try {
   assert.match(await page.locator(".textLayer").first().innerText(), /A short tour of Folio/);
   console.log("ok  sample rendered with a text layer");
 
-  // Opening another document (here from the file manager) asks first when there's unsaved work, a placed signature,
-  // and keeps it if the reader says no.
+  const docs = page.getByRole("tablist", { name: "Open documents" });
+  assert.equal(await page.locator(".document-tabs").count(), 0);
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /New tab/ }).click();
+  await docs.getByRole("tab", { name: "Library", selected: true }).waitFor();
+  assert.equal(await docs.getByRole("tab").count(), 2);
+  await docs.getByRole("button", { name: "Close Library" }).click();
+  await page.locator(".doc-title", { hasText: "Folio sample.pdf" }).waitFor();
+  assert.equal(await page.locator(".document-tabs").count(), 0);
+  console.log("ok  the tab strip appears for a second tab and disappears when one remains");
+
+  // A signature is an unsaved edit that must survive a tab switch.
   const photo = await page.evaluate(() => {
     const canvas = Object.assign(document.createElement("canvas"), { width: 600, height: 200 });
     const g = canvas.getContext("2d");
@@ -99,19 +112,68 @@ try {
   console.log("ok  printing keeps unsaved work marked as unsaved");
 
   const sample = await page.evaluate(async () => Array.from(new Uint8Array(await (await fetch("sample.pdf")).arrayBuffer())));
-  const openFromFileManager = () => app.evaluate(({ BrowserWindow }, data) =>
-    BrowserWindow.getAllWindows()[0].webContents.send("folio:open-file", { name: "Another.pdf", data: Buffer.from(data) }), sample);
-  let prompt = page.waitForEvent("dialog");
-  await openFromFileManager();
-  await (await prompt).dismiss();
-  await page.waitForTimeout(500);
-  assert.equal(await page.locator(".stampEditor").count(), 1);
-  prompt = page.waitForEvent("dialog");
-  await openFromFileManager();
-  await (await prompt).accept();
-  await page.waitForFunction(() => document.title.startsWith("Another.pdf"), null, { timeout: 15_000 });
-  await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
-  console.log("ok  opening another document asks before discarding unsaved work");
+  const other = Buffer.concat([Buffer.from(sample), Buffer.from("\\n% Another PDF")]);
+  const select = name => docs.getByRole("tab", { name, exact: true }).click();
+  await page.getByTitle("Next page").click();
+  // Stub the native confirmation only in this test window.
+  await page.window.evaluate(() => {
+    const original = window.confirm;
+    window.tabPrompts = [];
+    window.confirm = message => { window.tabPrompts.push(message); return window.tabPrompts.length === 2; };
+    window.restoreConfirm = () => { window.confirm = original; };
+  });
+  await app.evaluate(({ BrowserWindow }, bytes) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Another.pdf", data: Buffer.from(bytes) }), Array.from(other));
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
+  await docs.getByRole("tab", { name: "Another.pdf", selected: true }).waitFor();
+  assert.equal(await page.locator(".stampEditor").count(), 0);
+  await select("Folio sample.pdf");
+  assert.equal(await page.getByLabel("Page number", { exact: true }).inputValue(), "2");
+  await page.getByTitle("Previous page").click();
+  await page.locator(".stampEditor").waitFor();
+  assert.deepEqual(await page.window.evaluate(() => window.tabPrompts), []);
+  await select("Another.pdf");
+  const closeSigned = docs.getByRole("button", { name: "Close Folio sample.pdf, unsaved changes" });
+  await closeSigned.click();
+  assert.equal(await docs.getByRole("tab").count(), 2);
+  await closeSigned.click();
+  await closeSigned.waitFor({ state: "detached" });
+  assert.equal(await page.window.evaluate(() => window.tabPrompts.length), 2);
+  await page.window.evaluate(() => window.restoreConfirm());
+
+  // Batch opening keeps picker order, never replaces the current reader, and gives each file its own view.
+  const choosing = page.waitForEvent("filechooser");
+  await page.keyboard.press("ControlOrMeta+o");
+  const chooser = await choosing;
+  assert.equal(chooser.isMultiple(), true);
+  await chooser.setFiles(["One.pdf", "Two.pdf"].map(name => ({ name, mimeType: "application/pdf",
+    buffer: Buffer.concat([other, Buffer.from(name)]) })));
+  await docs.getByRole("tab", { name: "One.pdf", selected: true }).waitFor();
+  assert.deepEqual(await docs.getByRole("tab").allTextContents(), ["Another.pdf", "One.pdf", "Two.pdf"]);
+  await select("Two.pdf");
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
+  await page.locator(".document-tabs").screenshot({ path: path.join(shots, `document-tabs-${process.platform}.png`) });
+  await page.keyboard.press("Control+Shift+Tab");
+  await docs.getByRole("tab", { name: "One.pdf", selected: true }).waitFor();
+  await page.evaluate(data => {
+    const transfer = new DataTransfer();
+    for (const name of ["Drop A.pdf", "Drop B.pdf"]) {
+      transfer.items.add(new File([Uint8Array.from(data), name], name, { type: "application/pdf" }));
+    }
+    window.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer }));
+  }, sample);
+  await docs.getByRole("tab", { name: "Drop A.pdf", selected: true }).waitFor();
+  assert.equal(await docs.getByRole("tab").count(), 5);
+  for (const name of ["Drop A.pdf", "Drop B.pdf", "One.pdf", "Two.pdf"]) {
+    const close = docs.getByRole("button", { name: "Close " + name, exact: true });
+    await close.click(); await close.waitFor({ state: "detached" });
+  }
+  await page.locator(".doc-title", { hasText: "Another.pdf" }).waitFor();
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /Close document/ }).click();
+  await page.getByRole("button", { name: /Try a sample/ }).click();
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
+  console.log("ok  document tabs keep signatures and pages, confirm discard, and open multiple files");
 
   // Select a sentence and highlight it in one click.
   await page.evaluate(() => {
@@ -189,7 +251,7 @@ try {
   await page.evaluate(() => { Worker.prototype.postMessage = window.folioPostMessage; });
   await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
   await page.waitForTimeout(800);
-  await page.getByTitle("Back to library").click();
+  await page.keyboard.press("ControlOrMeta+w");
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
   const copy = path.join(env.FOLIO_TEST_USER_DATA, "copy.pdf");
@@ -204,9 +266,28 @@ try {
   assert.equal(readFileSync(copy, "latin1").match(/\/Subtype\s*\/Highlight\b/g)?.length, 2);
   console.log("ok  saved copy includes marks on pages not drawn yet");
 
-  // The More menu opens and closes.
   await page.getByRole("button", { name: "More" }).click();
-  await page.getByRole("menuitem", { name: /About Folio/ }).waitFor();
+  await page.getByRole("menuitem", { name: "About Folio" }).click();
+  const about = page.getByRole("dialog", { name: "About Folio" });
+  assert.doesNotMatch(await about.innerText(), /Ask AI accounts/);
+  assert.equal(await about.getByRole("button", { name: "Settings" }).count(), 0);
+  await page.keyboard.press("Escape");
+
+  // The reader shortcut and Settings control the same saved PDF appearance.
+  await page.getByRole("button", { name: "More" }).click();
+  const darkMode = page.getByRole("menuitemcheckbox", { name: "PDF dark mode" });
+  assert.equal(await darkMode.getAttribute("aria-checked"), "false");
+  await darkMode.click();
+  await page.locator(".app[data-night]").waitFor();
+  await page.getByRole("button", { name: "More" }).click();
+  assert.equal(await darkMode.getAttribute("aria-checked"), "true");
+  await page.getByRole("menuitem", { name: /Settings/ }).click();
+  await page.getByRole("dialog", { name: "Settings" }).getByText(/Manage updates, appearance, and Ask AI accounts/).waitFor();
+  const darkModeSwitch = page.getByRole("switch", { name: "PDF dark mode" });
+  assert.equal(await darkModeSwitch.getAttribute("aria-checked"), "true");
+  await darkModeSwitch.click();
+  await page.locator(".app:not([data-night])").waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem("folio:night")), "0");
   await page.keyboard.press("Escape");
 
   // Settings links to the bundled changelog, and closing it returns to Settings.
@@ -219,6 +300,10 @@ try {
   console.log("ok  changelog opens from Settings");
 
   // A text box is saved automatically and comes back, text and all, when the document is opened again.
+  // The sample can reopen at the previous reading position. Bring its first page into view so pdf.js builds its editor layer.
+  const pageField = page.getByLabel("Page number", { exact: true });
+  await pageField.fill("1");
+  await pageField.press("Enter");
   await page.locator('button[title^="Text ("]').click();
   // Clicked in the middle of the page's visible part: a fixed spot near the top lands under the toolbar's color
   // picker in a small window, as on CI runners.
@@ -227,22 +312,18 @@ try {
   await page.locator('.freeTextEditor .internal[contenteditable="true"]').fill("Saved text box");
   await page.getByRole("button", { name: "Done", exact: true }).click();
   await page.waitForTimeout(1000);
-  await page.getByTitle("Back to library").click();
+  await page.keyboard.press("ControlOrMeta+w");
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".freeTextEditor", { hasText: "Saved text box" }).waitFor({ timeout: 15_000 });
   console.log("ok  text box restored after reopening");
 
   // A scanned page (an image, no text) is offered text recognition; once read, its words can be searched and selected.
   // (Opened from the library by clicking, not with Ctrl+O: where the keyboard focus is after a text box was restored differs by platform.)
-  await page.getByTitle("Back to library").click();
-  const [chooser] = await Promise.all([
+  const [scanChooser] = await Promise.all([
     page.waitForEvent("filechooser"),
-    page.getByRole("button", { name: /Open a PDF/ }).click(),
+    page.keyboard.press("ControlOrMeta+o"),
   ]);
-  await chooser.setFiles(path.join(root, "scripts", "fixtures", "scanned-sample.pdf"));
-  await page.getByText("This looks like a scan").waitFor({ timeout: 30_000 });
-  assert.equal(await page.locator(".textLayer span:not(.markedContent)").count(), 0);
-  await page.getByRole("button", { name: "Recognize text" }).click();
+  await scanChooser.setFiles(path.join(root, "scripts", "fixtures", "scanned-sample.pdf"));
   await page.waitForFunction(() => document.querySelectorAll(".textLayer span:not(.markedContent)").length > 60, null, { timeout: 180_000 });
   assert.match(await page.locator(".textLayer").first().innerText(), /Scanned\s+pages\s+become\s+searchable/);
   console.log("ok  scanned page recognized");
@@ -259,10 +340,9 @@ try {
   await page.getByText("Saved a copy with the recognized text").waitFor({ timeout: 60_000 });
   assert.equal(await app.evaluate(() => globalThis.folioScanSaved), "completed");
   assert.equal(readFileSync(scannedCopy).subarray(0, 5).toString("latin1"), "%PDF-");
-  await page.getByTitle("Back to library").click();
   const [copyChooser] = await Promise.all([
     page.waitForEvent("filechooser"),
-    page.getByRole("button", { name: /Open a PDF/ }).click(),
+    page.keyboard.press("ControlOrMeta+o"),
   ]);
   await copyChooser.setFiles(scannedCopy);
   await page.waitForFunction(() => document.title.startsWith("scanned-copy.pdf"), null, { timeout: 30_000 });
@@ -271,9 +351,14 @@ try {
   await page.waitForTimeout(2000); // a scan is looked for after the page is shown
   assert.equal(await page.getByText("This looks like a scan").count(), 0);
   console.log("ok  saved copy carries the recognized text");
+  await docs.getByRole("tab", { name: "Folio sample.pdf", exact: true }).click();
+  await docs.getByRole("tab", { name: "Folio sample.pdf", selected: true }).waitFor();
+  await docs.getByRole("button", { name: "Close scanned-copy.pdf", exact: true }).click();
+  await docs.getByRole("button", { name: "Close scanned-sample.pdf", exact: true }).click();
 
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });
+  await checkReaderTools(app, page, env.FOLIO_TEST_USER_DATA);
 
   // A Word document opens converted to PDF (by Word, LibreOffice, or Folio itself, whichever the computer has),
   // and the PDF is saved next to it. Opening the document again reuses that PDF.
@@ -288,8 +373,10 @@ try {
     await page.getByRole("button", { name: /Open a PDF/ }).click();
     await (await chooser).setFiles(docx);
     // Stops at a conversion error too, and shows what each converter said.
-    const settled = await page.waitForFunction((name) => document.title.startsWith(name)
-      || document.querySelector(".toast.error")?.textContent, expectedName, { timeout: 150_000 }).catch((error) => error);
+    const settled = await page.window.waitForFunction((name) => {
+      const reader = document.querySelector("iframe.document-reader.active")?.contentDocument;
+      return reader?.title.startsWith(name) || reader?.querySelector(".toast.error")?.textContent;
+    }, expectedName, { timeout: 150_000 }).catch((error) => error);
     if (settled instanceof Error || !(await page.title()).startsWith(expectedName)) {
       const log = path.join(env.FOLIO_TEST_USER_DATA, "convert.log");
       console.log(await page.locator(".toast").textContent().catch(() => "(no message)"));
@@ -392,6 +479,18 @@ try {
     server.close();
   }
   console.log("ok  local network addresses need the user's OK");
+
+  // The question asked before closing over unsaved work names this platform's Save shortcut.
+  const closePrompt = await app.evaluate(({ BrowserWindow, dialog }) => {
+    const ask = dialog.showMessageBoxSync;
+    let detail = null;
+    dialog.showMessageBoxSync = (_window, options) => { detail = options.detail; return 1; };
+    try { BrowserWindow.getAllWindows()[0].webContents.emit("will-prevent-unload", { preventDefault() {} }); }
+    finally { dialog.showMessageBoxSync = ask; }
+    return detail;
+  });
+  assert.match(closePrompt, process.platform === "darwin" ? /⌘S/ : /Ctrl\+S/);
+  console.log("ok  the unsaved-work prompt shows this platform's Save shortcut");
 
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);

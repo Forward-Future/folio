@@ -12,10 +12,11 @@ type FindRequest = { query?: unknown };
  * (which empties it), and the search that was showing is run again so the reader doesn't have to type it twice. As
  * with typing it again, the view moves to the first match from the page being read.
  */
-export function useOcrSearchRefresh({ session, searchOpen, phase, find, bus }: {
+export function useOcrSearchRefresh({ session, searchOpen, phase, version, find, bus }: {
   session: OcrSession | null;
   searchOpen: boolean;
   phase: OcrState["phase"];
+  version?: number;
   find: RefObject<PDFFindController | null>;
   bus: RefObject<EventBus | null>;
 }) {
@@ -34,5 +35,5 @@ export function useOcrSearchRefresh({ session, searchOpen, phase, find, bus }: {
     controller.setDocument(session.pdf);
     // A fresh forward search, not a repeat of the last Enter or Shift+Enter.
     if (request?.query) bus.current!.dispatch("find", { ...request, type: "", findPrevious: false });
-  }, [session, searchOpen, phase, find, bus]);
+  }, [session, searchOpen, phase, version, find, bus]);
 }

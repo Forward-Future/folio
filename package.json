@@ -1,10 +1,10 @@
 {
   "name": "folio-pdf-reader",
   "private": true,
-  "version": "1.10.9",
+  "version": "1.12.2",
   "type": "module",
   "scripts": {
-    "assets": "node scripts/copy-pdfjs-assets.mjs",
+    "assets": "node scripts/copy-pdfjs-assets.mjs && node scripts/copy-ocr-assets.mjs",
     "predev": "npm run assets",
     "prebuild": "npm run assets",
     "dev": "vite",

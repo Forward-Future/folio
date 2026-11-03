@@ -55,6 +55,29 @@ describe("copyWithText", () => {
     expect(((await page.getTextContent()).items as { str: string }[]).map((i) => i.str)).toEqual(["recognized"]);
   });
 
+  it("keeps recognized words and metadata on the corresponding reordered pages", async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([612, 792]);
+    doc.addPage([612, 792]);
+    const session = sessionFor({}, [[1, [{ ...word, str: "first" }]], [2, [{ ...word, str: "second" }]]], [1]);
+    const copy = await copyWithText(session, await doc.save(), [2, 1]);
+    const pdf = await openPdf(copy.bytes);
+    const page1 = await (await pdf.getPage(1)).getTextContent();
+    const page2 = await (await pdf.getPage(2)).getTextContent();
+    expect(page1.items.map(item => "str" in item ? item.str : "").join("")).toContain("second");
+    expect(page2.items.map(item => "str" in item ? item.str : "").join("")).toContain("first");
+    expect(embedRecognizedText).toHaveBeenCalledWith(expect.any(Uint8Array), expect.any(Map), new Set([2]));
+  });
+
+  it("remaps embedded page metadata even when no newly recognized text exists", async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([612, 792]);
+    doc.addPage([612, 792]);
+    const copy = await copyWithText(sessionFor({}, [], [1]), await doc.save(), [2, 1]);
+    expect(copy.embedded).toBe(true);
+    expect(embedRecognizedText).toHaveBeenCalledWith(expect.any(Uint8Array), new Map(), new Set([2]));
+  });
+
   it("goes ahead for a document with form fields that aren't signatures, or none", async () => {
     const bytes = await blank();
     expect((await copyWithText(sessionFor({ fields: new Map([["name", [{ type: "text" }]]]) }), bytes)).embedded).toBe(true);
