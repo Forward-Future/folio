@@ -7,6 +7,11 @@ export interface SavedSignature extends SignatureImage { key: string; name: stri
 export interface SignatureTarget { id: string; label: string; rect: number[]; kind: "field" | "label" }
 const cache = new WeakMap<PDFDocumentProxy, Map<number, Promise<SignatureTarget[]>>>();
 
+export function uncoveredTargets(targets: SignatureTarget[], stamps: number[][]) {
+  return targets.filter(({ rect }) => !stamps.some(stamp =>
+    stamp[0] < rect[2] && stamp[2] > rect[0] && stamp[1] < rect[3] && stamp[3] > rect[1]));
+}
+
 export function detectSignatureTargets(pdf: PDFDocumentProxy, pageNumber: number) {
   let pages = cache.get(pdf);
   if (!pages) cache.set(pdf, pages = new Map());
@@ -17,6 +22,8 @@ export function detectSignatureTargets(pdf: PDFDocumentProxy, pageNumber: number
       const annotations = await page.getAnnotations();
       const signedFields = await pdf.getSignatures();
       if (signedFields?.length) return [];
+      const stamps = annotations.filter(annotation => annotation.subtype === "Stamp" && annotation.rect?.length === 4)
+        .map(annotation => annotation.rect);
       const fields: SignatureTarget[] = annotations.filter(annotation => annotation.subtype === "Widget"
         && annotation.fieldType === "Sig" && !annotation.fieldValue && !(annotation.fieldFlags & 1)
         && !(annotation.annotationFlags & 35) && annotation.rect.length === 4 && annotation.rect.every(Number.isFinite))
@@ -24,17 +31,22 @@ export function detectSignatureTargets(pdf: PDFDocumentProxy, pageNumber: number
           rect: [Math.max(page.view[0], annotation.rect[0]), Math.max(page.view[1], annotation.rect[1]),
             Math.min(page.view[2], annotation.rect[2]), Math.min(page.view[3], annotation.rect[3])], kind: "field" }))
         .filter(target => target.rect[2] - target.rect[0] > 4 && target.rect[3] - target.rect[1] > 4);
-      if (fields.length) return fields;
+      if (fields.length) return uncoveredTargets(fields, stamps);
       const text = await page.getTextContent();
-      return text.items.flatMap((item, index): SignatureTarget[] => {
-        if (!("str" in item) || !/\b(signature|sign here|signed by)\b/i.test(item.str)
+      const labels = text.items.flatMap((item, index): SignatureTarget[] => {
+        if (!("str" in item)) return [];
+        const label = item.str.trim();
+        const initials = /^(?:(?:your|signer['’]s|applicant['’]s)\s+)?initials\s*[:_]*$/i.test(label);
+        if (!(initials || /\b(signature|sign here|signed by)\b/i.test(label) || /^approved by\s*[:_]*$/i.test(label))
           || /digital|electronic|verified|invalid/i.test(item.str)) return [];
         const [left, bottom, right, top] = page.view;
-        const positionX = Math.max(left, Math.min(item.transform[4], right - Math.min(180, right - left)));
+        const width = initials ? 64 : 180;
+        const positionX = Math.max(left, Math.min(item.transform[4], right - Math.min(width, right - left)));
         const positionY = Math.max(bottom, Math.min(item.transform[5] + Math.max(item.height, 10) + 3, top - 42));
         return [{ id: "label-" + index, label: item.str.trim().slice(0, 80) + " (suggested)",
-          rect: [positionX, positionY, Math.min(right, positionX + 180), Math.min(top, positionY + 42)], kind: "label" }];
-      }).slice(0, 12);
+          rect: [positionX, positionY, Math.min(right, positionX + width), Math.min(top, positionY + 42)], kind: "label" }];
+      });
+      return uncoveredTargets(labels, stamps).slice(0, 12);
     })();
     pages.set(pageNumber, result);
     result.catch(() => pages!.delete(pageNumber));

@@ -107,6 +107,13 @@ export class MarkupController {
     return { marks: this.#sorted(), note: this.#note };
   }
 
+  stampRects(pageIndex: number): number[][] {
+    if (!this.#ui) return [];
+    return Array.from(this.#ui.getEditors(pageIndex))
+      .filter(editor => editor.constructor._type === "stamp" && !editor.deleted && !editor.isEmpty())
+      .map(editor => editor.getPDFRect());
+  }
+
   /** Loads saved markup for a newly opened document. Password-protected documents aren't persisted. */
   async load(docId: string, persist: boolean) {
     this.unload();

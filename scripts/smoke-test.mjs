@@ -92,7 +92,7 @@ try {
   const picker = page.getByRole("combobox", { name: "Saved signature" });
   const uploadPhoto = async (url) => {
     await page.getByLabel("Upload signature photo").setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(url.split(",")[1], "base64") });
-    await page.getByRole("button", { name: /Use this signature/ }).click();
+    await page.getByRole("button", { name: "Adjust crop and ink" }).waitFor();
   };
   const placeAt = async (x, y) => {
     await page.getByRole("combobox", { name: "Signature placement" }).selectOption("manual");
@@ -131,6 +131,9 @@ try {
   await sign.click();
   assert.deepEqual(await picker.locator("option").allTextContents(), ["Full name"]);
   await uploadPhoto(photos.initials);
+  await page.getByRole("button", { name: "Adjust crop and ink" }).click();
+  await page.getByLabel("Crop signature photo").waitFor();
+  await page.getByRole("button", { name: /Use this signature/ }).click();
   await remember.check();
   await placeAt(100, 130);
   await approve();

@@ -30,9 +30,10 @@ import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
 import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
 import { SignatureDialog } from "./SignatureDialog";
+import { SignatureSuggestion } from "./SignatureSuggestion";
 import { SettingsDialog } from "./SettingsDialog";
 import { ChangelogDialog } from "./ChangelogDialog";
-import { detectSignatureTargets, placeSignature, rememberSignature, type SignatureTarget } from "./signatures";
+import { detectSignatureTargets, placeSignature, rememberSignature, uncoveredTargets, type SignatureImage, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
 import { enableWheelPaging } from "./wheelPaging";
 
@@ -160,8 +161,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   const [signing, setSigning] = useState(false);
-  const [signatureTargets, setSignatureTargets] = useState<SignatureTarget[]>([]);
-  const [signatureDismissed, setSignatureDismissed] = useState(false);
+  const [detection, setDetection] = useState<{ pdf: PDFDocumentProxy; page: number; targets: SignatureTarget[] } | null>(null);
+  const signatureTargets = detection?.targets.length && detection.pdf === doc?.pdf && detection.page === page
+    ? uncoveredTargets(detection.targets, markupRef.current?.stampRects(page - 1) ?? []) : [];
+  const [dismissedSignaturePages, setDismissedSignaturePages] = useState<number[]>([]);
   const [markup, setMarkup] = useState<MarkupState>({ marks: [], note: "" });
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("pages");
   const [noteBox, setNoteBox] = useState<{ markId: string; anchor: { x: number; top: number; bottom: number }; quote: string; initial: string } | null>(null);
@@ -175,16 +178,17 @@ export default function App() {
   const [aiContext, setAiContext] = useState<AiContext | null>(null);
 
   useEffect(() => {
-    setSigning(false); setSignatureTargets([]); setSignatureDismissed(false);
+    setSigning(false);
     if (!doc) return;
     let cancelled = false;
     const timer = setTimeout(() => {
       void detectSignatureTargets(doc.pdf, page).then(targets => {
-        if (!cancelled) setSignatureTargets(targets);
+        if (!cancelled) setDetection({ pdf: doc.pdf, page, targets });
       }).catch(() => {});
     }, 350);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [doc, page]);
+  useEffect(() => { setDismissedSignaturePages([]); setDetection(null); }, [doc]);
 
   docRef.current = doc;
   unsavedRef.current = unsaved;
@@ -559,6 +563,19 @@ export default function App() {
     }
   };
   const startSigning = () => { chooseTool("select"); setSigning(true); };
+  const dismissSignatureSuggestion = () => setDismissedSignaturePages(pages => pages.includes(page) ? pages : [...pages, page]);
+  const addSignature = async (image: SignatureImage, rect: number[], rememberAs?: string) => {
+    if (!doc || docRef.current !== doc || pageRef.current !== page) throw new Error("The page changed. Open Sign again.");
+    chooseTool("select");
+    await placeSignature(viewerRef.current!, doc.pdf, page, image, rect);
+    if (docRef.current !== doc) return;
+    setDirty(true);
+    if (rememberAs !== undefined) {
+      try { rememberSignature(image, rememberAs); }
+      catch { flash("Signature added to the page, but couldn't be remembered on this device."); return; }
+    }
+    flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
+  };
 
   const chooseColor = (hex: string) => {
     setColors((c) => ({ ...c, [tool]: hex }));
@@ -1350,20 +1367,10 @@ export default function App() {
       {doc && imageView && <ImageViewer pdf={doc.pdf} target={imageView} onClose={() => setImageView(null)} />}
       {dialog === "url" && <OpenUrlDialog key={linkDraft} initial={linkDraft} onClose={() => setDialog(null)} onSubmit={(url) => { setDialog(null); openUrl(url); }} />}
       {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}
-        onClose={() => setSigning(false)} onApprove={async (signature, rect, rememberAs) => {
-          await placeSignature(viewerRef.current!, doc.pdf, page, signature, rect);
-          setDirty(true); setSignatureDismissed(true);
-          if (rememberAs !== undefined) {
-            try { rememberSignature(signature, rememberAs); }
-            catch { flash("Signature added to the page, but couldn't be remembered on this device."); return; }
-          }
-          flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
-        }} />}
-      {doc && !signing && signatureTargets.length > 0 && !signatureDismissed && <div className="signature-suggestion" role="status">
-        <span>{signatureTargets[0].kind === "field" ? "Signature field detected" : "Possible signature area"} on page {page}</span>
-        <button className="btn primary" onClick={startSigning}>Review signature</button>
-        <button className="pill-btn" aria-label="Dismiss signature suggestion" onClick={() => setSignatureDismissed(true)}><Icon name="close" size={14} /></button>
-      </div>}
+        onClose={() => setSigning(false)} onApprove={addSignature} />}
+      {doc && !signing && !dialog && signatureTargets.length > 0 && !dismissedSignaturePages.includes(page) &&
+        <SignatureSuggestion key={doc.id + ":" + page + ":" + signatureTargets.length} targets={signatureTargets} page={page} onSign={addSignature}
+          onReview={startSigning} onDismiss={dismissSignatureSuggestion} />}
 
       {updateVersion && (
         <div className="update-card" role="status">

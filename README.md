@@ -99,13 +99,12 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
 ### Add handwritten signatures
 
 - **Capture on paper:** sign with dark ink on white paper, then use your camera or upload a PNG, JPEG, or WebP photo.
-- **Clean up the image:** crop to the signature and adjust ink sensitivity to remove the paper background. Capture
-  and image processing stay on your device.
-- **Suggested placement:** Folio checks the current page for empty PDF signature fields and likely signature labels,
-  then offers places to sign. Detection is a suggestion, not a guarantee that every field will be found.
+- **Clean up the image:** Folio removes the paper background and trims the image on your device. Use **Adjust crop and ink** if you need to refine it.
+- **Sign a detected field:** when the current page has one empty signature field and one saved signature, click **Sign with** followed by its name. With several saved signatures, choose one and click **Sign field**.
+- **Suggested placement:** Folio also recognizes printed labels such as **Approved by** and **Initials** in PDFs with embedded text. Click **Review signature** to see the suggested position.
 - **Preview and position:** review the actual page, pick a suggestion or place the signature manually, and adjust its
   width before approving.
-- **Explicit approval:** nothing is added until you click **Approve and add signature**. Signatures are visual stamps,
+- **Explicit approval:** click the sign button on a detected field or **Approve and add signature** in the preview. Signatures are visual stamps,
   not certificate-based digital signatures. Use **Save a copy** to keep a signed PDF; placed signatures are not part
   of Folio's automatic annotation restoration.
 - **Optional reuse:** select **Remember this signature** and give it a name, such as “Initials”.

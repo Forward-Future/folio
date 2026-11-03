@@ -150,6 +150,54 @@ async function captureDownload(app, file) {
   }, file);
 }
 
+async function checkSignatureFields(app, page, folder) {
+  const labels = "BT /F 12 Tf 30 190 Td (Approved by:) Tj 0 -110 Td (Initials) Tj ET";
+  const form = testPdf([
+    "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>",
+    "<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [5 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F 6 0 R >> >> /Contents 7 0 R >>",
+    "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Applicant signature) /Rect [30 110 230 155] /P 3 0 R /F 4 >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${labels.length} >>\nstream\n${labels}\nendstream`,
+  ]);
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Signature fields.pdf", data: Buffer.from(data) }), form);
+  const hint = page.getByRole("region", { name: "Signature suggestion" });
+  const quick = hint.getByRole("button", { name: "Sign field" });
+  await quick.waitFor();
+  assert.ok(await quick.isDisabled());
+  await hint.getByRole("combobox").selectOption({ label: "Full name" });
+  await quick.click();
+  await page.locator(".stampEditor canvas").first().waitFor();
+  await hint.waitFor({ state: "hidden" });
+  await page.keyboard.press("ControlOrMeta+z");
+  await quick.waitFor();
+  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.getByRole("button", { name: "Forget Signature 1", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await hint.getByRole("button", { name: "Sign with Full name" }).click();
+  await hint.waitFor({ state: "hidden" });
+
+  await page.getByTitle("Next page").click();
+  await hint.getByRole("button", { name: "Review signature" }).click();
+  const placement = page.getByRole("combobox", { name: "Signature placement" });
+  assert.match(await placement.locator("option:checked").innerText(), /Approved by/);
+  const approve = page.getByRole("button", { name: "Approve and add signature" });
+  await approve.click();
+  await hint.getByRole("button", { name: "Review signature" }).click();
+  assert.match(await placement.locator("option:checked").innerText(), /Initials/);
+  await approve.click();
+  await page.getByRole("dialog", { name: "Sign page 2" }).waitFor({ state: "hidden" });
+  await hint.waitFor({ state: "hidden" });
+  const file = path.join(folder, "signed-fields.pdf");
+  await captureDownload(app, file);
+  await page.keyboard.press("ControlOrMeta+s");
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  assert.equal(readFileSync(file, "latin1").match(/\/Subtype\s*\/Stamp\b/g)?.length, 3);
+  console.log("ok  detected fields accept a saved signature directly and text suggestions advance to the next line");
+}
+
 export async function checkReaderTools(app, page, folder) {
   const settings = () => page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
   const wheelSwitch = page.getByRole("switch", { name: "Scroll one page at a time" });
@@ -270,5 +318,6 @@ export async function checkReaderTools(app, page, folder) {
   await page.getByTitle("Next page").click();
   assert.equal(await page.locator('.page[data-page-number="2"] .textWidgetAnnotation input').inputValue(), "A filled field");
   console.log("ok  the normal Save shortcut and Open reordered copy preserve filled form fields");
+  await checkSignatureFields(app, page, folder);
   await checkScanSelection(app, page);
 }

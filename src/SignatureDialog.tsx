@@ -16,6 +16,7 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
   const [remember, setRemember] = useState(false);
   const [name, setName] = useState("");
   const [source, setSource] = useState<HTMLCanvasElement | null>(null);
+  const originalPhoto = useRef<HTMLCanvasElement | null>(null);
   const [crop, setCrop] = useState<number[] | null>(null);
   const [threshold, setThreshold] = useState(180);
   const [camera, setCamera] = useState(false);
@@ -23,7 +24,8 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
   const [cameraStarting, setCameraStarting] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [targetId, setTargetId] = useState(targets[0]?.id || "manual");
+  const [chosenTarget, setTargetId] = useState<string | null>(null);
+  const targetId = chosenTarget ?? targets[0]?.id ?? "manual";
   const [manualCenter, setManualCenter] = useState<number[] | null>(null);
   const [size, setSize] = useState(150);
   const [preview, setPreview] = useState<{ url: string; width: number; height: number; viewport: PageViewport } | null>(null);
@@ -106,7 +108,14 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
     const factor = Math.min(1, 1600 / Math.max(width, height));
     const canvas = document.createElement("canvas"); canvas.width = Math.round(width * factor); canvas.height = Math.round(height * factor);
     canvas.getContext("2d")!.drawImage(image, 0, 0, canvas.width, canvas.height);
-    setSource(canvas); setCrop([0, 0, canvas.width, canvas.height]); setRemember(false); setName(""); setSignature(null); setError("");
+    const bounds = [0, 0, canvas.width, canvas.height];
+    originalPhoto.current = canvas;
+    setCrop(bounds); setThreshold(180); setRemember(false); setName("");
+    try {
+      setSignature(cleanSignature(canvas, bounds, 180)); setSource(null); setError("");
+    } catch (reason) {
+      setSignature(null); setSource(canvas); setError((reason as Error).message);
+    }
   };
   const capture = () => {
     const video = videoRef.current;
@@ -157,6 +166,7 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
           {signatures.length > 0 && !source && !camera && <label className="signature-field">Saved signature
             <select value={saved?.key ?? ""} disabled={cameraStarting} onChange={event => {
               captureGeneration.current++;
+              originalPhoto.current = null;
               setSignature(signatures.find(item => item.key === event.target.value) ?? null);
               setRemember(false); setName(""); setError("");
             }}>
@@ -188,9 +198,10 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
               try { setSignature(cleanSignature(source, crop!, threshold)); setSource(null); setError(""); }
               catch (reason) { setError((reason as Error).message); }
             }}>Use this signature <Icon name="chevronRight" size={15} /></button>
-            <button className="btn ghost" onClick={() => { setSource(null); setSignature(null); setError(""); }}>Choose another photo</button>
+            <button className="btn ghost" onClick={() => { originalPhoto.current = null; setSource(null); setSignature(null); setError(""); }}>Choose another photo</button>
           </div>}
           {signature && !camera && <div className="signature-image"><img src={signature.url} alt="Your signature preview" /><span><Icon name="check" size={13} /> Background removed</span></div>}
+          {ready && originalPhoto.current && <button className="btn ghost" onClick={() => setSource(originalPhoto.current)}>Adjust crop and ink</button>}
           {ready && !saved && <label className="signature-remember"><input type="checkbox" checked={remember} onChange={event => setRemember(event.target.checked)} /><span>Remember this signature<small>Only on this device. Forget it in Settings.</small></span></label>}
           {ready && !saved && remember && <label className="signature-field">Signature name
             <input value={name} maxLength={64} placeholder={nextSignatureName(signatures)} onChange={event => setName(event.target.value)} />
@@ -209,11 +220,13 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
               role={ready && targetId === "manual" ? "button" : undefined} tabIndex={ready && targetId === "manual" ? 0 : undefined} aria-label={ready && targetId === "manual" ? "Place signature on page " + pageNumber : undefined} aria-describedby="signature-placement-hint"
               onClick={event => {
                 if (!ready || targetId !== "manual") return;
+                setTargetId("manual");
                 const area = event.currentTarget.getBoundingClientRect();
                 setManualCenter(preview.viewport.convertToPdfPoint((event.clientX - area.left) * preview.width / area.width, (event.clientY - area.top) * preview.height / area.height));
               }} onKeyDown={event => {
                 if (!ready || targetId !== "manual" || !["Enter", " ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
                 event.preventDefault();
+                setTargetId("manual");
                 const area = rect || preview.viewport.viewBox;
                 setManualCenter([(area[0] + area[2]) / 2 + (event.key === "ArrowLeft" ? -5 : event.key === "ArrowRight" ? 5 : 0), (area[1] + area[3]) / 2 + (event.key === "ArrowDown" ? -5 : event.key === "ArrowUp" ? 5 : 0)]);
               }}><img className="signature-page-background" src={preview.url} alt={"Page " + pageNumber + " placement preview"} />
