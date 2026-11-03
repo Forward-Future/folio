@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.15.0
+
+- Choose **Edit mode** to change existing PDF text directly on the page or replace an embedded image with a PNG or JPEG. **Save copy** exports the edited PDF.
+- Open **More → Version history** to see what changed on each page and reopen or download earlier versions. History is stored on this device for unencrypted PDFs up to 50 MB.
+
 ## 1.14.0
 
 - Bookmark a page with the ribbon beside its thumbnail in **Pages**. Choose **Bookmarked** to see your saved pages and jump to one.

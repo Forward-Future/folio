@@ -59,6 +59,12 @@ try {
   assert.match(await page.locator(".textLayer").first().innerText(), /A short tour of Folio/);
   console.log("ok  sample rendered with a text layer");
 
+  const toolbar = page.getByRole("toolbar", { name: "Tools" });
+  for (const name of ["Select", "Highlight", "Draw", "Text", "Sign", "Edit mode"]) await toolbar.getByRole("button", { name, exact: true }).waitFor();
+  await toolbar.getByRole("button", { name: "Edit mode", exact: true }).click();
+  await toolbar.getByRole("button", { name: "Highlight", exact: true }).waitFor();
+  await toolbar.getByRole("button", { name: "Exit edit mode", exact: true }).click();
+
   const docs = page.getByRole("tablist", { name: "Open documents" });
   assert.equal(await page.locator(".document-tabs").count(), 0);
   await page.getByRole("button", { name: "More", exact: true }).click();
