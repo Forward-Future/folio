@@ -531,9 +531,12 @@ try {
       return post.call(this, message, ...rest);
     };
   });
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /New tab/ }).click();
+  await docs.getByRole("tab", { name: "Library", selected: true }).waitFor();
   const [scanChooser] = await Promise.all([
     page.waitForEvent("filechooser"),
-    page.keyboard.press("ControlOrMeta+o"),
+    page.getByRole("button", { name: /Open a PDF/ }).click(),
   ]);
   await scanChooser.setFiles(path.join(root, "scripts", "fixtures", "scanned-sample.pdf"));
   await page.getByRole("button", { name: "Try again" }).waitFor({ timeout: 60_000 });
