@@ -12,6 +12,7 @@ const { guardSession, resolveDestination } = require("./network.cjs");
 const { safePdfName } = require("./filenames.cjs");
 const { csp } = require("./csp.cjs");
 const { WORD_FILE, openWord } = require("./convert.cjs");
+const { registerPrinting } = require("./printing.cjs");
 const { MAX_DOCUMENT_BYTES, checkDiskPath, readRegular } = require("./document-files.cjs");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
@@ -524,6 +525,7 @@ if (!app.requestSingleInstanceLock()) {
     });
 
     ai.register(handle, (channel, payload) => win?.webContents.send(channel, payload));
+    registerPrinting(handle, () => win);
 
     handle("folio:ready", () => {
       rendererReady = true;

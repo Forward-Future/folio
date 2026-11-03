@@ -129,21 +129,10 @@ try {
   await page.getByRole("button", { name: /Approve and add signature/ }).click();
   await page.locator(".dirty-dot").waitFor();
 
-  // Printing saves nothing, so the signature stays marked as unsaved. The print frame is stubbed for the check, so no
-  // system print dialog opens.
-  await page.evaluate(() => {
-    const frame = HTMLIFrameElement.prototype;
-    const stub = { printed: 0, src: Object.getOwnPropertyDescriptor(frame, "src"), contentWindow: Object.getOwnPropertyDescriptor(frame, "contentWindow") };
-    window.folioPrintStub = stub;
-    Object.defineProperty(frame, "src", { configurable: true, set(url) { this.dataset.src = url; } });
-    Object.defineProperty(frame, "contentWindow", { configurable: true, get: () => ({ focus() {}, print() { stub.printed++; } }) });
-  });
+  // Preparing an annotated print snapshot saves nothing. Cancel before the native print handoff.
   await page.keyboard.press("ControlOrMeta+p");
-  await page.waitForFunction(() => window.folioPrintStub.printed === 1, null, { timeout: 15_000 });
-  await page.evaluate(() => {
-    Object.defineProperty(HTMLIFrameElement.prototype, "src", window.folioPrintStub.src);
-    Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", window.folioPrintStub.contentWindow);
-  });
+  await page.getByRole("img", { name: "Preview of sheet 1" }).waitFor({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   assert.ok(await page.locator(".dirty-dot").isVisible(), "printing cleared the unsaved marker");
   console.log("ok  printing keeps unsaved work marked as unsaved");
 

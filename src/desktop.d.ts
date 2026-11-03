@@ -8,6 +8,9 @@ interface UpdateStatus {
 
 // Present only when Folio runs as the desktop app (see electron/preload.cjs).
 interface FolioDesktop {
+  getPrinters(): Promise<{ name: string; displayName: string; isDefault: boolean }[]>;
+  printSheets(job: { images: string[]; paper: "Letter" | "A4" | "Legal"; landscape: boolean; dpi: 150 | 300 | 600;
+    copies: number; printer: string; booklet: boolean }): Promise<{ ok: boolean; error?: string }>;
   /** `note` says where a converted Word document's PDF was saved. */
   onOpenFile(callback: (name: string, data: Uint8Array, note?: string, token?: string) => void): () => void;
   onConverting(callback: (name: string, token: string) => void): () => void;

@@ -2,6 +2,8 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("folioDesktop", {
+  getPrinters: () => ipcRenderer.invoke("folio:printers"),
+  printSheets: (job) => ipcRenderer.invoke("folio:print-sheets", job),
   /** Called with (name, data, note?) whenever a PDF is opened from Explorer, or a Word document has been converted. */
   onOpenFile(callback) {
     const listener = (_e, file) => callback(file.name, new Uint8Array(file.data), file.note ?? undefined, file.token);
