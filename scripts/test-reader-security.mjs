@@ -156,7 +156,7 @@ try {
     const editor = () => ({ id: "editor", pageIndex: 0, constructor: { _type: "highlight" },
       isEmpty: () => false, serialize: () => ({ color: [0, 255, 0] }), comment: null });
     const manager = (layer, editors = []) => events.get("annotationeditoruimanager")({
-      source: viewer, uiManager: { getEditors: () => editors, getLayer: () => layer },
+      source: viewer, uiManager: { getEditors: () => editors, getLayer: () => layer, getMode: () => 0 },
     });
     await markup.load("first", false);
     manager(null);
