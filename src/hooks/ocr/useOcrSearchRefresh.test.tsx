@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OcrSession } from "../../lib/ocr/session/OcrSession";
-import type { OcrState } from "../../lib/ocr/types";
+import type { OcrPhase } from "../../lib/ocr/types";
 import { findControllerFor } from "../../testing/pdfjs";
 import { useOcrSearchRefresh } from "./useOcrSearchRefresh";
 
@@ -38,7 +38,7 @@ function fakeFind(request: object | null, highlightMatches = true) {
 const SEARCH = { source: null, type: "again", query: "invoice", caseSensitive: true, entireWord: false, highlightAll: true, findPrevious: true, matchDiacritics: false };
 
 /** What happens when the reader starts recognition: it runs, adds text, and ends. The hook only looks when the phase changes. */
-async function recognizeMore(props: Props, version: number, end: OcrState["phase"] = "done") {
+async function recognizeMore(props: Props, version: number, end: OcrPhase = "done") {
   await render({ ...props, phase: "running" });
   (props.session as { version: number }).version = version;
   await render({ ...props, phase: end });
@@ -48,7 +48,7 @@ function setup(overrides: Partial<Props> = {}, request: object | null = SEARCH, 
   const controller = fakeFind(request, highlightMatches);
   const dispatch = vi.fn();
   const props: Props = {
-    session: sessionAt(0), searchOpen: true, phase: "done" as OcrState["phase"],
+    session: sessionAt(0), searchOpen: true, phase: "done" as OcrPhase,
     find: { current: controller as never }, bus: { current: { dispatch } as never }, ...overrides,
   };
   return { controller, dispatch, props };
@@ -100,7 +100,6 @@ describe("useOcrSearchRefresh", () => {
     await render({ ...props, searchOpen: true, phase: "done" });
     expect(controller.setDocument).toHaveBeenCalledTimes(1);
     expect(dispatch).not.toHaveBeenCalled(); // opened after the search was closed: nothing is showing to bring back
-    await render({ ...props, searchOpen: true, phase: "offer" });
     await render({ ...props, searchOpen: true, phase: "done" });
     expect(controller.setDocument).toHaveBeenCalledTimes(1);
   });
@@ -111,7 +110,7 @@ describe("useOcrSearchRefresh", () => {
     (props.session as { version: number }).version = 2;
     await render({ ...props, phase: "running" });
     expect(controller.setDocument).not.toHaveBeenCalled();
-    await render({ ...props, phase: "offer" }); // stopped part way: the pages read so far are searchable
+    await render({ ...props, phase: "done" }); // the pages read so far are searchable
     expect(controller.setDocument).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledTimes(1);
   });

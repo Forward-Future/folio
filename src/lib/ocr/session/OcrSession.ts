@@ -56,7 +56,6 @@ export class OcrSession {
     if (this.#destroyed || !items.length || this.pages.has(page) || this.embedded.has(page)) return;
     this.pages.set(page, items);
     if (this.#key) void saveOcrPage(this.#key, page, items, this.#epoch);
-    if (!items.length) return;
     this.version++;
     for (const listener of this.#pageListeners) listener(page);
   }

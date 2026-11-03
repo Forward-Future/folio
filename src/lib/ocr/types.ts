@@ -16,10 +16,4 @@ export interface TextItem {
 /** Left, bottom, right, top in page space. */
 export type Box = [number, number, number, number];
 
-export interface OcrState {
-  phase: "idle" | "offer" | "running" | "done" | "error";
-  /** Pages looked at so far, out of `total`. */
-  done: number;
-  total: number;
-  error?: string;
-}
+export type OcrPhase = "running" | "done";

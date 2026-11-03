@@ -62,6 +62,21 @@ describe("documentText", () => {
     expect(pdf.getPage).toHaveBeenCalledTimes(2); // read again, not served from the old result
   });
 
+  it("warns when OCR finishes while document text is being extracted", async () => {
+    let resume!: () => void;
+    const wait = new Promise<void>(resolve => { resume = resolve; });
+    const session = sessionWith();
+    const pdf = { session, numPages: 1, getPage: async () => {
+      await wait;
+      return { getTextContent: async () => ({ items: [{ str: "recognized text" }] }) };
+    } } as unknown as Parameters<typeof documentText>[0];
+    const extraction = documentText(pdf);
+    session.pages.set(1, [{ str: "recognized text" }]);
+    session.version++;
+    resume();
+    expect(await extraction).toMatchObject({ recognized: true, text: expect.stringContaining("recognized text") });
+  });
+
   it("tells whether any of the text came from recognition", async () => {
     expect((await documentText(makePdf([[{ str: "a" }]]))).recognized).toBe(false);
     expect((await documentText(makePdf([[{ str: "a" }]], sessionWith()))).recognized).toBe(false);

@@ -7,7 +7,7 @@ const item = (over: Partial<TextItem> = {}): TextItem => ({
 });
 
 describe("imageCover", () => {
-  const ops: ImageOps = { save: 10, restore: 11, transform: 12, paintImageXObject: 85, paintInlineImageXObject: 86, paintImageMaskXObject: 83 };
+  const ops: ImageOps = { save: 10, restore: 11, transform: 12, paintImageXObject: 85, paintInlineImageXObject: 86, paintImageMaskXObject: 83, paintImageXObjectRepeat: 87, paintImageMaskXObjectRepeat: 88, paintImageMaskXObjectGroup: 89, paintInlineImageXObjectGroup: 90 };
   const page: Box = [0, 0, 612, 792];
   const run = (program: [number, unknown][], view: Box = page) =>
     imageCover(program.map(([fn]) => fn), program.map(([, args]) => args), ops, view);
@@ -52,6 +52,15 @@ describe("imageCover", () => {
       [ops.save, null], [ops.transform, [306, 0, 0, 396, 0, 0]], [ops.paintInlineImageXObject, [{}]], [ops.restore, null],
       [ops.save, null], [ops.transform, [306, 0, 0, 792, 0, 0]], [ops.paintImageMaskXObject, [{}]], [ops.restore, null],
     ])).toBeCloseTo(0.5);
+  });
+
+  it("measures repeated images and masks with their individual transforms", () => {
+    expect(run([[ops.paintImageXObjectRepeat!, ["img", 612, 792, new Float32Array([0, 0])]]])).toBeCloseTo(1);
+    expect(run([[ops.paintImageMaskXObjectRepeat!, [{}, 612, 0, 0, 792, new Float32Array([0, 0])]]])).toBeCloseTo(1);
+    expect(run([[ops.paintImageMaskXObjectGroup!, [[{ transform: [612, 0, 0, 792, 0, 0] }]]]])).toBeCloseTo(1);
+    expect(run([[ops.paintInlineImageXObjectGroup!, [{}, [{ transform: [612, 0, 0, 792, 0, 0] }]]]])).toBeCloseTo(1);
+    expect(run([[ops.transform, [1, 0, 0, 1, 100, 0]], [ops.paintImageXObjectRepeat!, ["img", 100, 100, [0, 0, 200, 0]]]]))
+      .toBeCloseTo((100 * 100) / (612 * 792));
   });
 
   it("measures against a page whose box doesn't start at the origin", () => {

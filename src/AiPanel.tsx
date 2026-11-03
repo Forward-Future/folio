@@ -36,8 +36,6 @@ export function documentText(pdf: PDFDocumentProxy) {
   const version = session?.version ?? 0;
   const hit = textCache.get(pdf);
   if (hit?.version === version) return hit.text;
-  // Text recognized earlier counts too, whether it is kept alongside the document or was saved into it.
-  const recognized = !!session && (session.embedded.size > 0 || [...session.pages.values()].some((items) => items.length));
   const text = (async () => {
     let text = "";
     let truncated = false;
@@ -52,6 +50,8 @@ export function documentText(pdf: PDFDocumentProxy) {
       }
       text += block;
     }
+    // OCR can finish while extraction is awaiting a page; use the final state for the safety caveat.
+    const recognized = !!session && (session.embedded.size > 0 || [...session.pages.values()].some((items) => items.length));
     return { text, truncated, recognized };
   })();
   textCache.set(pdf, { version, text });

@@ -1,6 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 import type { OcrSession } from "../../lib/ocr/session/OcrSession";
-import type { OcrState } from "../../lib/ocr/types";
+import type { OcrPhase } from "../../lib/ocr/types";
 import type { EventBus, PDFFindController } from "../../viewer";
 
 /** The request pdf.js find is working on (its `state`), as the find bar sent it. */
@@ -15,7 +15,7 @@ type FindRequest = { query?: unknown };
 export function useOcrSearchRefresh({ session, searchOpen, phase, version, find, bus }: {
   session: OcrSession | null;
   searchOpen: boolean;
-  phase: OcrState["phase"];
+  phase: OcrPhase;
   version?: number;
   find: RefObject<PDFFindController | null>;
   bus: RefObject<EventBus | null>;

@@ -11,7 +11,6 @@ vi.mock("../../../pdf", () => ({
 }));
 vi.mock("tesseract.js", () => ({ createWorker: mocks.createWorker }));
 
-import type { OcrState } from "../types";
 import { OcrSession, ocrSession } from "./OcrSession";
 
 // ── Fakes ──────────────────────────────────────────────────────────────────────────────────
