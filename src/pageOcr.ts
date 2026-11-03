@@ -2,20 +2,11 @@ import { AnnotationMode, OPS, type PDFPageProxy } from "pdfjs-dist";
 import type { Worker as OcrWorker } from "tesseract.js";
 import { startOcrWorker } from "./ocrWorker";
 import { ocrSession } from "./lib/ocr/session/OcrSession";
-import { keepWords, toItems } from "./lib/ocr/text/words";
+import { toItems } from "./lib/ocr/text/words";
 import { area, boxOf, dropDuplicates } from "./lib/ocr/text/geometry";
 import { imageCover, isScanLike, SCAN_TEXT_COVER, textCover } from "./lib/ocr/text/scan";
 import type { Box, TextItem } from "./lib/ocr/types";
 import type { EventBus, PDFPageView, PDFViewer } from "./viewer";
-
-interface Word {
-  text: string;
-  left: number;
-  top: number;
-  height: number;
-  scaleX: number;
-  endOfLine: boolean;
-}
 
 const IMAGE_OPS = new Set<number>([
   OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject, OPS.paintInlineImageXObjectGroup,
@@ -29,7 +20,7 @@ async function hasPageImage(page: PDFPageProxy) {
   return fnArray.some(op => IMAGE_OPS.has(op));
 }
 
-async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSignal): Promise<{ words: Word[]; items: ReturnType<typeof toItems> }> {
+async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSignal): Promise<ReturnType<typeof toItems>> {
   signal.throwIfAborted();
   // Read at a consistent resolution even in fit-page mode. Bound both dimensions on oversized scans.
   const base = page.getViewport({ scale: 1 });
@@ -46,54 +37,12 @@ async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSig
     signal.throwIfAborted();
     const { data } = await worker.recognize(canvas, {}, { blocks: true, text: false });
     signal.throwIfAborted();
-    const ctx = canvas.getContext("2d")!;
-    ctx.font = "100px sans-serif";
-    const [xMin, yMin, xMax, yMax] = page.view;
-    const words: Word[] = [];
     const lines = (data.blocks ?? []).flatMap(block => block.paragraphs.flatMap(p => p.lines));
-    for (const line of lines) {
-      const height = line.bbox.y1 - line.bbox.y0;
-      const kept = keepWords(line.words);
-      for (const [i, word] of kept.entries()) {
-        const width = ctx.measureText(word.text).width;
-        if (!width || !height) continue;
-        // pdf.js sizes its text layer in unrotated PDF units and rotates the whole layer for display.
-        const [x, y] = viewport.convertToPdfPoint(word.bbox.x0, line.bbox.y0);
-        words.push({
-          text: word.text, endOfLine: i === kept.length - 1,
-          left: 100 * (x - xMin) / (xMax - xMin), top: 100 * (yMax - y) / (yMax - yMin),
-          height: height / (scale * page.userUnit), scaleX: 100 * (word.bbox.x1 - word.bbox.x0) / (width * height),
-        });
-      }
-    }
-    return { words, items: toItems(lines, viewport) };
+    return toItems(lines, viewport);
   } finally {
     signal.removeEventListener("abort", cancel);
     canvas.width = canvas.height = 0;
   }
-}
-
-function addWords(view: PDFPageView, words: Word[]) {
-  const layer = view.textLayer?.div;
-  const end = layer?.querySelector(":scope > .endOfContent");
-  if (!end || layer?.textContent.trim()) return;
-  const fragment = document.createDocumentFragment();
-  let lineStart = true;
-  for (const word of words) {
-    const span = document.createElement("span");
-    span.className = lineStart ? "ocr-word ocr-line-start" : "ocr-word";
-    span.textContent = word.text + (word.endOfLine ? "" : " ");
-    span.style.left = `${word.left}%`;
-    span.style.top = `${word.top}%`;
-    span.style.fontFamily = "sans-serif";
-    span.style.setProperty("--font-height", `${word.height}px`);
-    span.style.setProperty("--scale-x", String(word.scaleX));
-    span.style.setProperty("--rotate", `${-view.pdfPage.rotate}deg`);
-    fragment.append(span);
-    if (word.endOfLine) fragment.append(document.createElement("br"));
-    lineStart = word.endOfLine;
-  }
-  end.before(fragment);
 }
 
 /** Retain only sparse native text; typed pages can be skipped without accumulating their entire text. */
@@ -132,12 +81,8 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
   const controller = new AbortController();
   const { signal } = controller;
   const pending = new Set(Array.from({ length: pdf.numPages }, (_, i) => i + 1));
-  // Keep small documents ready for the entire session. On huge scans, evicted pages can be read again on demand.
-  const cache = new Map<number, Word[]>();
-  const evicted = new Set<number>();
   const notices = new Map<number, "noWords" | "ocrError" | "layerError">();
   let nextPage = viewer.currentPageNumber;
-  let cachedWords = 0;
   let active = 0;
   let recognizing = false;
   let timer: number | undefined;
@@ -156,18 +101,6 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
     else if (pending.has(n) || active === n || !layer?.isConnected || layer.hidden || !layer.querySelector(".endOfContent")) {
       onStatus(`Preparing text on page ${n}…`);
     } else onStatus(null);
-  }
-
-  function remember(n: number, words: Word[]) {
-    cache.set(n, words);
-    cachedWords += words.length;
-    for (const [old, entry] of cache) {
-      if (cachedWords <= 100_000) break;
-      if (old === n || Math.abs(old - viewer.currentPageNumber) <= 1) continue;
-      cache.delete(old);
-      cachedWords -= entry.length;
-      evicted.add(old);
-    }
   }
 
   function schedule() {
@@ -209,18 +142,16 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
       recognizing = true;
       if (n === viewer.currentPageNumber) updateStatus();
       worker ??= startOcrWorker(signal).catch(error => { workerStartFailed = true; throw error; });
-      const { words, items } = await readWords(page, await worker, signal);
+      const items = await readWords(page, await worker, signal);
       const newItems = dropDuplicates(items, native.map(boxOf));
       signal.throwIfAborted();
-      if (words.length && newItems.length) {
-        remember(n, words);
-        session?.record(n, newItems);
-        if (native.length) {
-          if (view.renderingState !== 0) {
-            view.reset({ keepAnnotationLayer: true, keepAnnotationEditorLayer: true, keepCanvasWrapper: true });
-            viewer.update();
-          }
-        } else addWords(view, words);
+      if (newItems.length && session) {
+        session.record(n, newItems);
+        // Rebuild through pdf.js so its text spans and find-highlighter map stay in sync.
+        if (view.renderingState !== 0) {
+          view.reset({ keepAnnotationLayer: true, keepAnnotationEditorLayer: true, keepCanvasWrapper: true });
+          viewer.update();
+        }
       } else {
         notices.set(n, "noWords");
       }
@@ -249,9 +180,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
       return;
     }
     if (notices.get(n) === "layerError") notices.delete(n);
-    const words = cache.get(n);
-    if (words) addWords(view, words);
-    else if (evicted.delete(n)) pending.add(n);
+    if (ocrSession(pdf)?.pages.has(n)) view.textLayer?.div.classList.add("ocr-text");
     if (n === viewer.currentPageNumber) updateStatus();
     schedule();
   }, { signal });
@@ -262,8 +191,6 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
       if (workerStartFailed) { worker = undefined; workerStartFailed = false; }
       if (pageNumber !== active) pending.add(pageNumber);
     }
-    if (evicted.delete(pageNumber)) pending.add(pageNumber);
-    if (evicted.delete(pageNumber + 1)) pending.add(pageNumber + 1);
     updateStatus();
     schedule();
   }, { signal });
@@ -271,7 +198,6 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
   bus.on("pagesdestroy", () => {
     controller.abort();
     window.clearTimeout(timer);
-    cache.clear();
     pending.clear();
     onStatus(null);
     void worker?.then(w => w.terminate()).catch(() => {});

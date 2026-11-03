@@ -592,20 +592,22 @@ kbd {
   background-color: #1e1e1e;
 }
 
-/* Let a drag start beside the scanned ink without enlarging the rectangles used for highlights. */
-.textLayer > .ocr-word::before,
-.textLayer > .ocr-word::after {
+/* Extend OCR hit targets so selection can start beside the scanned ink. */
+.textLayer.ocr-text > span::before,
+.textLayer.ocr-text > span::after {
   content: "";
   position: absolute;
   inset: -0.2em 50% -0.2em 0;
   z-index: -1;
 }
-.textLayer > .ocr-word::after {
+.textLayer.ocr-text > span::after {
   left: 50%;
   right: -0.7em;
 }
-.textLayer > .ocr-line-start::before {
-  left: -0.7em;
+.textLayer.ocr-text > span:first-child::before,
+.textLayer.ocr-text > .textLayerImages + span::before,
+.textLayer.ocr-text > br + span::before {
+  inset: -0.7em 50% -0.7em -0.7em;
 }
 
 /* Selection colours inside the text layer */

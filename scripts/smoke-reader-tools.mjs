@@ -128,7 +128,7 @@ async function checkScanSelection(app, page) {
   await waitForJob(3);
   assert.equal(await status.innerText(), "Recognizing text on page 5…");
   await page.evaluate(() => window.resumeOcr());
-  await page.locator('.page[data-page-number="5"] .ocr-word').first().waitFor();
+  await page.locator('.page[data-page-number="5"] .textLayer span:not(.markedContent)').first().waitFor();
   assert.equal(await status.innerText(), "");
   await goTo(3);
   await page.locator('.page[data-page-number="3"] .textLayer').getByText("Select", { exact: true }).waitFor();
@@ -137,7 +137,7 @@ async function checkScanSelection(app, page) {
   await page.evaluate(() => window.failOcr());
   await status.filter({ hasText: "Text unavailable on page 4." }).waitFor();
   await page.getByRole("button", { name: "Try again" }).click();
-  await page.locator('.page[data-page-number="4"] .ocr-word').first().waitFor();
+  await page.locator('.page[data-page-number="4"] .textLayer span:not(.markedContent)').first().waitFor();
   assert.equal(await status.innerText(), "");
   console.log("ok  background OCR prepares unvisited scans, prioritizes page jumps, and shows selectable text in dark mode");
 

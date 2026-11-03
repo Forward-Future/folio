@@ -543,6 +543,13 @@ try {
   assert.match(await page.locator(".textLayer").first().innerText(), /Scanned\s+pages\s+become\s+searchable/);
   console.log("ok  scanned page recognized");
 
+  // Search immediately, before reopening: PDF.js must have a matching text-layer map.
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("searchable");
+  await page.locator('.page[data-page-number="1"] .textLayer .highlight').filter({ hasText: "searchable" }).first().waitFor({ timeout: 15_000 });
+  await page.getByRole("textbox", { name: "Find in document" }).press("Escape");
+  console.log("ok  search highlights newly recognized text without reopening");
+
   // Saving a copy puts the recognized text into the file: reopened, it has the text at once and is not offered again.
   const scannedCopy = path.join(env.FOLIO_TEST_USER_DATA, "scanned-copy.pdf");
   await app.evaluate(({ session }, file) => {
