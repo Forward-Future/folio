@@ -116,6 +116,13 @@ export class MarkupController {
     return { marks: this.#sorted(), note: this.#note, bookmarkedPages: this.#bookmarkedPages };
   }
 
+  stampRects(pageIndex: number): number[][] {
+    if (!this.#ui) return [];
+    return Array.from(this.#ui.getEditors(pageIndex))
+      .filter(editor => editor.constructor._type === "stamp" && !editor.deleted && !editor.isEmpty())
+      .map(editor => editor.getPDFRect());
+  }
+
   clearEditorSelection() {
     this.#ui?.unselectAll();
   }

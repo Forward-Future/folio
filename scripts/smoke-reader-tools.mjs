@@ -150,6 +150,155 @@ async function captureDownload(app, file) {
   }, file);
 }
 
+async function checkSignatureFields(app, page, folder) {
+  const labels = "BT /F 12 Tf 30 190 Td (Approved by:) Tj 0 -110 Td (Initials) Tj ET";
+  const lines = [
+    "q 1 0 0 1 30 225 cm 0 0 m 200 0 l S Q BT /F 12 Tf 30 208 Td (Signature) Tj ET",
+    "BT /F 12 Tf 30 140 Td (Initials: ____________) Tj ET",
+    "30 65 m 170 65 l S BT /F 12 Tf 30 50 Td (Witness signature) Tj ET",
+    "BT /F 10 Tf 30 20 Td (Your signature confirms approval.) Tj ET",
+  ].join("\n");
+  const form = testPdf([
+    "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 8 0 R 11 0 R] >> >>",
+    "<< /Type /Pages /Count 3 /Kids [3 0 R 4 0 R 9 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [20 30 320 330] /Rotate 90 /Annots [5 0 R 8 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F 6 0 R >> >> /Contents 7 0 R >>",
+    "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Applicant signature) /Rect [30 110 230 155] /P 3 0 R /F 4 >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${labels.length} >>\nstream\n${labels}\nendstream`,
+    "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval initials) /Rect [45 60 107 92] /P 3 0 R /F 4 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [11 0 R] /Resources << /Font << /F 6 0 R >> >> /Contents 10 0 R >>",
+    `<< /Length ${lines.length} >>\nstream\n${lines}\nendstream`,
+    "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Witness signature) /Rect [30 65 170 105] /P 9 0 R /F 4 >>",
+  ]);
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Signature fields.pdf", data: Buffer.from(data) }), form);
+  const hint = page.getByRole("region", { name: "Signature suggestion" });
+  const field = page.getByRole("button", { name: "Sign Applicant signature", exact: true });
+  const initials = page.getByRole("button", { name: "Sign Approval initials", exact: true });
+  const fieldPicker = page.getByRole("dialog", { name: "Sign Applicant signature", exact: true });
+  async function clickAtPageFraction(button, x, y) {
+    await button.scrollIntoViewIfNeeded();
+    const position = await button.evaluate((el, point) => {
+      const paper = el.closest(".page").querySelector(".canvasWrapper").getBoundingClientRect();
+      const bounds = el.getBoundingClientRect();
+      return { x: paper.x + point.x * paper.width - bounds.x - el.clientLeft,
+        y: paper.y + point.y * paper.height - bounds.y - el.clientTop };
+    }, { x, y });
+    await button.click({ position });
+  }
+  await field.waitFor();
+  await page.getByRole("button", { name: "Edit mode", exact: true }).click();
+  await field.waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "Sign", exact: true }).click();
+  await page.getByRole("dialog", { name: "Sign page 1", exact: true }).getByRole("button", { name: "Cancel" }).click();
+  await field.waitFor();
+  const saved = await page.evaluate(() => {
+    const entries = Object.entries(localStorage).filter(([key]) => key === "folio:signature" || key.startsWith("folio:signature:"));
+    for (const [key] of entries) localStorage.removeItem(key);
+    return entries;
+  });
+  await initials.click();
+  const capture = page.getByRole("dialog", { name: "Sign page 1", exact: true });
+  const image = JSON.parse(saved[0][1]).url.split(",")[1];
+  await capture.getByLabel("Upload signature photo").setInputFiles({ name: "first.png", mimeType: "image/png", buffer: Buffer.from(image, "base64") });
+  assert.equal(await capture.getByRole("combobox", { name: "Signature placement" }).locator("option:checked").innerText(), "Approval initials");
+  await capture.getByRole("button", { name: "Cancel" }).click();
+  await page.evaluate(entries => { for (const [key, value] of entries) localStorage.setItem(key, value); }, saved);
+  await page.getByTitle(/^Zoom in/).click();
+  // Hit the PDF field's real center after zooming a rotated page with an offset crop box.
+  await clickAtPageFraction(field, (132.5 - 30) / 300, (130 - 20) / 300);
+  await fieldPicker.getByRole("button", { name: "Full name", exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await fieldPicker.waitFor({ state: "hidden" });
+  assert.equal(await page.locator(".stampEditor").count(), 0);
+  await field.press("Enter");
+  await fieldPicker.getByRole("button", { name: "Full name", exact: true }).waitFor();
+  await page.keyboard.press("ControlOrMeta+=");
+  await fieldPicker.getByRole("button", { name: "Full name", exact: true }).click();
+  await field.waitFor({ state: "hidden" });
+  await initials.click();
+  await page.getByRole("dialog", { name: "Sign Approval initials" }).getByRole("button", { name: "Signature 1", exact: true }).click();
+  await initials.waitFor({ state: "hidden" });
+  assert.equal(await page.getByRole("dialog", { name: "Sign page 1" }).count(), 0);
+  await page.keyboard.press("ControlOrMeta+z");
+  await initials.waitFor();
+  const quick = hint.getByRole("button", { name: "Sign field" });
+  await quick.waitFor();
+  assert.ok(await quick.isDisabled());
+  await hint.getByRole("combobox").selectOption({ label: "Full name" });
+  await quick.click();
+  await page.locator(".stampEditor canvas").first().waitFor();
+  await hint.waitFor({ state: "hidden" });
+  await page.keyboard.press("ControlOrMeta+z");
+  await quick.waitFor();
+  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.getByRole("button", { name: "Forget Full name", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await hint.getByRole("button", { name: "Sign with Signature 1" }).click();
+  await hint.waitFor({ state: "hidden" });
+  console.log("ok  native signature fields support capture, keyboard selection, zoom and undo");
+
+  await page.getByTitle("Next page").click();
+  await hint.getByRole("button", { name: "Review signature" }).click();
+  const placement = page.getByRole("combobox", { name: "Signature placement" });
+  assert.match(await placement.locator("option:checked").innerText(), /Approved by/);
+  const approve = page.getByRole("button", { name: "Approve and add signature" });
+  await approve.click();
+  await page.getByRole("dialog", { name: "Sign page 2" }).waitFor({ state: "hidden" });
+  const inferred = page.locator('.page[data-page-number="2"]').getByRole("button", { name: "Sign Initials", exact: true });
+  await inferred.click();
+  await page.getByRole("dialog", { name: "Sign Initials", exact: true }).getByRole("button", { name: "Signature 1", exact: true }).click();
+  await inferred.waitFor({ state: "hidden" });
+  await hint.waitFor({ state: "hidden" });
+  await page.evaluate(entries => { for (const [key, value] of entries) localStorage.setItem(key, value); }, saved);
+  await page.getByTitle("Next page").click();
+  const thirdPage = page.locator('.page[data-page-number="3"]');
+  const printed = thirdPage.getByRole("button", { name: "Sign Signature", exact: true });
+  const printedInitials = thirdPage.getByRole("button", { name: "Sign Initials", exact: true });
+  await printed.waitFor();
+  assert.equal(await thirdPage.locator(".signature-hit").count(), 3, "two printed lines and one native field");
+  // Click the ink itself, first on the drawn rule, then on underscores beside the initials label.
+  await clickAtPageFraction(printed, 130 / 300, 1 - 225 / 300);
+  await page.getByRole("dialog", { name: "Sign Signature", exact: true }).getByRole("button", { name: "Full name", exact: true }).click();
+  await printed.waitFor({ state: "hidden" });
+  await clickAtPageFraction(printedInitials, 105 / 300, 1 - 139 / 300);
+  await page.getByRole("dialog", { name: "Sign Initials", exact: true }).getByRole("button", { name: "Signature 1", exact: true }).click();
+  await printedInitials.waitFor({ state: "hidden" });
+  await thirdPage.locator(".stampEditor canvas").nth(1).waitFor();
+  assert.equal(await page.getByRole("dialog", { name: "Sign page 3", exact: true }).count(), 0);
+  await page.keyboard.press("ControlOrMeta+z");
+  await printedInitials.waitFor();
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await thirdPage.locator(".stampEditor canvas").nth(1).waitFor();
+  await printedInitials.waitFor({ state: "hidden" });
+  const file = path.join(folder, "signed-fields.pdf");
+  await captureDownload(app, file);
+  await page.keyboard.press("ControlOrMeta+s");
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  assert.equal(readFileSync(file, "latin1").match(/\/Subtype\s*\/Stamp\b/g)?.length, 6);
+  const stampCenters = await page.evaluate(async bytes => {
+    const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
+    try {
+      const pdf = await task.promise;
+      return await Promise.all([1, 3].map(async number => {
+        const annotations = await (await pdf.getPage(number)).getAnnotations();
+        return annotations.filter(a => a.subtype === "Stamp").map(({ rect: [x1, y1, x2, y2] }) =>
+          [Math.round((x1 + x2) / 2), Math.round((y1 + y2) / 2)]);
+      }));
+    } finally { await task.destroy(); }
+  }, Array.from(readFileSync(file)));
+  const [nativeCenters, printedCenters] = stampCenters;
+  assert.equal(nativeCenters.length, 2);
+  for (const [x, y] of [[130, 132.5], [76, 76]]) {
+    assert.ok(nativeCenters.some(([cx, cy]) => Math.abs(cx - x) < 2 && Math.abs(cy - y) < 2), JSON.stringify(nativeCenters));
+  }
+  assert.equal(printedCenters.length, 2);
+  assert.ok(printedCenters.some(([x, y]) => Math.abs(x - 130) < 2 && Math.abs(y - 245) < 2), JSON.stringify(printedCenters));
+  assert.ok(printedCenters.some(([x, y]) => x > 98 && x < 113 && Math.abs(y - 154) < 2), JSON.stringify(printedCenters));
+  console.log("ok  on-page signing finds native fields, printed rules, underscores and standalone captions and exports marks at the chosen positions");
+}
+
 async function checkContentEditing(app, page, folder, shots) {
   // Two identical text runs and two placements of one image, also reused on the second page.
   const words = "BT /F 16 Tf 12 170 Td (Orig) Tj 29.34 0 Td (inal) Tj -29.34 -25 Td (Original) Tj ET";
@@ -419,6 +568,7 @@ export async function checkReaderTools(app, page, folder, shots) {
   await page.getByTitle("Next page").click();
   assert.equal(await page.locator('.page[data-page-number="2"] .textWidgetAnnotation input').inputValue(), "A filled field");
   console.log("ok  the normal Save shortcut and Open reordered copy preserve filled form fields");
+  await checkSignatureFields(app, page, folder);
   await checkScanSelection(app, page);
   await checkContentEditing(app, page, folder, shots);
 }

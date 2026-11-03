@@ -35,12 +35,14 @@ import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
 import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
 import { SignatureDialog } from "./SignatureDialog";
+import { SignatureFields } from "./SignatureFields";
+import { SignatureSuggestion } from "./SignatureSuggestion";
 import { ContentEditor, type ContentEditorHandle, type NextSelection } from "./ContentEditor";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { saveVersion, type PdfChange } from "./versionHistory";
 import { SettingsDialog } from "./SettingsDialog";
 import { ChangelogDialog } from "./ChangelogDialog";
-import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
+import { detectSignatureTargets, placeSignature, rememberSignature, uncoveredTargets, type SignatureImage, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
 import { drawShapes, type Shape } from "./shapes";
 import { enableWheelPaging } from "./wheelPaging";
@@ -197,9 +199,16 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
-  const [signing, setSigning] = useState(false);
-  const [signatureTargets, setSignatureTargets] = useState<SignatureTarget[]>([]);
-  const [signatureDismissed, setSignatureDismissed] = useState(false);
+  const [signing, setSigning] = useState<{ page: number; field?: SignatureTarget } | null>(null);
+  const placingSignature = useRef(false);
+  const [pendingStamp, setPendingStamp] = useState<{ pdf: PDFDocumentProxy; index: number; previous: number[][] } | null>(null);
+  // PDF.js exposes the editor before its image is ready for undo. Keep the field in place until insertion completes.
+  const stampRects = (index: number) => pendingStamp && pendingStamp.pdf === doc?.pdf && pendingStamp.index === index
+    ? pendingStamp.previous : markupRef.current?.stampRects(index) ?? [];
+  const [detection, setDetection] = useState<{ pdf: PDFDocumentProxy; page: number; targets: SignatureTarget[] } | null>(null);
+  const signatureTargets = detection?.targets.length && detection.pdf === doc?.pdf && detection.page === page
+    ? uncoveredTargets(detection.targets, stampRects(page - 1)) : [];
+  const [dismissedSignaturePages, setDismissedSignaturePages] = useState<number[]>([]);
   const [markup, setMarkup] = useState<MarkupState>({ marks: [], note: "", bookmarkedPages: null });
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("pages");
   const [noteBox, setNoteBox] = useState<{ markId: string; anchor: { x: number; top: number; bottom: number }; quote: string; initial: string } | null>(null);
@@ -219,17 +228,28 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
     }
   }, [active, doc, focus, dialog, signing, pending, imageView]);
 
+  useEffect(() => { setSigning(current => current?.field ? current : null); }, [page]);
   useEffect(() => {
-    setSigning(false); setSignatureTargets([]); setSignatureDismissed(false);
     if (!doc || contentEditing) return;
     let cancelled = false;
-    const timer = setTimeout(() => {
+    const bus = busRef.current;
+    const refresh = () => {
       void detectSignatureTargets(doc.pdf, page).then(targets => {
-        if (!cancelled) setSignatureTargets(targets);
+        if (!cancelled) setDetection({ pdf: doc.pdf, page, targets });
       }).catch(() => {});
-    }, 350);
-    return () => { cancelled = true; clearTimeout(timer); };
+    };
+    // Undo and redo change stamp coverage without changing the PDF page or the saved notes.
+    const timer = setTimeout(refresh, 350);
+    bus?.on("editingaction", refresh);
+    bus?.on("editingstateschanged", refresh);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      bus?.off("editingaction", refresh);
+      bus?.off("editingstateschanged", refresh);
+    };
   }, [doc, page, contentEditing]);
+  useEffect(() => { setSigning(null); setDismissedSignaturePages([]); setDetection(null); }, [doc]);
 
   docRef.current = doc;
   preferencesRef.current = { sidebar, spread };
@@ -603,7 +623,28 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
     } catch { flash("Annotations aren’t supported for this document"); return false; }
   };
   const leaveEditMode = () => chooseTool("select");
-  const startSigning = async () => { if (await chooseTool("select")) setSigning(true); };
+  const startSigning = async () => { if (await chooseTool("select")) setSigning({ page }); };
+  const dismissSignatureSuggestion = () => setDismissedSignaturePages(pages => pages.includes(page) ? pages : [...pages, page]);
+  const addSignature = async (pageNumber: number, image: SignatureImage, rect: number[], rememberAs?: string) => {
+    if (!doc || docRef.current !== doc || !active) throw new Error("The document changed. Open Sign again.");
+    if (placingSignature.current) throw new Error("Another signature is being placed.");
+    placingSignature.current = true;
+    setPendingStamp({ pdf: doc.pdf, index: pageNumber - 1, previous: stampRects(pageNumber - 1) });
+    try {
+      if (!(await chooseTool("select")) || docRef.current !== doc) throw new Error("The document changed. Open Sign again.");
+      await placeSignature(viewerRef.current!, doc.pdf, pageNumber, image, rect, !!signing);
+    } finally {
+      placingSignature.current = false;
+      setPendingStamp(null);
+    }
+    if (docRef.current !== doc) return;
+    setDirty(true);
+    if (rememberAs !== undefined) {
+      try { rememberSignature(image, rememberAs); }
+      catch { flash("Signature added to the page, but couldn't be remembered on this device."); return; }
+    }
+    flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
+  };
 
   useEffect(() => {
     if (!doc || tool !== "ink" || drawTool === "Pen") return;
@@ -1511,16 +1552,17 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
       {dialog === "changelog" && <ChangelogDialog onClose={() => setDialog("settings")} />}
       {doc && imageView && <ImageViewer pdf={doc.pdf} target={imageView} onClose={() => setImageView(null)} />}
       {dialog === "url" && <OpenUrlDialog key={linkDraft} initial={linkDraft} onClose={() => setDialog(null)} onSubmit={(url) => { setDialog(null); tabs.open([{ kind: "url", name: new URL(url).hostname, url }]); }} />}
-      {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}
-        onClose={() => setSigning(false)} onApprove={async (signature, rect) => {
-          await placeSignature(viewerRef.current!, doc.pdf, page, signature, rect);
-          setDirty(true); setSignatureDismissed(true); flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
-        }} />}
-      {doc && !contentEditing && !signing && signatureTargets.length > 0 && !signatureDismissed && <div className="signature-suggestion" role="status">
-        <span>{signatureTargets[0].kind === "field" ? "Signature field detected" : "Possible signature area"} on page {page}</span>
-        <button className="btn primary" onClick={startSigning}>Review signature</button>
-        <button className="pill-btn" aria-label="Dismiss signature suggestion" onClick={() => setSignatureDismissed(true)}><Icon name="close" size={14} /></button>
-      </div>}
+      {active && doc && !contentEditing && tool === "select" && !dialog && !signing && !imageView && !pending && viewerRef.current && busRef.current &&
+        <SignatureFields key={doc.id} pdf={doc.pdf} viewer={viewerRef.current} bus={busRef.current}
+          stampRects={stampRects} placing={!!pendingStamp} onSign={addSignature}
+          onCapture={(pageNumber, field) => setSigning({ page: pageNumber, field })} />}
+      {doc && signing && <SignatureDialog key={doc.id + ":" + signing.page} pdf={doc.pdf} pageNumber={signing.page}
+        targets={signing.field ? [signing.field] : signatureTargets} onClose={() => setSigning(null)}
+        onApprove={(image, rect, name) => addSignature(signing.page, image, rect, name)} />}
+      {active && doc && !contentEditing && tool === "select" && !signing && !dialog && signatureTargets.length > 0 && !dismissedSignaturePages.includes(page) &&
+        ((signatureTargets.length === 1 && signatureTargets[0].kind === "field") || signatureTargets.some(target => target.kind === "label")) &&
+        <SignatureSuggestion key={doc.id + ":" + page + ":" + signatureTargets.length} targets={signatureTargets} page={page} placing={!!pendingStamp} onSign={(image, rect) => addSignature(page, image, rect)}
+          onReview={startSigning} onDismiss={dismissSignatureSuggestion} />}
 
       {updateVersion && (
         <div className="update-card" role="status">
