@@ -1349,7 +1349,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
 
           {doc && searchOpen && (
             <>
-              <SearchBar result={find} onFind={runFind} onClose={closeSearch} />
+              <SearchBar result={find} recognizing={ocrPhase === "running"} onFind={runFind} onClose={closeSearch} />
               <SearchResults pdf={doc.pdf} controller={findRef.current!} bus={busRef.current!} onSelect={goTo} />
             </>
           )}

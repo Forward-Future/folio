@@ -124,7 +124,7 @@ export function Welcome({ active, onPick, onOpenUrl, onOpenRecent, onSample, loa
               <button
                 className="link"
                 onClick={async () => {
-                  if (!confirm("Remove all recent files from Folio? The original files aren't affected.")) return;
+                  if (!confirm("Remove all recent files and all saved recognized text from this device?")) return;
                   try { await clearRecent(); setRecent([]); setRecentError(null); }
                   catch { setRecentError("Couldn’t clear recent files and recognized text. Please try again."); }
                 }}

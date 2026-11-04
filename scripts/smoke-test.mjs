@@ -583,17 +583,21 @@ try {
   await scanChooser.setFiles(path.join(root, "scripts", "fixtures", "scanned-sample.pdf"));
   await page.getByRole("button", { name: "Try again" }).waitFor({ timeout: 60_000 });
   assert.equal(await page.evaluate(() => top.sessionStorage.getItem("folio-failed-worker-terminated")), "yes");
+  // Search before the scan is read and leave the search open while recognition resumes.
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("searchable");
+  await page.getByText("No results", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Try again" }).click();
+  await page.getByText(/Results may be incomplete while text is being recognized/).waitFor();
   await page.waitForFunction(() => document.querySelectorAll(".textLayer span:not(.markedContent)").length > 60, null, { timeout: 180_000 });
   assert.match(await page.locator(".textLayer").first().innerText(), /Scanned\s+pages\s+become\s+searchable/);
   console.log("ok  scanned page recognized");
 
-  // Search immediately, before reopening: PDF.js must have a matching text-layer map.
-  await page.keyboard.press("ControlOrMeta+f");
-  await page.getByRole("textbox", { name: "Find in document" }).fill("searchable");
+  // The open search refreshes after recognition; PDF.js must have a matching text-layer map.
   await page.locator('.page[data-page-number="1"] .textLayer .highlight').filter({ hasText: "searchable" }).first().waitFor({ timeout: 15_000 });
+  await page.getByText(/1 of \d+/).first().waitFor();
   await page.getByRole("textbox", { name: "Find in document" }).press("Escape");
-  console.log("ok  search highlights newly recognized text without reopening");
+  console.log("ok  an open search warns while recognition runs, then highlights newly recognized text");
 
   // Saving a copy puts the recognized text into the file: reopened, it has the text at once and is not offered again.
   const scannedCopy = path.join(env.FOLIO_TEST_USER_DATA, "scanned-copy.pdf");
@@ -794,6 +798,51 @@ try {
   assert.equal(await aiPanel.getByRole("button", { name: "Stop" }).count(), 0, "the panel still thinks an answer is running");
   await aiPanel.getByRole("button", { name: "Close Ask AI" }).click();
   console.log("ok  closing Ask AI stops the answer in progress");
+
+  // Cancel must keep both Recent and saved text, including text whose PDF is no longer recent.
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /New tab/ }).click();
+  await docs.getByRole("tab", { name: "Library", selected: true }).waitFor();
+  await page.getByRole("button", { name: "Clear all", exact: true }).waitFor();
+  const database = async (action) => page.evaluate(async (action) => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("folio");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["recent", "ocr"], action === "seed" ? "readwrite" : "readonly");
+      if (action === "seed") tx.objectStore("ocr").put({ id: "not-in-recent#1", items: [{ str: "saved text" }] });
+      const recent = tx.objectStore("recent").getAllKeys();
+      const saved = tx.objectStore("ocr").get("not-in-recent#1");
+      let linked;
+      recent.onsuccess = () => {
+        if (action === "seed") window.folioTestRecentKey = recent.result[0];
+        if (!window.folioTestRecentKey) return;
+        const key = `${window.folioTestRecentKey}#1`;
+        if (action === "seed") tx.objectStore("ocr").put({ id: key, items: [{ str: "recent saved text" }] });
+        linked = tx.objectStore("ocr").get(key);
+      };
+      tx.oncomplete = () => { db.close(); resolve({ recent: recent.result, saved: saved.result, linked: linked?.result }); };
+      tx.onabort = () => { db.close(); reject(tx.error); };
+    });
+  }, action);
+  const beforeClear = await database("seed");
+  assert.ok(beforeClear.recent.length > 0);
+  assert.ok(beforeClear.saved);
+  assert.ok(beforeClear.linked);
+  await page.evaluate(() => {
+    window.confirm = message => { window.folioClearPrompt = message; return false; };
+  });
+  await page.getByRole("button", { name: "Clear all", exact: true }).click();
+  assert.equal(await page.evaluate(() => window.folioClearPrompt), "Remove all recent files and all saved recognized text from this device?");
+  assert.deepEqual(await database("read"), beforeClear);
+  await page.getByRole("button", { name: "Clear all", exact: true }).waitFor();
+  await page.evaluate(() => { window.confirm = () => true; });
+  await page.getByRole("button", { name: "Clear all", exact: true }).click();
+  await page.getByRole("button", { name: "Clear all", exact: true }).waitFor({ state: "hidden" });
+  assert.deepEqual(await database("read"), { recent: [], saved: undefined, linked: undefined });
+  console.log("ok  cancelling Clear all preserves recent files and all saved recognized text");
 
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
