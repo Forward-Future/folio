@@ -26,7 +26,7 @@ jobs:
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run test:chat-math
-      - run: node --test scripts/test-word-files.cjs scripts/test-network-security.cjs scripts/test-release-build.mjs
+      - run: node --test scripts/test-word-files.cjs scripts/test-network-security.cjs scripts/test-release-build.mjs scripts/test-attachments.mjs scripts/test-attachment-tabs.mjs scripts/test-attachment-session.mjs
       - run: npm run build
       - name: Smoke test (Linux, virtual display)
         if: runner.os == 'Linux'
@@ -42,6 +42,12 @@ jobs:
       - name: Smoke test
         if: runner.os != 'Linux'
         run: npm run smoke
+      - name: Attachment audit regressions (Linux, virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/smoke-attachment-regressions.mjs
+      - name: Attachment audit regressions
+        if: runner.os != 'Linux'
+        run: node scripts/smoke-attachment-regressions.mjs
       - uses: actions/upload-artifact@v7
         if: always()
         with:

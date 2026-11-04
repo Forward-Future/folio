@@ -1,0 +1,116 @@
+{
+  "scope": "Audit and repair the implemented PDF attachment feature on draft PR #1; no merge or release",
+  "baseline": "ec4aff300e8271cbf0c71176cdcedc4db79b73a7",
+  "acceptance": [
+    "Preserve supported attachment discovery and exact-byte saves",
+    "Read child PDFs without editing, child persistence, or parent state loss",
+    "Settle password, cancellation, delivery, close and reload flows coherently",
+    "Preserve normal document/tab/startup behavior except the documented Recent eligibility refinement",
+    "Validate all relevant candidates independently; repair confirmed defects with focused regressions",
+    "Finish with independent clean re-audit and passing full Windows/macOS/Linux CI"
+  ],
+  "baseline_validation": {
+    "typecheck": "passed",
+    "focused_cases": 32,
+    "ci": "https://github.com/pablopda/folio/actions/runs/41761306837",
+    "ci_result": "all three platforms passed"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "reviewers": [
+        "audit_impl_lifecycle",
+        "audit_impl_operations",
+        "audit_impl_reader"
+      ],
+      "findings": [
+        "I1",
+        "I2"
+      ],
+      "outcome": "Two independently validated findings repaired; independent re-audit pending"
+    },
+    {
+      "round": 2,
+      "reviewers": [
+        "audit_impl_lifecycle",
+        "audit_impl_operations",
+        "audit_impl_reader"
+      ],
+      "findings": [
+        "I3"
+      ],
+      "outcome": "I1/I2 confirmed; newly introduced CI propagation defect independently validated and repaired."
+    },
+    {
+      "round": 3,
+      "reviewers": [
+        "audit_impl_lifecycle",
+        "audit_impl_operations",
+        "audit_impl_reader"
+      ],
+      "findings": [],
+      "outcome": "All three reviewers report no remaining actionable findings in reviewed scope."
+    }
+  ],
+  "items": [
+    {
+      "id": "I1",
+      "severity": "P2",
+      "title": "Close failures hidden with a single tab or focus mode",
+      "status": "fixed",
+      "reported_by": "audit_impl_lifecycle",
+      "validated_by": "audit_impl_operations",
+      "evidence": "Only DocumentTabBar rendered cleanupError; both readers omit strip with one tab, App also in focus mode. New hidden UI test failed before notice integration.",
+      "fix": "Active-reader TabStatusNotice outside conditional tab strip, persistent dismissible message without focus transfer.",
+      "regression": "scripts/smoke-attachment-regressions.mjs errors: rejected single-tab flush, focus-mode flush, rejected child disposal to one remaining tab."
+    },
+    {
+      "id": "I2",
+      "severity": "P2",
+      "title": "Retained attachment readers ignore global theme and PDF dark mode",
+      "status": "fixed",
+      "reported_by": "audit_impl_reader",
+      "validated_by": "audit_impl_operations",
+      "evidence": "Baseline hidden runtime reproduced child dark theme after parent preference changed to light. Child lacked night preference/data-night and normal-reader storage/native-theme synchronization.",
+      "fix": "Initialize and synchronize global theme/night preferences, active native chrome theme and existing image-preserving night overlays.",
+      "regression": "scripts/smoke-attachment-regressions.mjs preferences: initial night/image behavior, light/dark updates, retained background child, storage removal/clear and native window background."
+    },
+    {
+      "id": "I3",
+      "severity": "P2",
+      "title": "New Windows test step could mask a preceding smoke failure",
+      "status": "fixed",
+      "reported_by": "audit_impl_reader",
+      "validated_by": "audit_impl_lifecycle",
+      "evidence": "The proposed multiline pwsh step ran npm smoke then the regression script; current runner checks final LASTEXITCODE while PowerShell native errors do not stop by default. A successful second command could hide the first failure.",
+      "fix": "Run attachment audit regressions in separate single-command steps on each platform. Existing smoke command and gates are preserved.",
+      "validation": "Independent source review of current Actions runner and PowerShell documentation; final three-platform CI exercises the separate steps.",
+      "sources": [
+        "https://raw.githubusercontent.com/actions/runner/main/src/Runner.Worker/Handlers/ScriptHandlerHelpers.cs",
+        "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_preference_variables?view=powershell-7.6#psnativecommanduseerroractionpreference"
+      ]
+    }
+  ],
+  "status": "Independent audit and focused validation complete; full gate is tracked by draft PR checks",
+  "limitations": [
+    "Daybreak security review skipped \u2014 model unavailable on this ChatGPT account; no substitute analysis. Standing user direction permits continuing.",
+    "Native visible window-drag checks remain a pre-distribution gate; this task does not release an installer.",
+    "No original user PDF supplied; compatibility beyond tested supported formats is not claimed."
+  ],
+  "excluded_observations": [
+    {
+      "observation": "Ctrl/Cmd-wheel zoom parity",
+      "disposition": "Not a required defect: agreed scope provides toolbar and keyboard zoom; no gesture requirement. No change or follow-up issue."
+    }
+  ],
+  "remaining_relevant_findings": 0,
+  "validation": {
+    "typecheck": "passed",
+    "build": "passed",
+    "focused_core_session_tab_cases": 32,
+    "hidden_ui_regressions": "passed: single-tab flush, focus-mode flush, one-tab-survivor disposal, initial/retained theme/night/image colors, preference removal/clear and native window background",
+    "visual": "Linux cleanup notice and night-mode image screenshots inspected; generated screenshots uploaded by CI, not committed",
+    "full_gate": "https://github.com/pablopda/folio/pull/1/checks",
+    "full_gate_policy": "Use the checks on the commit containing this ledger; previous baseline green checks do not validate these fixes."
+  }
+}

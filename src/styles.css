@@ -1268,6 +1268,30 @@ kbd {
   cursor: pointer;
 }
 
+.tab-status-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 84px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  font-size: 13px;
+  line-height: 1.5;
+  z-index: 61;
+}
+.tab-status-notice span { min-width: 0; overflow-wrap: anywhere; }
+.tab-status-notice .icon-btn { flex: none; }
+
 .update-card {
   position: fixed;
   right: 20px;

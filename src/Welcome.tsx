@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { clearRecent, listRecent, removeRecent, type RecentFile } from "./recent";
+import { clearRecent, listRecent, removeRecent, subscribeRecent, type RecentFile } from "./recent";
 import { Icon } from "./icons";
 import { keys } from "./platform";
 import { formatBytes } from "./Dialogs";
@@ -78,8 +78,14 @@ export function Welcome({ active, onPick, onOpenUrl, onOpenRecent, onSample, loa
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
-    void listRecent().then(files => { if (!cancelled) setRecent(files); });
-    return () => { cancelled = true; };
+    let revision = 0;
+    const refresh = () => {
+      const request = ++revision;
+      void listRecent().then(files => { if (!cancelled && request === revision) setRecent(files); });
+    };
+    refresh();
+    const unsubscribe = subscribeRecent(refresh);
+    return () => { cancelled = true; unsubscribe(); };
   }, [active]);
 
   const forget = async (id: string) => {

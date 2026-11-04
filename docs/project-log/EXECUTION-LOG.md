@@ -1,0 +1,25 @@
+# Execution log
+
+## 2026-11-03 — PDF attachments implementation
+
+Implemented the reviewed attachment scope on `feat/pdf-attachments`: lazy metadata discovery, exact-byte saves, serialized embedded-stream authentication, and independent read-only attachment tabs. Parent reading and editing state stays mounted. Temporary children bypass Recent and document persistence; startup restoration now requires confirmed Recent membership. The implementation includes explicit cancellation, replay, close-failure handling, and cross-frame Recent notifications.
+
+Validation completed before the draft PR: TypeScript, production build, 12 broker/adapter cases, 5 session cases, 15 tab cases, and a focused hidden Linux Electron smoke run. The smoke covers late-page listing, exact downloads, extensionless and invalid PDFs, parent form retention, child read-only forms, origin deduplication, committed replay after parent close, embedded-stream cancellation/retry, separate child PDF passwords, and saving locked originals. Runtime characterization uses SHA-verified fixtures from the pinned PDF.js commit; fixture PDFs are fetched for tests, not committed.
+
+Independent correctness review identified and fixed stale page-content delivery and iframe reload during close preflight. Regression tests cover both. The designated Daybreak security review was skipped because `gpt-daybreak-blue-latest` is unavailable on this ChatGPT account; no replacement security review or security approval is claimed.
+
+The remote build passed, but gezie-build lacks `xvfb-run`. Pablo authorized a draft PR for full Windows, macOS, and Linux CI. Full CI and native visible window-drag checks remain pending at this entry. No representative user PDF has been supplied. No release, version, updater, or changelog changes were made.
+
+The final focused smoke also verifies nested-content guidance and responsive fit zoom. Visual inspection led to a fit-width resize fix and copying PDF.js annotation icons. Draft PR: https://github.com/pablopda/folio/pull/1. The fork's CI workflow initially had no registered checks; it was explicitly enabled before retriggering the draft's CI. Screenshot evidence is produced under `release/smoke` for the workflow's artifact upload and is not committed.
+
+Full Linux and Windows CI passed on the initial candidate. macOS initially timed out in the existing file-picker shortcut check, then passed the same candidate on rerun. Follow-up inspection found a disappearing-tab-strip focus gap: a focused Close button vanished when the last background tab closed. A two-second hidden Electron reproduction showed BODY focus before the fix and connected reader focus afterward. Added a narrowly scoped unmount focus fallback and a smoke assertion while retaining the keyboard/file-picker test. The final commit receives a new cross-platform CI run; the initial intermittent timeout is not claimed to have a proven single cause.
+
+## 2026-11-03 — Independent implementation audit loop
+
+Three independent reviewers audited lifecycle/startup, extraction/session operations, and reader interactions. Round 1 validated two P2 defects: close failures were invisible with one tab or focus mode, and retained attachment readers ignored global theme/PDF dark-mode changes. Added an active-reader status notice outside the tab strip and synchronized global preferences/native window colors with image-preserving night rendering. The missing-notice UI regression failed before integration and passed after it; a baseline runtime probe reproduced stale child theme.
+
+Round 2 found a defect in the new Windows CI wiring: a successful second native command could mask the original smoke command's failure. Split the commands into independent steps. Round 3 was clean across all three reviewers. TypeScript, build, 32 focused core/session/tab cases and the new hidden UI regressions pass. Full validation of this audit commit is tracked on draft PR #1. The durable findings, independent validators and evidence are in [the audit ledger](../audits/pdf-attachments.json). Daybreak remains skipped because the designated model is unavailable; no substitute security analysis was performed. Native visible window dragging and the original user PDF remain separate pre-distribution/compatibility evidence gaps.
+
+## Upstream main integration — 2026-11-04
+
+Merged upstream main at `5ef1503` into the attachment branch. Resolved the reader, Recent database, PDF.js asset, and smoke-runner conflicts while retaining upstream PDF editing and version history. Parent edits now replace the attachment session while preserving the original normal-tab identity and committed child snapshots. Added an Electron regression covering editing a parent with an open attachment and reading its attachment again. TypeScript, 32 focused attachment cases, and the production build on gezie-build pass. Full combined validation is tracked by the draft PR CI checks; the server still lacks the virtual display needed for Electron smoke. No release changes were authored.
