@@ -79,6 +79,11 @@ export class DocumentTabs {
   get all(): readonly Tab[] { return this.entries; }
   snapshot = () => this.revision;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
+  dismissCleanupError() {
+    if (!this.cleanupError) return;
+    this.cleanupError = undefined;
+    this.changed();
+  }
   private changed() {
     this.revision++;
     const selected = this.entry(this.active);

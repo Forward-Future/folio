@@ -5,11 +5,13 @@ import { loadPdf, type PDFDocumentProxy } from "./pdf";
 import { readPdfBlob } from "./pdfInput";
 import type { AttachmentStatus, DocumentTabs, OpenSource } from "./documentTabs";
 import { DocumentTabBar } from "./DocumentTabBar";
+import { TabStatusNotice } from "./TabStatusNotice";
 import { PasswordDialog } from "./Dialogs";
 import { Icon } from "./icons";
 import { keys } from "./platform";
 import { saveBlob } from "./download";
 import { trackTitlebar } from "./titlebar";
+import { trackPageImages } from "./nightImages";
 import "./attachments.css";
 
 type AttachmentSource = Extract<OpenSource, { kind: "attachment" }>;
@@ -39,8 +41,24 @@ export default function AttachmentReader({ tabs, tabKey }: { tabs: DocumentTabs;
   const [scale, setScale] = useState(1);
   const [childPassword, setChildPassword] = useState<{ incorrect: boolean } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">(() => document.documentElement.dataset.theme === "light" ? "light" : "dark");
+  const [night, setNight] = useState(() => {
+    try { return localStorage.getItem("folio:night") === "1"; }
+    catch { return false; }
+  });
   const extractionPassword = status.state === "password" ? status.password : undefined;
   const modal = !!childPassword || !!extractionPassword;
+
+  useEffect(() => {
+    const sync = (event: StorageEvent) => {
+      if (event.key === null || event.key === "folio:theme") setTheme(event.newValue === "light" ? "light" : "dark");
+      if (event.key === null || event.key === "folio:night") setNight(event.newValue === "1");
+    };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, []);
+  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+  useEffect(() => { if (active) window.folioDesktop?.setTheme(theme); }, [active, theme]);
 
   useLayoutEffect(() => {
     if (active && window.folioDesktop && !modal && header.current) return trackTitlebar(header.current);
@@ -75,6 +93,7 @@ export default function AttachmentReader({ tabs, tabKey }: { tabs: DocumentTabs;
       imagesRightClickMinSize: 1e9,
       imageResourcesPath: `${import.meta.env.BASE_URL}pdfjs/images/`,
     });
+    trackPageImages(eventBus);
     viewerRef.current = viewer;
     linkService.setViewer(viewer);
     eventBus.on("pagesinit", () => {
@@ -193,7 +212,7 @@ export default function AttachmentReader({ tabs, tabKey }: { tabs: DocumentTabs;
   });
 
   const failure = error || (status.state === "error" ? status.message || "Couldn't extract this attachment." : null);
-  return <div className="app attachment-reader" data-tool="select">
+  return <div className="app attachment-reader" data-tool="select" data-night={night || undefined}>
     <header className="topbar" ref={header}>
       <div className="topbar-left">
         {back && <button className="icon-btn attachment-back" onClick={() => tabs.backToParent(tabKey)} title="Back to parent document">Back to parent</button>}
@@ -206,6 +225,7 @@ export default function AttachmentReader({ tabs, tabKey }: { tabs: DocumentTabs;
       </div>
     </header>
     {multipleTabs && <DocumentTabBar tabs={tabs} tabKey={tabKey} />}
+    <TabStatusNotice tabs={tabs} tabKey={tabKey} />
     <div className="body attachment-body" id="reader-panel" role={multipleTabs ? "tabpanel" : undefined} aria-labelledby={multipleTabs ? "selected-document-tab" : undefined}>
       <div className="attachment-pdf-container" ref={container}><div className="pdfViewer" ref={inner} /></div>
       {!pdfReady && <div className="attachment-reader-state" role="status">

@@ -52,7 +52,6 @@ export function DocumentTabBar({ tabs, tabKey }: { tabs: ReaderContext["tabs"]; 
         </div>;
       })}
     </div>
-    {tabs.cleanupError && <span role="status" className="tab-cleanup-error">{tabs.cleanupError}</span>}
     <button className="new-document-tab icon-btn" title={keys("New tab (Ctrl+T)")} aria-label="New tab" onClick={() => tabs.library()}>
       <Icon name="plus" size={16} />
     </button>

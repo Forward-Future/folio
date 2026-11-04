@@ -42,6 +42,12 @@ jobs:
       - name: Smoke test
         if: runner.os != 'Linux'
         run: npm run smoke
+      - name: Attachment audit regressions (Linux, virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/smoke-attachment-regressions.mjs
+      - name: Attachment audit regressions
+        if: runner.os != 'Linux'
+        run: node scripts/smoke-attachment-regressions.mjs
       - uses: actions/upload-artifact@v7
         if: always()
         with:

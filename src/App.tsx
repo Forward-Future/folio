@@ -14,6 +14,7 @@ import { contentKey, getRecent, MAX_RECENT_FILE_BYTES, removeRecent, saveRecent,
 import { readPdfBlob, readPdfResponse } from "./pdfInput";
 import { FIT_SCALES, readView, writeView, type ReadingView } from "./session";
 import { DocumentTabBar } from "./DocumentTabBar";
+import { TabStatusNotice } from "./TabStatusNotice";
 import { trackTitlebar } from "./titlebar";
 import type { DocumentTabs, OpenSource } from "./documentTabs";
 import { SearchResults } from "./SearchResults";
@@ -1209,6 +1210,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         </div>
       </header>
       {!focus && multipleTabs && <DocumentTabBar tabs={tabs} tabKey={tabKey} />}
+      <TabStatusNotice tabs={tabs} tabKey={tabKey} />
 
       <div className="body" id="reader-panel" role={!focus && multipleTabs ? "tabpanel" : undefined}
         aria-labelledby={!focus && multipleTabs ? "selected-document-tab" : undefined}>
