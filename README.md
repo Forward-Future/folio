@@ -38,9 +38,8 @@ Or build Folio yourself from source (below).
 
 ### Open PDFs and web links
 
-- **Local files:** open a PDF with the file picker, drag and drop it anywhere in Folio, or use **Open with → Folio**
-  from your file manager. The desktop app keeps one window, bringing an already-running copy forward when you open
-  another PDF.
+- **Document tabs.** Pick or drop several PDFs together, or choose **More → New tab**. The tab strip appears beneath
+  the toolbar when two or more tabs are open. Each document keeps its page, zoom, and edits when you switch.
 - **PDF URLs:** choose **Open from URL** (`Ctrl+Shift+O`), or drop a link or paste it with `Ctrl+V` outside a text
   field to fill it in, then press **Open**. Folio downloads and opens the PDF, follows redirects, and uses the server's
   filename when available. Folio asks once more before opening an address on your computer or local network.
@@ -67,6 +66,10 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
   to a page. Enable **Settings → Reading → Scroll one page at a time** to turn pages with the mouse wheel.
 - **Pages and Outline tabs:** browse page thumbnails or the PDF's existing outline/bookmarks; hide the sidebar when
   you want more reading space.
+- **Personal bookmarks:** click the ribbon beside a page number in **Pages** to save or remove a bookmark without
+  leaving your current page. Turn on **Bookmarked** at the top of the sidebar to see just your saved pages,
+  then select a thumbnail to jump to it. These bookmarks are included in Markdown and JSON exports. Folio remembers them locally
+  when you reopen a PDF, except for password-protected documents.
 - **Reorder pages** from either sidebar tab. Drag thumbnails or enter a new position, then save and open the reordered PDF copy.
 - **Search as you type:** match case or whole words, see the current match and total count, browse per-page snippets
   and match counts, and move between matches with `Enter` / `Shift+Enter`.
@@ -76,26 +79,47 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
 - **Light and dark themes**, plus an independent **⋯ → PDF dark mode** setting that dims bright pages while keeping
   photos and figures in their original colors, including in thumbnails. Both settings survive restarts.
 
+### Edit existing text and images
+
+Choose **Edit mode**, then click the text you want to change and type on the page. Press **Enter** or click outside the line to apply it. **Esc** cancels typing. Clear a line to delete it.
+
+Click an embedded picture and choose **Replace image…** to select a PNG or JPEG. You can leave Edit mode to read your changes or use **Save copy** to export and open the edited PDF.
+
+Open **More → Version history** to review your changes. Saving a changed copy keeps the original PDF and a numbered version on this device. Text edits show the old and new wording, and image replacements show the filename and page. Open or download an earlier version from the panel. History is available for unencrypted PDFs up to 50 MB and can be cleared per document.
+
+Text keeps its original font and position. Longer replacements can overlap neighboring content, so check the page after applying a change.
+Only characters available in that font can be used. Scanned words, outlined lettering, and objects inside grouped artwork
+cannot be edited as text. Image replacement supports embedded image objects on pages without inline image data.
+The editor works with unsigned, unencrypted PDFs.
+
 ### Highlight, draw, and take notes
 
-- **Select text in scans.** Folio recognizes English text on image-only pages as you read. After “Recognizing text…”
-  clears, drag across the words to copy, highlight, or ask about a passage. Recognition runs offline.
+- **Select text in scans.** Folio starts recognizing English text in the background when you open a PDF.
+  The page you jump to gets priority. A message above the page controls shows when text is still being prepared.
+  Once it clears, drag across the words to copy, highlight, or ask about a passage. Recognition runs offline.
 - **One-click highlights:** select text, then choose yellow, green, blue, pink, or red from the selection toolbar;
   `H` applies the current highlight color.
+- Choose **Highlight** in the toolbar to mark each passage in the current color as soon as you select it.
+  Choose **Done** or press `Esc` to return to reading.
 - **Notes on passages:** type into the selection toolbar and press `Enter` to highlight with a note, or press `N`
   with text selected to focus the note box.
 - **Edit existing highlights:** click one to recolor it, edit its note, ask AI about the passage, or remove it.
-- **Freehand drawing:** choose **Draw** (`D`) and draw directly on the page in black, red, blue, green, or purple.
+- **Draw on a page:** choose **Draw** (`D`) for a freehand pen, rectangle, oval, or arrow. Pick a color, then drag
+  on the page. Shapes can be undone and are included when you save a PDF copy.
 - **Text boxes:** choose **Text** (`T`) to add text to a page, using the same ink palette.
 - **Undo and redo** annotation edits with the usual keyboard shortcuts; choose **Done**, `V`, or `Esc` to leave a
   drawing/text tool and return to selection.
 - **Notes tab:** review highlights, their notes, and text boxes; click an entry to jump to it, edit a highlight's note,
   delete an entry, or ask AI about a highlight. A separate notes box holds thoughts about the whole document.
-- **Copy all as Markdown:** copy document notes, highlighted passages, and text-box content with page references.
+- **Export reading notes:** in **Notes → Export**, copy Markdown or save a JSON file. JSON includes your notes,
+  highlights, text boxes, drawings and shapes with one-based page numbers, plus the PDF's outline bookmarks.
+  It includes stable annotation IDs, colors, and coordinates in unrotated PDF user space for use in other tools.
 - **Automatic local saving:** highlights, notes, drawings, and text boxes return when you reopen an
   ordinary, non-password-protected PDF. Use **Save a copy** to share page annotations with other readers.
 
 ### Add handwritten signatures
+
+Choose **Sign** in the toolbar to add a signature.
 
 - **Capture on paper:** sign with dark ink on white paper, then use your camera or upload a PNG, JPEG, or WebP photo.
 - **Clean up the image:** crop to the signature and adjust ink sensitivity to remove the paper background. Capture
@@ -177,8 +201,10 @@ On macOS, use `⌘` wherever this table says `Ctrl`. Press `?` with a document o
 | Action | Shortcut |
 | --- | --- |
 | Open a PDF / open a URL | `Ctrl+O` / `Ctrl+Shift+O` |
+| New tab / close tab | `Ctrl+T` / `Ctrl+W` |
+| Next tab / previous tab (Control on all platforms) | `Control+Tab` / `Control+Shift+Tab` |
 | Find / next match / previous match | `Ctrl+F` / `Enter` / `Shift+Enter` |
-| Highlight selection / write a note | `H` / `N` |
+| Highlight selection or enter Highlight mode / write a note | `H` / `N` |
 | Remove a clicked highlight | `Delete` |
 | Select / draw / add text | `V` / `D` / `T` |
 | Undo / redo annotation edits | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` |

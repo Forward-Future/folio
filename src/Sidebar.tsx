@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
 import { Icon } from "./icons";
 import { anchoredScrollTop, loadPageSizes, rowAt, thumbLayout, THUMB_ROW_EXTRA, type PageSize } from "./thumbnails";
@@ -8,6 +8,8 @@ interface Props {
   page: number;
   rotation: number;
   onSelectPage: (n: number) => void;
+  bookmarkedPages: number[] | null;
+  onToggleBookmark: (n: number) => void;
   onSelectDest: (dest: unknown) => void;
   order: number[] | null;
   onOrder: (order: number[] | null) => void;
@@ -22,8 +24,9 @@ interface Props {
 export type SidebarTab = "pages" | "outline" | "notes";
 
 export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order, onOrder, onSaveOrder, onOpenCopy,
-  tab, onTab: setTab, notes, noteCount }: Props) {
+  tab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
   const [outline, setOutline] = useState<OutlineItem[] | null>(null);
+  const [bookmarkedOnly, setBookmarkedOnly] = useState(false);
 
   useEffect(() => {
     setOutline(null);
@@ -47,11 +50,18 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order
           Notes{noteCount > 0 && <span className="tab-count">{noteCount}</span>}
         </button>
       </div>
+      {tab === "pages" && (
+        <button type="button" className="bookmark-filter" aria-pressed={bookmarkedOnly} disabled={bookmarkedPages === null}
+          title={bookmarkedOnly ? "Show all pages" : "Show bookmarked pages"} onClick={() => setBookmarkedOnly(only => !only)}>
+          <Icon name="bookmark" size={13} /> Bookmarked
+        </button>
+      )}
       <div className="sidebar-scroll">
         {tab === "notes" ? (
           notes
         ) : tab === "pages" ? (
-          <Thumbnails pdf={pdf} page={page} rotation={rotation} onSelect={onSelectPage} />
+          <Thumbnails pdf={pdf} page={page} rotation={rotation} onSelect={onSelectPage}
+            bookmarkedPages={bookmarkedPages} onToggleBookmark={onToggleBookmark} bookmarkedOnly={bookmarkedOnly} />
         ) : outline === null ? null : outline.length === 0 ? (
           <div className="empty-outline">
             <Icon name="list" size={22} />
@@ -172,25 +182,33 @@ function PageOrganizer({ pdf, page, rotation, onSelect, order, onOrder, onSave, 
   );
 }
 
-function Thumbnails({ pdf, page, rotation, onSelect, order, onMove }: ThumbnailProps & {
+function Thumbnails({ pdf, page, rotation, onSelect, order, onMove, bookmarkedPages, onToggleBookmark, bookmarkedOnly = false }: ThumbnailProps & {
   order?: number[];
   onMove?: (source: number, to: number) => void;
+  bookmarkedPages?: Props["bookmarkedPages"];
+  onToggleBookmark?: Props["onToggleBookmark"];
+  bookmarkedOnly?: boolean;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const dragType = `application/x-folio-page-${pdf.loadingTask.docId.toLowerCase()}`;
   const [dropTarget, setDropTarget] = useState<number | null>(null);
   const [sizes, setSizes] = useState<(PageSize | undefined)[] | null>(null);
   const [range, setRange] = useState({ start: 0, end: 12 });
+  const pages = useMemo(() => {
+    if (order || !bookmarkedOnly) return order;
+    return (bookmarkedPages ?? []).filter(n => Number.isInteger(n) && n >= 1 && n <= pdf.numPages);
+  }, [order, bookmarkedOnly, bookmarkedPages, pdf.numPages]);
+  const count = pages?.length ?? pdf.numPages;
   const rangeRef = useRef(range);
   rangeRef.current = range;
-  const orderRef = useRef(order);
-  orderRef.current = order;
+  const pagesRef = useRef(pages);
+  pagesRef.current = pages;
   const loaderRef = useRef<ReturnType<typeof loadPageSizes> | null>(null);
-  // Rows follow the organizer's order, so a moved page takes its own shape with it.
-  const layout = useMemo(() => thumbLayout(sizes, pdf.numPages, rotation, order), [sizes, pdf, rotation, order]);
+  // Filtering or reordering changes which page belongs in a row, but keeps the scale of the full document.
+  const layout = useMemo(() => thumbLayout(sizes, pdf.numPages, rotation, pages), [sizes, pdf, rotation, pages]);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
-  const activeIndex = order ? order.indexOf(page) : page - 1;
+  const activeIndex = pages ? Math.max(0, pages.indexOf(page)) : page - 1;
   const thumbPage = (target: EventTarget) => Number((target as Element).closest<HTMLElement>(".thumb")?.dataset.page);
 
   // Every page's own size, so a drawing sheet or a landscape page isn't squeezed into page 1's shape.
@@ -207,7 +225,7 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove }: ThumbnailP
       });
     });
     loaderRef.current = loader;
-    loader.prioritize(rangeRef.current.start, rangeRef.current.end, orderRef.current);
+    loader.prioritize(rangeRef.current.start, rangeRef.current.end, pagesRef.current);
     return () => {
       loader.stop();
       cancelAnimationFrame(frame);
@@ -216,8 +234,8 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove }: ThumbnailP
   }, [pdf]);
 
   useEffect(() => {
-    loaderRef.current?.prioritize(range.start, range.end, order);
-  }, [range, order]);
+    loaderRef.current?.prioritize(range.start, range.end, pages);
+  }, [range, pages]);
 
   // As sizes arrive, rows above the viewport change height. Keep the row at the top of the list where it was
   // so the thumbnails don't drift while the reader looks at them.
@@ -236,8 +254,8 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove }: ThumbnailP
     let frame = 0;
     const measure = () => {
       frame = 0;
-      const start = Math.min(pdf.numPages - 1, Math.max(0, rowAt(layout.tops, scroll.scrollTop) - 4));
-      const end = Math.min(pdf.numPages, rowAt(layout.tops, scroll.scrollTop + scroll.clientHeight) + 1 + 4);
+      const start = Math.max(0, Math.min(count - 1, rowAt(layout.tops, scroll.scrollTop) - 4));
+      const end = Math.min(count, rowAt(layout.tops, scroll.scrollTop + scroll.clientHeight) + 5);
       setRange(previous => previous.start === start && previous.end === end ? previous : { start, end });
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
@@ -250,7 +268,7 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove }: ThumbnailP
       observer.disconnect();
       scroll.removeEventListener("scroll", schedule);
     };
-  }, [pdf, layout]);
+  }, [count, layout]);
 
   // Keep the active thumbnail in view as the reader scrolls. Not on every size update, or the list would
   // snap back to the active page while the reader scrolls it during loading.
@@ -264,11 +282,11 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove }: ThumbnailP
       scroll.scrollTop = Math.max(0, top - (scroll.clientHeight - rowHeight) / 2);
       scroll.dispatchEvent(new Event("scroll"));
     }
-  }, [pdf, activeIndex, rotation]);
+  }, [pdf, activeIndex, rotation, bookmarkedOnly]);
 
-  const total = layout.tops[pdf.numPages] ?? 0;
+  const total = layout.tops[count];
   // The first render, before anything is measured, can ask for more rows than a short document has.
-  const end = Math.min(range.end, pdf.numPages);
+  const end = Math.min(range.end, count);
   return (
     <div className="thumbs" ref={listRef} style={{ gap: 0 }}
       onDragStart={e => {
@@ -296,11 +314,16 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove }: ThumbnailP
         setDropTarget(null);
       }}
       onDragEnd={() => setDropTarget(null)}>
-      <div aria-hidden="true" style={{ height: layout.tops[range.start] ?? 0, flexShrink: 0 }} />
+      {count === 0 && <div className="empty-outline" role="status">
+        <Icon name="bookmark" size={22} />
+        <p>No bookmarked pages yet.</p>
+      </div>}
+      <div aria-hidden="true" style={{ height: layout.tops[Math.min(range.start, count)], flexShrink: 0 }} />
       {Array.from({ length: Math.max(0, end - range.start) }, (_, i) => {
         const index = range.start + i;
-        const n = order?.[index] ?? index + 1;
+        const n = pages?.[index] ?? index + 1;
         return <Thumb key={`${n}-${rotation}`} pdf={pdf} n={n} size={layout.frames[index]} rotation={rotation} active={page === n}
+          bookmarked={bookmarkedPages?.includes(n)} onToggleBookmark={onToggleBookmark}
           position={order ? index + 1 : undefined} draggable={!!onMove} dropTarget={dropTarget === n} onSelect={onSelect} />;
       })}
       <div aria-hidden="true" style={{ height: Math.max(0, total - (layout.tops[end] ?? total)), flexShrink: 0 }} />
@@ -318,6 +341,8 @@ const Thumb = memo(function Thumb({
   draggable,
   dropTarget,
   onSelect,
+  bookmarked,
+  onToggleBookmark,
 }: {
   pdf: PDFDocumentProxy;
   n: number;
@@ -328,7 +353,10 @@ const Thumb = memo(function Thumb({
   draggable: boolean;
   dropTarget: boolean;
   onSelect: (n: number) => void;
+  bookmarked?: boolean;
+  onToggleBookmark?: Props["onToggleBookmark"];
 }) {
+  const id = useId();
   const ref = useRef<HTMLButtonElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [ready, setReady] = useState(false);
@@ -356,13 +384,22 @@ const Thumb = memo(function Thumb({
   }, [pdf, n, rotation, size.width]);
 
   return (
-    <button ref={ref} data-page={n} draggable={draggable} className={`thumb ${active ? "on" : ""} ${dropTarget ? "drop-target" : ""}`}
-      style={{ height: size.height + THUMB_ROW_EXTRA, flexShrink: 0 }} onClick={() => onSelect(n)}
-      aria-label={position ? `Page ${n}, position ${position}` : `Page ${n}`}>
-      <div className="thumb-frame" style={{ width: size.width, height: size.height, flexShrink: 0 }}>
-        <canvas ref={canvasRef} style={{ opacity: ready ? 1 : 0 }} />
-      </div>
-      <span className="thumb-num">{position ? `${position} · Page ${n}` : n}</span>
-    </button>
+    <div className="thumb-row" style={{ height: size.height + THUMB_ROW_EXTRA }}>
+      <button ref={ref} id={id} data-page={n} draggable={draggable} className={`thumb ${active ? "on" : ""} ${dropTarget ? "drop-target" : ""}`}
+        onClick={() => onSelect(n)} aria-label={position ? `Page ${n}, position ${position}` : `Page ${n}`}>
+        <span className="thumb-frame" style={{ width: size.width, height: size.height, flexShrink: 0 }}>
+          <canvas ref={canvasRef} style={{ opacity: ready ? 1 : 0 }} />
+        </span>
+        {position && <span className="thumb-num">{position} · Page {n}</span>}
+      </button>
+      {onToggleBookmark && <div className="thumb-caption">
+        <label className="thumb-num" htmlFor={id}>{n}</label>
+        <button type="button" className="thumb-bookmark" disabled={bookmarked === undefined}
+          aria-label={`Bookmark page ${n}`} aria-pressed={bookmarked ?? false}
+          title={bookmarked ? `Remove bookmark from page ${n}` : `Bookmark page ${n}`} onClick={() => onToggleBookmark(n)}>
+          <Icon name="bookmark" size={15} />
+        </button>
+      </div>}
+    </div>
   );
 });

@@ -163,6 +163,7 @@
   letter-spacing: 0.06em;
   color: var(--text-3);
 }
+.notes-head .menu.dropdown { min-width: 155px; text-transform: none; letter-spacing: normal; }
 .link.small {
   padding: 4px 6px;
   font-size: 12px;
@@ -647,6 +648,10 @@
 .app[data-night] .canvasWrapper > svg {
   z-index: 2;
 }
+/* The live text selection must also be visible over a full-page scan. */
+.app[data-night] .canvasWrapper > .selection {
+  z-index: 3;
+}
 .app[data-night] .canvasWrapper svg.highlight {
   --blend-mode: screen;
 }
@@ -870,6 +875,49 @@
   margin-top: 18px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+.modal:has(.changelog) {
+  display: flex;
+  flex-direction: column;
+}
+.modal .changelog {
+  overflow-y: auto;
+}
+.changelog details + details { border-top: 1px solid var(--line); }
+.changelog summary {
+  padding: 10px 0;
+  cursor: pointer;
+  font-weight: 650;
+  color: var(--text);
+}
+.changelog details ul { padding-bottom: 12px; }
+.history-footer {
+  margin: 0 14px;
+  padding: 10px 0 4px;
+  border-top: 1px solid var(--line);
+  text-align: center;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.history-footer nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.history-footer a { color: var(--accent-text); }
+.upgrade-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 14px 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-2);
 }
 .changelog h3 {
   margin: 0 0 6px;

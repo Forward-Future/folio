@@ -30,6 +30,8 @@ interface Editor {
   remove(): void;
   constructor: { _type?: string };
   __folioMark?: string;
+  __folioText?: string;
+  __folioShape?: Mark["shape"];
 }
 interface EditorLayer {
   div: HTMLElement;
@@ -37,6 +39,8 @@ interface EditorLayer {
   add(editor: Editor): void;
 }
 interface UIManager {
+  getMode(): number;
+  unselectAll(): void;
   getEditors(pageIndex: number): Iterable<Editor>;
   getEditor(id: string): Editor | undefined;
   getLayer(pageIndex: number): EditorLayer | undefined;
@@ -53,6 +57,7 @@ const newId = () => crypto.randomUUID();
 export interface MarkupState {
   marks: Mark[];
   note: string;
+  bookmarkedPages: number[] | null;
 }
 
 export class MarkupController {
@@ -63,13 +68,13 @@ export class MarkupController {
   #generation = 0;
   #persist = false;
   #note = "";
+  #bookmarkedPages: number[] | null = null;
   /** Saved marks whose page hasn't rendered yet, keyed by page index. */
   #pending = new Map<number, Mark[]>();
   /** Last known record for every mark (text, note, created time survive re-serialization). */
   #known = new Map<string, Mark>();
   #restoring = new Set<number>();
-  /** The most recent text selection in the document, used as the text of the next new highlight. */
-  #lastSelection = { text: "", at: 0 };
+  #selectionText = "";
   #syncTimer = 0;
   #saveTimer = 0;
   #listener: (state: MarkupState) => void;
@@ -88,34 +93,43 @@ export class MarkupController {
       if (source === this.#ui) this.#viewer.annotationEditorMode = { mode };
     });
     document.addEventListener("selectionchange", () => {
+      if (!this.#docId || this.quickHighlighting || this.#ui?.getMode() !== AnnotationEditorType.HIGHLIGHT) return;
       const selection = document.getSelection();
-      const anchor = selection?.anchorNode instanceof Element ? selection.anchorNode : selection?.anchorNode?.parentElement;
-      const text = selection && !selection.isCollapsed ? selection.toString().replace(/\s+/g, " ").trim() : "";
-      if (this.#docId && text && anchor?.closest(".textLayer") && this.#viewer.viewer?.contains(anchor)) {
-        this.#lastSelection = { text, at: Date.now() };
+      if (!selection) return;
+      if (selection.isCollapsed && this.#selectionText) {
+        // pdf.js clears the range when it creates the mark. Record its passage before the next drag.
+        this.sync();
       }
+      const anchor = selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode?.parentElement;
+      this.#selectionText = anchor?.closest(".textLayer") && this.#viewer.viewer?.contains(anchor)
+        ? selection.toString().replace(/\s+/g, " ").trim() : "";
     });
     bus.on("annotationeditorlayerrendered", ({ source, pageNumber }: { source: unknown; pageNumber: number }) => {
       if (source === this.#viewer.getPageView(pageNumber - 1)) void this.#restorePage(pageNumber - 1);
     });
-    for (const name of ["annotationeditorstateschanged", "annotationeditormodechanged", "editingaction"]) {
+    for (const name of ["editingstateschanged", "annotationeditormodechanged", "editingaction"]) {
       bus.on(name, () => this.scheduleSync());
     }
   }
 
   get state(): MarkupState {
-    return { marks: this.#sorted(), note: this.#note };
+    return { marks: this.#sorted(), note: this.#note, bookmarkedPages: this.#bookmarkedPages };
+  }
+
+  clearEditorSelection() {
+    this.#ui?.unselectAll();
   }
 
   /** Loads saved markup for a newly opened document. Password-protected documents aren't persisted. */
-  async load(docId: string, persist: boolean) {
+  async load(docId: string, persist: boolean, reading?: Pick<MarkupState, "note" | "bookmarkedPages">) {
     this.unload();
     const generation = this.#generation;
     this.#docId = docId;
     const saved = persist ? await getNotes(docId) : undefined;
     if (generation !== this.#generation) return;
     this.#persist = persist;
-    this.#note = saved?.note ?? "";
+    this.#note = reading?.note ?? saved?.note ?? "";
+    this.#bookmarkedPages = reading?.bookmarkedPages ?? saved?.bookmarkedPages ?? [];
     for (const mark of saved?.marks ?? []) {
       this.#known.set(mark.id, mark);
       const list = this.#pending.get(mark.page) ?? [];
@@ -123,6 +137,7 @@ export class MarkupController {
       this.#pending.set(mark.page, list);
     }
     this.#emit();
+    if (reading) this.#scheduleSave();
     // Pages that rendered before the saved data arrived.
     for (const page of [...this.#pending.keys()]) if (this.#ui?.getLayer(page)) void this.#restorePage(page);
   }
@@ -137,13 +152,14 @@ export class MarkupController {
     this.#ui = null;
     this.quickHighlighting = false;
     this.#restoring.clear();
-    this.#lastSelection = { text: "", at: 0 };
+    this.#selectionText = "";
     const selection = document.getSelection();
     if (selection?.anchorNode && this.#viewer.viewer?.contains(selection.anchorNode)) selection.removeAllRanges();
     this.#docId = null;
     this.#pending.clear();
     this.#known.clear();
     this.#note = "";
+    this.#bookmarkedPages = null;
     this.#emit();
   }
 
@@ -169,6 +185,8 @@ export class MarkupController {
           continue;
         }
         editor.__folioMark = mark.id;
+        if (mark.type === "highlight") editor.__folioText = mark.text;
+        editor.__folioShape = mark.shape;
         if (textBox) editor.isClone = true;
         layer.add(editor);
         // An empty editor would be thrown away by pdf.js (and its mark with it) at the next tool change.
@@ -228,6 +246,17 @@ export class MarkupController {
     return editors;
   }
 
+  async addShape(page: number, shape: NonNullable<Mark["shape"]>, data: Record<string, unknown>) {
+    const layer = this.#ui?.getLayer(page);
+    if (!layer) throw new Error("The page is not ready.");
+    const editor = await layer.deserialize(data);
+    if (this.#ui?.getLayer(page) !== layer) return;
+    if (!editor) throw new Error("The drawing could not be created.");
+    editor.__folioShape = shape;
+    layer.add(editor);
+    this.sync();
+  }
+
   scheduleSync() {
     window.clearTimeout(this.#syncTimer);
     this.#syncTimer = window.setTimeout(() => this.sync(), 250);
@@ -250,21 +279,20 @@ export class MarkupController {
       let data: Record<string, unknown> | null = null;
       try { data = editor.serialize(false); } catch { data = null; }
       if (!data) continue;
-      let selectedText = "";
       if (!editor.__folioMark) {
         editor.__folioMark = newId();
         fresh.push(editor.__folioMark);
-        if (Date.now() - this.#lastSelection.at < 5000) selectedText = this.#lastSelection.text;
-        this.#lastSelection = { text: "", at: 0 };
+        if (data.quadPoints) editor.__folioText = this.#selectionText;
       }
       const previous = this.#known.get(editor.__folioMark);
       const type = SAVED_TYPES[editor.constructor._type!];
       const comment = editor.comment;
-      const text = type === "highlight" ? previous?.text || selectedText
+      const text = type === "highlight" ? previous?.text || editor.__folioText || ""
         : type === "freetext" ? String(data.value ?? "") : "";
       const mark: Mark = {
         id: editor.__folioMark,
         type,
+        ...(editor.__folioShape && { shape: editor.__folioShape }),
         page: editor.pageIndex,
         text,
         note: comment && !comment.deleted ? comment.text ?? "" : previous?.note ?? "",
@@ -309,8 +337,9 @@ export class MarkupController {
   flush() {
     window.clearTimeout(this.#saveTimer);
     if (!this.#persist || !this.#docId) return;
-    const notes: DocNotes = { id: this.#docId, note: this.#note, marks: [...this.#known.values()], updatedAt: Date.now() };
-    void saveNotes(notes);
+    const notes: DocNotes = { id: this.#docId, note: this.#note, marks: [...this.#known.values()],
+      bookmarkedPages: this.#bookmarkedPages ?? [], updatedAt: Date.now() };
+    return saveNotes(notes);
   }
 
   /**
@@ -352,7 +381,7 @@ export class MarkupController {
     if (selection.isCollapsed) return null;
     this.sync();
     const before = new Set(this.#liveEditors().map((e) => e.id));
-    this.#lastSelection = { text: selection.toString().replace(/\s+/g, " ").trim(), at: Date.now() };
+    this.#selectionText = selection.toString().replace(/\s+/g, " ").trim();
     this.quickHighlighting = true;
     try {
       this.#bus.dispatch("switchannotationeditorparams", { source: null, type: AnnotationEditorParamsType.HIGHLIGHT_COLOR, value: color });
@@ -447,6 +476,16 @@ export class MarkupController {
 
   setDocNote(note: string) {
     this.#note = note;
+    this.#emit();
+    this.#scheduleSave();
+  }
+
+  toggleBookmark(page: number) {
+    const pages = this.#bookmarkedPages;
+    if (!pages || !Number.isInteger(page) || page < 1 || page > this.#viewer.pagesCount) return;
+    this.#bookmarkedPages = pages.includes(page)
+      ? pages.filter(n => n !== page)
+      : [...pages, page].sort((a, b) => a - b);
     this.#emit();
     this.#scheduleSave();
   }

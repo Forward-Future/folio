@@ -5,6 +5,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { readerPage } from "./reader-page.mjs";
 import { _electron as electron } from "playwright-core";
 import { createServer } from "vite";
 import prompts from "../electron/ai-prompt.cjs";
@@ -48,8 +49,9 @@ try {
   const env = { ...process.env, FOLIO_DEV_URL: origin, FOLIO_TEST_HIDDEN: "1", FOLIO_TEST_USER_DATA: profile };
   delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ executablePath: createRequire(import.meta.url)("electron"), env,
-    args: [root, ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])] });
-  const page = await app.firstWindow();
+    args: [root, "--mute-audio", ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])] });
+  let page = await app.firstWindow();
+  assert.ok(await app.evaluate(({ app }) => app.commandLine.hasSwitch("mute-audio")));
   await page.waitForFunction(() => document.title === "Seed database");
   const red = pdf("1 0 0"), blue = pdf("0 0 1");
   assert.equal(red.length, blue.length);
@@ -140,6 +142,7 @@ try {
   console.log("ok  declared and streamed import limits, cancellation, and page budget");
 
   const transitions = await page.evaluate(async () => {
+    await import("/src/pdfjs-global.ts");
     const { MarkupController } = await import("/src/markup.ts");
     const { saveNotes } = await import("/src/recent.ts");
     const root = document.body.appendChild(document.createElement("div"));
@@ -152,14 +155,18 @@ try {
     const bus = { on(name, fn) { events.set(name, fn); } };
     const markup = new MarkupController(bus, viewer, () => {});
     const editor = () => ({ id: "editor", pageIndex: 0, constructor: { _type: "highlight" },
-      isEmpty: () => false, serialize: () => ({ color: [0, 255, 0] }), comment: null });
+      isEmpty: () => false, serialize: () => ({ color: [0, 255, 0], quadPoints: [0, 1, 1, 1, 0, 0, 1, 0] }), comment: null });
     const manager = (layer, editors = []) => events.get("annotationeditoruimanager")({
-      source: viewer, uiManager: { getEditors: () => editors, getLayer: () => layer },
+      source: viewer, uiManager: { getMode: () => pdfjsLib.AnnotationEditorType.HIGHLIGHT, getEditors: () => editors, getLayer: () => layer },
     });
     await markup.load("first", false);
-    manager(null);
+    const firstEditors = [];
+    manager(null, firstEditors);
     document.getSelection().selectAllChildren(text);
     document.dispatchEvent(new Event("selectionchange"));
+    firstEditors.push(editor());
+    markup.sync();
+    const firstText = markup.state.marks[0].text;
     await markup.load("second", false);
     manager(null, [editor()]);
     markup.sync();
@@ -181,12 +188,13 @@ try {
     await new Promise(resolve => setTimeout(resolve, 0));
     markup.unload();
     root.remove();
-    return { highlightedText, staleAdds, currentAdds };
+    return { firstText, highlightedText, staleAdds, currentAdds };
   });
-  assert.deepEqual(transitions, { highlightedText: "", staleAdds: 0, currentAdds: 1 });
+  assert.deepEqual(transitions, { firstText: "private selection in the first PDF", highlightedText: "", staleAdds: 0, currentAdds: 1 });
   console.log("ok  document switches discard previous selections and in-flight annotation restores");
 
   await page.goto(origin + "/index.html");
+  page = readerPage(page);
   await page.locator(".recent-card").waitFor();
   assert.equal(await page.locator(".recent-card img").count(), 0);
   const drop = (text, name) => page.evaluate(({ text, name }) => {
@@ -236,7 +244,10 @@ try {
   await page.locator(".recent-card").first().click();
   await page.getByTitle("Next page").click();
   await page.waitForFunction(() => document.querySelector('[aria-label="Page number"]').value === "2");
-  await page.evaluate(() => {
+  // Close the blue reader so reopening its cached bytes actually exercises a fresh reader.
+  await page.locator(".document-tab:not(.selected) .close-document-tab").click();
+  await page.locator(".document-tab:not(.selected)").waitFor({ state: "detached" });
+  await page.window.addInitScript(() => {
     const put = IDBObjectStore.prototype.put;
     IDBObjectStore.prototype.put = function (record, ...args) {
       if (record.name === "cached-blue.pdf") {

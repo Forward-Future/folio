@@ -120,8 +120,12 @@ export function InfoDialog({ pdf, name, size, onClose }: { pdf: PDFDocumentProxy
 
 const SHORTCUTS: [string, string][] = [
   ["Open file", "Ctrl O"],
+  ["New tab", "Ctrl T"],
+  ["Close tab", "Ctrl W"],
+  ["Next tab", "Control Tab"],
+  ["Previous tab", "Control Shift Tab"],
   ["Open from URL", "Ctrl Shift O"],
-  ["Highlight selection", "H"],
+  ["Highlight selection or enter Highlight mode", "H"],
   ["Write a note on the selection", "N"],
   ["Remove a clicked highlight", "Delete"],
   ["Find", "Ctrl F"],

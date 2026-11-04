@@ -18,8 +18,7 @@ const LETTER: PageSize = { width: 612, height: 792 };
 // One scale for every page, set by the largest page, so a letter page looks smaller than an 11x17 sheet beside it.
 // A document of one page size comes out exactly as before: THUMB_W wide.
 // Pages not measured yet (or that failed to load) borrow the first measured page's size.
-// `order` lists the page shown in each row (1-based) when the organizer has rearranged them; frames and tops follow
-// the rows, so a moved page keeps its own shape in its new place.
+// The visible rows can be a bookmark subset or an organizer permutation of the document's pages.
 export function thumbLayout(sizes: readonly (PageSize | undefined)[] | null, count: number, rotation: number,
   order?: readonly number[] | null) {
   const turned = rotation % 180 !== 0;
@@ -49,8 +48,7 @@ export function thumbLayout(sizes: readonly (PageSize | undefined)[] | null, cou
     const lift = Math.max(1, Math.min(THUMB_MIN / Math.min(width, height), THUMB_W / width, THUMB_MAX_H / height));
     return { width: Math.max(1, Math.round(width * lift)), height: Math.max(1, Math.round(height * lift)) };
   });
-  const frames = order ? Array.from({ length: count }, (_, row) => pageFrames[(order[row] ?? row + 1) - 1] ?? pageFrames[row])
-    : pageFrames;
+  const frames = order ? order.map(n => pageFrames[n - 1]) : pageFrames;
   const tops = [0];
   for (const f of frames) tops.push(tops[tops.length - 1] + f.height + THUMB_ROW_EXTRA);
   return { frames, tops };
@@ -115,7 +113,7 @@ export function loadPageSizes(pdf: Pick<PDFDocumentProxy, "numPages" | "getPage"
     // (1-based) when the organizer has rearranged them.
     prioritize(start: number, end: number, order?: readonly number[] | null) {
       const first = Math.max(0, Math.min(count, start));
-      const last = Math.max(first, Math.min(count, end));
+      const last = Math.min(order?.length ?? count, end);
       priority = [];
       for (let row = first; row < last; row++) {
         const i = (order?.[row] ?? row + 1) - 1;

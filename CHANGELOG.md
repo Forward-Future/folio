@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.15.1
+
+- After you update Folio, **What's new** shows the changes once. If you skip versions, it includes the releases you missed.
+- Open **Settings → About → View changelog** to browse five releases at a time. Expand a version to read its notes, or follow **View releases on GitHub**.
+- Closing the Ask AI panel now stops the answer in progress.
+
+## 1.15.0
+
+- Choose **Edit mode** to change text in a PDF or replace an embedded picture with a PNG or JPEG. Choose **Save copy** to keep the edited PDF.
+- Open **More → Version history** to see what changed and reopen or download an earlier copy.
+
+## 1.14.0
+
+- Bookmark a page with the ribbon beside its thumbnail in **Pages**. Choose **Bookmarked** to see your saved pages and jump to one.
+- Choose **Draw** to add rectangles, ovals, and arrows in your preferred ink color. **Save a copy** includes them in the PDF.
+- In **Notes → Export**, copy your reading notes as Markdown or save them as JSON. The JSON includes page numbers, bookmarks, highlight colors, and drawing coordinates.
+
+## 1.13.1
+
+- Choose **Highlight** in the toolbar to mark each passage as soon as you finish selecting it. Switch colors between passages, then choose **Done** or press `Esc` to return to reading.
+
+## 1.13.0
+
+- Select or drop several PDFs to open them in one window. Each document keeps its page, zoom, and unsaved edits when you switch tabs.
+- The tab strip appears when you open a second tab and disappears when only one remains. Choose **More → New tab** to open another document.
+
+## 1.12.2
+
+- Folio starts recognizing scanned text in the background when you open a PDF. Jumping to a page gives it priority.
+  A message above the page controls shows when its text is still being prepared.
+- Text selections stay visible on scans in **PDF dark mode**. You can start or end a drag just outside the printed words.
+- Three-digit page numbers fit in the page field, and the macOS unsaved-work prompt shows the Mac save shortcut.
+
 ## 1.12.1
 
 - On Windows, click **Restart** once to update. Folio shows a progress message and reopens the updated copy when installation finishes.

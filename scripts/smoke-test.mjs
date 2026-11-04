@@ -9,6 +9,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -44,7 +45,7 @@ async function wordDocument(text) {
 const app = await electron.launch({ executablePath, args, env, timeout: 60_000 });
 const failures = [];
 try {
-  const page = await app.firstWindow();
+  const page = readerPage(await app.firstWindow());
   assert.ok(await app.evaluate(({ app }) => app.commandLine.hasSwitch("mute-audio")));
   page.on("pageerror", (e) => failures.push(String(e)));
   await page.getByRole("button", { name: /Try a sample/ }).waitFor({ timeout: 30_000 });
@@ -53,13 +54,92 @@ try {
   assert.equal(platformClass, `platform-${process.platform}`);
   console.log("ok  platform:", platformClass);
 
+  const whatsNew = page.getByRole("dialog", { name: "What's new" });
+  const installed = await app.evaluate(({ app }) => app.getVersion());
+  assert.equal(await whatsNew.count(), 0, "a fresh install opens straight to the library");
+  assert.equal(await page.evaluate(() => localStorage.getItem("folio:last-opened-version")), installed);
+
+  // An older profile has a sidebar preference but has never recorded its Folio version.
+  await page.evaluate(() => localStorage.removeItem("folio:last-opened-version"));
+  await page.reload();
+  await whatsNew.getByRole("heading", { name: "Folio " + installed, exact: true }).waitFor();
+  assert.equal(await whatsNew.locator("section").count(), 1);
+  assert.ok(await whatsNew.getByRole("listitem").count() > 0);
+  await whatsNew.getByRole("button", { name: "Done" }).click();
+  assert.equal(await page.getByRole("dialog").count(), 0);
+
+  await page.evaluate(() => localStorage.setItem("folio:last-opened-version", "1.13.1"));
+  await page.reload();
+  await whatsNew.getByRole("heading", { name: "Folio 1.14.0", exact: true }).waitFor();
+  assert.equal(await whatsNew.locator("h3").first().textContent(), "Folio " + installed);
+  assert.equal(await whatsNew.getByRole("heading", { name: "Folio 1.13.1", exact: true }).count(), 0);
+  await page.keyboard.press("Escape");
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  await page.reload();
+  await page.getByRole("button", { name: /Try a sample/ }).waitFor();
+  assert.equal(await whatsNew.count(), 0, "reopening the same version doesn't repeat the popup");
+  console.log("ok  upgrades show bundled changes once, including skipped releases");
+
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
   assert.match(await page.locator(".textLayer").first().innerText(), /A short tour of Folio/);
   console.log("ok  sample rendered with a text layer");
 
-  // Opening another document (here from the file manager) asks first when there's unsaved work, a placed signature,
-  // and keeps it if the reader says no.
+  const toolbar = page.getByRole("toolbar", { name: "Tools" });
+  for (const name of ["Select", "Highlight", "Draw", "Text", "Sign", "Edit mode"]) await toolbar.getByRole("button", { name, exact: true }).waitFor();
+  await toolbar.getByRole("button", { name: "Edit mode", exact: true }).click();
+  await toolbar.getByRole("button", { name: "Highlight", exact: true }).waitFor();
+  await toolbar.getByRole("button", { name: "Exit edit mode", exact: true }).click();
+
+  const docs = page.getByRole("tablist", { name: "Open documents" });
+  assert.equal(await page.locator(".document-tabs").count(), 0);
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /New tab/ }).click();
+  await docs.getByRole("tab", { name: "Library", selected: true }).waitFor();
+  assert.equal(await docs.getByRole("tab").count(), 2);
+  await docs.getByRole("button", { name: "Close Library" }).click();
+  await page.locator(".doc-title", { hasText: "Folio sample.pdf" }).waitFor();
+  assert.equal(await page.locator(".document-tabs").count(), 0);
+  console.log("ok  the tab strip appears for a second tab and disappears when one remains");
+
+  const sidebarToggle = page.getByRole("button", { name: /Toggle sidebar/ });
+  const sidebarWasOpen = await sidebarToggle.getAttribute("aria-pressed") === "true";
+  if (!sidebarWasOpen) await sidebarToggle.click();
+  await page.getByRole("tab", { name: "Pages" }).click();
+  const bookmark = page.getByRole("button", { name: "Bookmark page 2", exact: true });
+  await bookmark.click();
+  assert.equal(await bookmark.getAttribute("aria-pressed"), "true");
+  assert.equal(await page.getByRole("textbox", { name: "Page number" }).inputValue(), "1");
+  await page.keyboard.press("ControlOrMeta+w");
+  await page.getByRole("button", { name: /Try a sample/ }).click();
+  await page.getByRole("button", { name: "Bookmark page 2", pressed: true }).waitFor();
+  await bookmark.press("Enter");
+  assert.equal(await bookmark.getAttribute("aria-pressed"), "false");
+  await bookmark.click();
+  const filter = page.getByRole("button", { name: "Bookmarked", exact: true });
+  const bookmark3 = page.getByRole("button", { name: "Bookmark page 3", exact: true });
+  const pageNumber = page.getByRole("textbox", { name: "Page number" });
+  await bookmark3.click();
+  await filter.press("Enter");
+  assert.equal(await filter.getAttribute("aria-pressed"), "true");
+  assert.deepEqual(await page.locator(".thumbs .thumb").evaluateAll(rows => rows.map(row => row.dataset.page)), ["2", "3"]);
+  assert.equal(await pageNumber.inputValue(), "1");
+  await page.getByRole("button", { name: "Page 3", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('input[aria-label="Page number"]').value === "3");
+  await bookmark3.click();
+  assert.equal(await page.locator(".thumbs .thumb").count(), 1);
+  await bookmark.click();
+  await page.getByText("No bookmarked pages yet.", { exact: true }).waitFor();
+  assert.equal(await page.locator(".thumbs .thumb").count(), 0);
+  await filter.click();
+  assert.equal(await pageNumber.inputValue(), "3");
+  await page.getByRole("button", { name: "Page 1", exact: true }).click();
+  await bookmark.click();
+  if (!sidebarWasOpen) await sidebarToggle.click();
+  console.log("ok  a sidebar bookmark persists on its own and toggling it leaves the current page in place");
+  console.log("ok  Bookmarked filters the sidebar, jumps to the original page, and updates as bookmarks are removed");
+
+  // A signature is an unsaved edit that must survive a tab switch.
   const photo = await page.evaluate(() => {
     const canvas = Object.assign(document.createElement("canvas"), { width: 600, height: 200 });
     const g = canvas.getContext("2d");
@@ -100,40 +180,168 @@ try {
   console.log("ok  printing keeps unsaved work marked as unsaved");
 
   const sample = await page.evaluate(async () => Array.from(new Uint8Array(await (await fetch("sample.pdf")).arrayBuffer())));
-  const openFromFileManager = () => app.evaluate(({ BrowserWindow }, data) =>
-    BrowserWindow.getAllWindows()[0].webContents.send("folio:open-file", { name: "Another.pdf", data: Buffer.from(data) }), sample);
-  // Answer in the renderer. Electron can show a native confirm dialog even when its window is off-screen.
-  const confirmation = await page.evaluateHandle(() => {
+  const other = Buffer.concat([Buffer.from(sample), Buffer.from("\\n% Another PDF")]);
+  const select = name => docs.getByRole("tab", { name, exact: true }).click();
+  await page.getByTitle("Next page").click();
+  // Stub the native confirmation only in this test window.
+  await page.window.evaluate(() => {
     const original = window.confirm;
-    const messages = [];
-    window.confirm = message => {
-      messages.push(message);
-      return messages.length === 2; // Cancel the first open, then OK the second.
-    };
-    return { messages, restore: () => { window.confirm = original; } };
+    window.tabPrompts = [];
+    window.confirm = message => { window.tabPrompts.push(message); return window.tabPrompts.length === 2; };
+    window.restoreConfirm = () => { window.confirm = original; };
   });
-  await openFromFileManager();
-  await page.waitForFunction(stub => stub.messages.length === 1, confirmation, { timeout: 15_000 });
-  assert.equal(await page.title(), "Folio sample.pdf — Folio");
-  assert.equal(await page.locator(".stampEditor").count(), 1);
-  assert.ok(await page.locator(".dirty-dot").isVisible());
-  await openFromFileManager();
-  await page.waitForFunction(() => document.title.startsWith("Another.pdf"), null, { timeout: 15_000 });
-  await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
-  const warning = "You have unsaved changes. Open another document anyway?";
-  assert.deepEqual(await confirmation.evaluate(stub => stub.messages), [warning, warning]);
+  await app.evaluate(({ BrowserWindow }, bytes) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Another.pdf", data: Buffer.from(bytes) }), Array.from(other));
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
+  await docs.getByRole("tab", { name: "Another.pdf", selected: true }).waitFor();
   assert.equal(await page.locator(".stampEditor").count(), 0);
-  await confirmation.evaluate(stub => stub.restore());
-  console.log("ok  opening another document asks before discarding unsaved work");
+  await select("Folio sample.pdf");
+  assert.equal(await page.getByLabel("Page number", { exact: true }).inputValue(), "2");
+  await page.getByTitle("Previous page").click();
+  await page.locator(".stampEditor").waitFor();
+  assert.deepEqual(await page.window.evaluate(() => window.tabPrompts), []);
+  await select("Another.pdf");
+  const closeSigned = docs.getByRole("button", { name: "Close Folio sample.pdf, unsaved changes" });
+  await closeSigned.click();
+  assert.equal(await docs.getByRole("tab").count(), 2);
+  await closeSigned.click();
+  await closeSigned.waitFor({ state: "detached" });
+  assert.equal(await page.window.evaluate(() => window.tabPrompts.length), 2);
+  await page.window.evaluate(() => window.restoreConfirm());
+
+  // Batch opening keeps picker order, never replaces the current reader, and gives each file its own view.
+  const choosing = page.waitForEvent("filechooser");
+  await page.keyboard.press("ControlOrMeta+o");
+  const chooser = await choosing;
+  assert.equal(chooser.isMultiple(), true);
+  await chooser.setFiles(["One.pdf", "Two.pdf"].map(name => ({ name, mimeType: "application/pdf",
+    buffer: Buffer.concat([other, Buffer.from(name)]) })));
+  await docs.getByRole("tab", { name: "One.pdf", selected: true }).waitFor();
+  assert.deepEqual(await docs.getByRole("tab").allTextContents(), ["Another.pdf", "One.pdf", "Two.pdf"]);
+  await select("Two.pdf");
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
+  await page.locator(".document-tabs").screenshot({ path: path.join(shots, `document-tabs-${process.platform}.png`) });
+  await page.keyboard.press("Control+Shift+Tab");
+  await docs.getByRole("tab", { name: "One.pdf", selected: true }).waitFor();
+  await page.evaluate(data => {
+    const transfer = new DataTransfer();
+    for (const name of ["Drop A.pdf", "Drop B.pdf"]) {
+      transfer.items.add(new File([Uint8Array.from(data), name], name, { type: "application/pdf" }));
+    }
+    window.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer }));
+  }, sample);
+  await docs.getByRole("tab", { name: "Drop A.pdf", selected: true }).waitFor();
+  assert.equal(await docs.getByRole("tab").count(), 5);
+  for (const name of ["Drop A.pdf", "Drop B.pdf", "One.pdf", "Two.pdf"]) {
+    const close = docs.getByRole("button", { name: "Close " + name, exact: true });
+    await close.click(); await close.waitFor({ state: "detached" });
+  }
+  await page.locator(".doc-title", { hasText: "Another.pdf" }).waitFor();
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /Close document/ }).click();
+  await page.getByRole("button", { name: /Try a sample/ }).click();
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
+  console.log("ok  document tabs keep signatures and pages, confirm discard, and open multiple files");
+
+  const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  await page.window.setViewportSize({ width: 420, height: viewport.height });
+  assert.ok(await page.locator(".topbar button").evaluateAll(buttons => buttons.every(button => {
+    const rect = button.getBoundingClientRect();
+    return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+  })), "a toolbar button is covered at the minimum width");
+  await page.getByRole("button", { name: "Highlight", exact: true }).click();
+  await page.window.setViewportSize(viewport);
+  const textLayer = page.locator('.page[data-page-number="1"] .textLayer.highlighting');
+  await textLayer.waitFor();
+  await page.getByRole("radio", { name: "Green" }).click();
+  const dragAcross = async line => {
+    await line.scrollIntoViewIfNeeded();
+    const box = await line.boundingBox();
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + 1, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width - 1, y, { steps: 8 });
+  };
+  await dragAcross(textLayer.getByText(/Drag a PDF file anywhere/));
+  await page.waitForFunction(() => getSelection().toString().includes("Drag a PDF file anywhere"));
+  const passage = await page.evaluate(() => getSelection().toString().trim());
+  assert.equal(await page.locator(".highlightEditor").count(), 0);
+  await page.mouse.up();
+  await page.locator(".highlightEditor").waitFor();
+  await page.getByRole("radio", { name: "Pink" }).click();
+  await page.keyboard.down("Shift");
+  await textLayer.getByText(/page\. The sidebar on the left/).evaluate(span => {
+    const text = span.firstChild;
+    const start = text.textContent.indexOf("The sidebar");
+    getSelection().setBaseAndExtent(text, start, text, start + "The sidebar".length);
+  });
+  await page.waitForFunction(() => getSelection().toString() === "The sidebar");
+  assert.equal(await page.locator(".highlightEditor").count(), 1);
+  await page.keyboard.up("Shift");
+  await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 2);
+  assert.equal(await page.locator(".selection-popover").count(), 0);
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page.getByRole("button", { name: "Select", pressed: true }).waitFor();
+  await textLayer.waitFor({ state: "detached" });
+  console.log("ok  Highlight mode marks consecutive selections on release in the chosen color");
+
+  await page.getByTitle("Draw (D)").click();
+  const drawingTool = page.getByLabel("Drawing tool");
+  const inkPage = page.locator('.page[data-page-number="1"]');
+  await inkPage.locator(".annotationEditorLayer.inkEditing").waitFor();
+  await page.getByRole("radio", { name: "Blue" }).click();
+  for (const [index, shape] of ["Rectangle", "Oval", "Arrow"].entries()) {
+    if (index === 1) {
+      await page.getByTitle("Rotate (R)").click();
+      await inkPage.locator('.annotationEditorLayer.inkEditing[data-main-rotation="90"]').waitFor();
+    }
+    await drawingTool.selectOption(shape);
+    // Zoom and rotation can leave only part of the page visible. Wait for a clear drag on the
+    // drawing layer, avoiding existing annotations and the floating reader controls.
+    const start = await page.waitForFunction(() => {
+      const el = document.querySelector('.page[data-page-number="1"]');
+      const layer = el?.querySelector(".annotationEditorLayer.inkEditing");
+      if (!layer) return null;
+      const box = el.querySelector(".canvasWrapper").getBoundingClientRect();
+      const view = el.closest(".viewer-container").getBoundingClientRect();
+      const left = Math.ceil(Math.max(0, box.left, view.left)) + 8;
+      const top = Math.ceil(Math.max(0, box.top, view.top)) + 8;
+      const right = Math.min(innerWidth, box.right, view.right) - 68;
+      const bottom = Math.min(innerHeight, box.bottom, view.bottom) - 44;
+      for (let y = top; y <= bottom; y += 24) {
+        for (let x = left; x <= right; x += 32) {
+          if (document.elementFromPoint(x, y) === layer && document.elementFromPoint(x + 60, y + 36) === layer) return { x, y };
+        }
+      }
+      return null;
+    });
+    const { x, y } = await start.jsonValue();
+    await start.dispose();
+    // pdf.js orders editors by page position, so a new shape need not be the last DOM node.
+    const excludeExisting = await inkPage.locator(".inkEditor").evaluateAll(editors =>
+      editors.map(editor => `:not(#${CSS.escape(editor.id)})`).join(""));
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 60, y + 36);
+    await inkPage.locator(".shape-preview path").waitFor({ state: "attached" });
+    await page.mouse.up();
+    const editor = inkPage.locator(`.inkEditor${excludeExisting}`);
+    await editor.waitFor({ state: "visible" });
+    const placed = await editor.boundingBox();
+    assert.ok(Math.abs(placed.x + placed.width / 2 - (x + 30)) < 8 && Math.abs(placed.y + placed.height / 2 - (y + 18)) < 8,
+      `${shape} should appear where it was drawn`);
+  }
+  await page.getByTitle(/Undo \(/).click();
+  await page.waitForFunction(() => document.querySelectorAll(".inkEditor").length === 2);
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await inkPage.locator(".inkEditor").nth(2).waitFor({ state: "attached" });
+  for (let i = 0; i < 3; i++) await page.getByTitle("Rotate (R)").click();
+  console.log("ok  Draw creates the three shapes and supports undo and redo");
 
   // Select a sentence and highlight it in one click.
-  await page.evaluate(() => {
-    const span = [...document.querySelectorAll(".textLayer span:not(.markedContent)")].find((s) => s.textContent.includes("A short tour"));
-    const range = document.createRange();
-    range.selectNodeContents(span);
-    getSelection().removeAllRanges();
-    getSelection().addRange(range);
-  });
+  await dragAcross(page.locator('.page[data-page-number="1"] .textLayer').getByText(/A short tour of Folio/));
+  await page.mouse.up();
   await page.locator(".selection-popover").waitFor();
 
   // Copy puts the selection on the system clipboard (whose contents are put back afterwards). Clipboard writes
@@ -173,7 +381,7 @@ try {
   console.log("ok  a refused clipboard write is reported as Copy failed");
 
   await page.getByRole("button", { name: "Highlight yellow" }).click();
-  await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 1, null, { timeout: 15_000 });
+  await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 3, null, { timeout: 15_000 });
   console.log("ok  highlight created");
 
   // A saved copy includes every saved mark, also on pages that haven't been drawn since the document was reopened.
@@ -198,11 +406,11 @@ try {
   });
   await page.locator(".selection-popover").waitFor();
   await page.getByRole("button", { name: "Highlight yellow" }).click();
-  await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 2, null, { timeout: 15_000 });
+  await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 4, null, { timeout: 15_000 });
   await page.evaluate(() => { Worker.prototype.postMessage = window.folioPostMessage; });
   await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
   await page.waitForTimeout(800);
-  await page.getByTitle("Back to library").click();
+  await page.keyboard.press("ControlOrMeta+w");
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
   const copy = path.join(env.FOLIO_TEST_USER_DATA, "copy.pdf");
@@ -214,8 +422,64 @@ try {
   }, copy);
   await page.keyboard.press("ControlOrMeta+s");
   assert.equal(await app.evaluate(() => globalThis.folioCopySaved), "completed");
-  assert.equal(readFileSync(copy, "latin1").match(/\/Subtype\s*\/Highlight\b/g)?.length, 2);
+  assert.equal(readFileSync(copy, "latin1").match(/\/Subtype\s*\/Highlight\b/g)?.length, 4);
+  const savedInk = await page.evaluate(async bytes => {
+    const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
+    try {
+      const pdf = await task.promise;
+      const annotations = await (await pdf.getPage(1)).getAnnotations();
+      return annotations.filter(a => a.subtype === "Ink").map(a => ({ color: Array.from(a.color), paths: a.inkLists.length }));
+    } finally { await task.destroy(); }
+  }, Array.from(readFileSync(copy)));
+  assert.deepEqual(savedInk.map(a => a.paths).sort(), [1, 3, 4]);
+  assert.ok(savedInk.every(a => String(a.color) === "47,111,237"));
+  console.log("ok  all three shapes survive reopening and are embedded in the saved PDF");
   console.log("ok  saved copy includes marks on pages not drawn yet");
+
+  if (await sidebarToggle.getAttribute("aria-pressed") !== "true") await sidebarToggle.click();
+  await page.getByRole("tab", { name: /^Notes/ }).click();
+  for (const [quote, color] of [[passage, "#5edc9a"], ["The sidebar", "#ff8fc7"]]) {
+    const card = page.locator(".mark-card").filter({ hasText: quote });
+    assert.equal(await card.evaluate(el => el.style.getPropertyValue("--mark")), color);
+  }
+  await page.getByLabel("Notes about this document").fill("Compare these passages.");
+  const jsonFile = path.join(env.FOLIO_TEST_USER_DATA, "reading-notes.json");
+  await app.evaluate(({ session }, file) => {
+    globalThis.folioNotesSaved = new Promise(resolve => session.defaultSession.once("will-download", (_, item) => {
+      item.setSavePath(file);
+      item.once("done", (_, state) => resolve([state, item.getFilename()]));
+    }));
+  }, jsonFile);
+  await page.getByRole("button", { name: "Export" }).click();
+  await page.getByRole("menuitem", { name: "Save JSON…" }).click();
+  const [state, filename] = await app.evaluate(() => globalThis.folioNotesSaved);
+  assert.equal(state, "completed");
+  assert.match(filename, /\.notes\.json$/);
+  const exported = JSON.parse(readFileSync(jsonFile, "utf8"));
+  assert.equal(exported.schemaVersion, 1);
+  assert.equal(exported.documentNote, "Compare these passages.");
+  assert.equal(exported.document.pageCount, lastPage);
+  assert.ok(exported.bookmarks.some(b => b.page >= 1));
+  assert.deepEqual(exported.bookmarkedPages, [2]);
+  assert.equal(new Set(exported.annotations.map(a => a.id)).size, exported.annotations.length);
+  assert.ok(exported.annotations.some(a => a.type === "highlight" && a.page === lastPage && a.quadPoints.length >= 8));
+  const shapes = exported.annotations.filter(a => a.type === "shape");
+  assert.deepEqual(shapes.map(a => a.shape).sort(), ["arrow", "oval", "rectangle"]);
+  assert.ok(shapes.every(a => a.page === 1 && a.color.toLowerCase() === "#2f6fed" && a.strokes[0].every(Number.isFinite)));
+  await page.evaluate(() => {
+    window.folioOriginalClipboard = Object.getOwnPropertyDescriptor(navigator.clipboard, "writeText");
+    Object.defineProperty(navigator.clipboard, "writeText", { configurable: true, value: async text => { window.folioMarkdown = text; } });
+  });
+  await page.getByRole("button", { name: "Export" }).click();
+  await page.getByRole("menuitem", { name: "Copy Markdown" }).click();
+  assert.match(await page.evaluate(() => window.folioMarkdown), /Compare these passages\./);
+  assert.match(await page.evaluate(() => window.folioMarkdown), /## Bookmarked pages\n\n- p\. 2/);
+  await page.evaluate(() => {
+    if (window.folioOriginalClipboard) Object.defineProperty(navigator.clipboard, "writeText", window.folioOriginalClipboard);
+    else delete navigator.clipboard.writeText;
+  });
+  console.log("ok  Notes exports Markdown and JSON with drawings, offscreen highlights and outline destinations");
+  await page.getByRole("tab", { name: /Pages/ }).click();
 
   await page.getByRole("button", { name: "More" }).click();
   await page.getByRole("menuitem", { name: "About Folio" }).click();
@@ -244,7 +508,23 @@ try {
   // Settings links to the bundled changelog, and closing it returns to Settings.
   await page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
   await page.getByRole("button", { name: "View changelog" }).click();
-  await page.getByRole("dialog", { name: "What's new" }).locator("h3").first().waitFor();
+  const summaries = whatsNew.locator("summary");
+  await summaries.first().waitFor();
+  const firstPage = await summaries.allTextContents();
+  assert.equal(firstPage.length, 5);
+  assert.equal(firstPage[0], "Folio " + installed);
+  assert.equal(await whatsNew.locator("details[open]").count(), 1);
+  await summaries.nth(1).click();
+  assert.ok(await whatsNew.locator("details").nth(1).locator("li").first().isVisible());
+  const older = whatsNew.getByRole("button", { name: "Older releases" });
+  const newer = whatsNew.getByRole("button", { name: "Newer releases" });
+  assert.ok(await newer.isDisabled());
+  await older.click();
+  assert.ok(!(await summaries.allTextContents()).some(version => firstPage.includes(version)));
+  await newer.click();
+  assert.deepEqual(await summaries.allTextContents(), firstPage);
+  assert.equal(await whatsNew.getByRole("link", { name: "View releases on GitHub" }).getAttribute("href"),
+    "https://github.com/Forward-Future/folio-releases/releases");
   await page.keyboard.press("Escape");
   await page.getByRole("dialog", { name: "Settings" }).waitFor();
   await page.keyboard.press("Escape");
@@ -263,20 +543,20 @@ try {
   await page.locator('.freeTextEditor .internal[contenteditable="true"]').fill("Saved text box");
   await page.getByRole("button", { name: "Done", exact: true }).click();
   await page.waitForTimeout(1000);
-  await page.getByTitle("Back to library").click();
+  await page.keyboard.press("ControlOrMeta+w");
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".freeTextEditor", { hasText: "Saved text box" }).waitFor({ timeout: 15_000 });
   console.log("ok  text box restored after reopening");
 
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });
-  await checkReaderTools(app, page, env.FOLIO_TEST_USER_DATA);
+  await checkReaderTools(app, page, env.FOLIO_TEST_USER_DATA, shots);
 
   // Thumbnails keep each page's shape and relative size: letter portrait, letter landscape, and an 11x17 sheet.
   const mixed = pdfWithPageSizes([[612, 792], [792, 612], [1224, 792]]);
   await app.evaluate(({ BrowserWindow }, data) =>
     BrowserWindow.getAllWindows()[0].webContents.send("folio:open-file", { name: "Mixed sizes.pdf", data: Buffer.from(data) }), [...mixed]);
-  await page.waitForFunction(() => document.title.startsWith("Mixed sizes.pdf"), null, { timeout: 15_000 });
+  await page.window.waitForFunction(() => document.title.startsWith("Mixed sizes.pdf"), null, { timeout: 15_000 });
   if (!(await page.locator(".sidebar").count())) await page.keyboard.press("ControlOrMeta+Backslash");
   await page.getByRole("tab", { name: "Pages" }).click();
   // Waits until the page sizes have loaded and the third thumbnail is wider than the first.
@@ -297,6 +577,14 @@ try {
   assert.ok(near(frames[2].height, frames[0].height) && Math.abs(frames[2].width / frames[0].width - 2) < 0.05,
     `11x17 thumbnail isn't to scale with letter: ${JSON.stringify(frames)}`);
   console.log("ok  thumbnails keep each page's shape and size:", frames.map((f) => `${Math.round(f.width)}x${Math.round(f.height)}`).join(", "));
+
+  // The bookmark filter can show page 2 in row 1 while the document's largest sheet is hidden.
+  await page.getByRole("button", { name: "Bookmark page 2", exact: true }).click();
+  await filter.click();
+  await page.waitForFunction(() => document.querySelectorAll(".thumb").length === 1);
+  const filtered = await page.locator('.thumb[data-page="2"] .thumb-frame').boundingBox();
+  assert.ok(filtered && near(filtered.width, frames[1].width) && near(filtered.height, frames[1].height));
+  await filter.click();
 
   // In the page organizer, a moved page takes its own shape to its new row: drag the 11x17 sheet to the top.
   await page.getByRole("button", { name: "Reorder pages" }).click();
@@ -328,8 +616,10 @@ try {
     await page.getByRole("button", { name: /Open a PDF/ }).click();
     await (await chooser).setFiles(docx);
     // Stops at a conversion error too, and shows what each converter said.
-    const settled = await page.waitForFunction((name) => document.title.startsWith(name)
-      || document.querySelector(".toast.error")?.textContent, expectedName, { timeout: 150_000 }).catch((error) => error);
+    const settled = await page.window.waitForFunction((name) => {
+      const reader = document.querySelector("iframe.document-reader.active")?.contentDocument;
+      return reader?.title.startsWith(name) || reader?.querySelector(".toast.error")?.textContent;
+    }, expectedName, { timeout: 150_000 }).catch((error) => error);
     if (settled instanceof Error || !(await page.title()).startsWith(expectedName)) {
       const log = path.join(env.FOLIO_TEST_USER_DATA, "convert.log");
       console.log(await page.locator(".toast").textContent().catch(() => "(no message)"));
@@ -432,6 +722,57 @@ try {
     server.close();
   }
   console.log("ok  local network addresses need the user's OK");
+
+  // The question asked before closing over unsaved work names this platform's Save shortcut.
+  const closePrompt = await app.evaluate(({ BrowserWindow, dialog }) => {
+    const ask = dialog.showMessageBoxSync;
+    let detail = null;
+    dialog.showMessageBoxSync = (_window, options) => { detail = options.detail; return 1; };
+    try { BrowserWindow.getAllWindows()[0].webContents.emit("will-prevent-unload", { preventDefault() {} }); }
+    finally { dialog.showMessageBoxSync = ask; }
+    return detail;
+  });
+  assert.match(closePrompt, process.platform === "darwin" ? /⌘S/ : /Ctrl\+S/);
+  console.log("ok  the unsaved-work prompt shows this platform's Save shortcut");
+
+  // Closing Ask AI mid-answer stops the answer, like Stop: it doesn't run on unseen or come back unfinished. A stand-in
+  // provider starts each answer and never finishes it.
+  await app.evaluate(({ ipcMain, BrowserWindow }) => {
+    const ai = globalThis.folioAi = { asked: [], cancelled: [], reply: "" };
+    for (const channel of ["folio:ai-status", "folio:ai-ask", "folio:ai-cancel"]) ipcMain.removeHandler(channel);
+    ipcMain.handle("folio:ai-status", () => ({ chatgpt: { connected: false, email: "", name: "", welcomeSeen: true, encrypted: true },
+      claude: { installed: true, loggedIn: true, subscription: true, version: "test", authMethod: "claude.ai" } }));
+    ipcMain.handle("folio:ai-ask", (_event, request) => {
+      ai.asked.push(request.id);
+      if (ai.reply) BrowserWindow.getAllWindows()[0].webContents.send("folio:ai-event", { id: request.id, type: "delta", text: ai.reply });
+      return true;
+    });
+    ipcMain.handle("folio:ai-cancel", (_event, id) => { ai.cancelled.push(id); return true; });
+  });
+  await page.evaluate(() => localStorage.setItem("folio:ai-provider", "claude"));
+  const aiPanel = page.getByRole("complementary", { name: "Ask AI" });
+  const askAndClose = async (question, reply) => {
+    const asked = await app.evaluate((_electron, reply) => { globalThis.folioAi.reply = reply; return globalThis.folioAi.asked.length; }, reply);
+    await aiPanel.getByRole("textbox").fill(question);
+    await aiPanel.getByRole("textbox").press("Enter");
+    // Wait until the question has reached the provider, so the answer is under way rather than still being prepared.
+    for (let i = 0; i < 50 && (await app.evaluate(() => globalThis.folioAi.asked.length)) === asked; i++) await page.waitForTimeout(100);
+    if (reply) await aiPanel.getByText(reply).waitFor();
+    await aiPanel.getByRole("button", { name: "Close Ask AI" }).click();
+    await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+    await aiPanel.getByText(question).waitFor();
+  };
+  await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+  await askAndClose("First question", "Partial answer");
+  await askAndClose("Second question", "");
+  const aiCheck = await app.evaluate(() => globalThis.folioAi);
+  assert.equal(aiCheck.asked.length, 2);
+  assert.deepEqual(aiCheck.cancelled, aiCheck.asked, "closing Ask AI left an answer running");
+  assert.equal(await aiPanel.locator(".typing").count(), 0, "a stopped answer still shows as in progress");
+  assert.ok(await aiPanel.getByText("Partial answer").isVisible(), "the part already answered was dropped");
+  assert.equal(await aiPanel.getByRole("button", { name: "Stop" }).count(), 0, "the panel still thinks an answer is running");
+  await aiPanel.getByRole("button", { name: "Close Ask AI" }).click();
+  console.log("ok  closing Ask AI stops the answer in progress");
 
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
