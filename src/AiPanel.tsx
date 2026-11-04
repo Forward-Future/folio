@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./icons";
 import { copyText } from "./clipboard";
 import type { PDFDocumentProxy } from "./pdf";
@@ -90,7 +91,10 @@ const storedMessages = (messages: Message[]) =>
   messages.filter((m) => !m.error && m.content).map(({ role, content, context }) => ({ role, content, ...(context ? { context } : {}) }));
 
 function NewConversationDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
-  return <div onKeyDown={event => {
+  return <div onMouseDownCapture={event => {
+    // The backdrop closes on mousedown; its default action must not blur the restored button.
+    if (event.target === event.currentTarget.querySelector(".modal-backdrop")) event.preventDefault();
+  }} onKeyDown={event => {
     event.stopPropagation();
     if (event.key === "Escape") { event.preventDefault(); onCancel(); }
     if (event.key !== "Tab") return;
@@ -453,11 +457,11 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
           </div>
         )}
       </footer>
-      {confirmNew && <NewConversationDialog onCancel={cancelNew} onConfirm={() => {
+      {confirmNew && createPortal(<NewConversationDialog onCancel={cancelNew} onConfirm={() => {
         setConfirmNew(false);
         setMessages([]);
         inputRef.current?.focus();
-      }} />}
+      }} />, document.body)}
     </aside>
   );
 }

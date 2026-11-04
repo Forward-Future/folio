@@ -770,7 +770,23 @@ export async function checkReaderTools(app, page, folder, shots) {
   const box = await confirmation.boundingBox();
   const width = await page.window.evaluate(() => innerWidth);
   assert.ok(box && box.x >= 0 && box.x + box.width <= width, `the confirmation fits a narrow window: ${JSON.stringify({ width, box })}`);
+  for (const name of [/^Search \(/, /^Ask AI$/]) {
+    const covered = await page.locator(".topbar").getByRole("button", { name }).evaluate(button => {
+      const box = button.getBoundingClientRect();
+      return !!document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest(".modal-backdrop");
+    });
+    assert.equal(covered, true, `the confirmation backdrop covers the narrow-window toolbar: ${name}`);
+  }
   await page.screenshot({ path: path.join(shots, "new-conversation-narrow-light.png") });
+  const search = page.locator(".topbar").getByRole("button", { name: /^Search \(/ });
+  const searchBox = await search.boundingBox();
+  await page.mouse.click(searchBox.x + searchBox.width / 2, searchBox.y + searchBox.height / 2);
+  await confirmation.waitFor({ state: "detached" });
+  assert.equal(await search.getAttribute("aria-pressed"), "false");
+  assert.equal(await newConversation.evaluate(el => el === document.activeElement), true);
+  assert.equal(await savedAnswer(), true);
+  await newConversation.click();
+  await confirmation.waitFor();
   await confirmation.getByRole("button", { name: "Delete conversation" }).click();
   await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
   await page.window.setViewportSize(viewport);
