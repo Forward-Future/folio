@@ -62,6 +62,10 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
 
 ### Read and navigate
 
+- **Back and Forward:** after following an internal PDF link or outline destination, use the left/right arrows in
+  the navigation bar or **Alt+← / Alt+→** (**⌥← / ⌥→** on macOS) to return to previous locations. Each tab keeps its
+  own history, including reading position and zoom, until that document closes. Following a different link after
+  going back replaces the forward history. These shortcuts leave text fields and dialogs alone.
 - **Continuous scrolling** with selectable text, previous/next controls, and a page-number field for jumping directly
   to a page. Enable **Settings → Reading → Scroll one page at a time** to turn pages with the mouse wheel.
 - **Pages and Outline tabs:** browse page thumbnails or the PDF's existing outline/bookmarks; hide the sidebar when
@@ -204,6 +208,7 @@ On macOS, use `⌘` wherever this table says `Ctrl`. Press `?` with a document o
 | New tab / close tab | `Ctrl+T` / `Ctrl+W` |
 | Next tab / previous tab (Control on all platforms) | `Control+Tab` / `Control+Shift+Tab` |
 | Find / next match / previous match | `Ctrl+F` / `Enter` / `Shift+Enter` |
+| Back / forward through links | `Alt+←` / `Alt+→` (`⌥←` / `⌥→` on macOS) |
 | Highlight selection or enter Highlight mode / write a note | `H` / `N` |
 | Remove a clicked highlight | `Delete` |
 | Select / draw / add text | `V` / `D` / `T` |

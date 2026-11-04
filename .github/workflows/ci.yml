@@ -28,6 +28,7 @@ jobs:
       - run: npm run test:chat-math
       - run: npm run test:thumbnails
       - run: node --test scripts/test-word-files.cjs scripts/test-network-security.cjs scripts/test-release-build.mjs scripts/test-claude-path.cjs
+      - run: node --test scripts/test-link-history.mjs
       - run: npm run build
       - name: Smoke test (Linux, virtual display)
         if: runner.os == 'Linux'

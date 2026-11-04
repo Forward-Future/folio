@@ -46,6 +46,7 @@ import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./
 import { keepDrawingPointer } from "./drawing";
 import { drawShapes, type Shape } from "./shapes";
 import { enableWheelPaging } from "./wheelPaging";
+import { LinkHistory, type HistoryState } from "./linkHistory";
 
 type Tool = "select" | "highlight" | "ink" | "freetext";
 
@@ -137,6 +138,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const viewerRef = useRef<PDFViewer | null>(null);
   const busRef = useRef<EventBus | null>(null);
   const linkRef = useRef<PDFLinkService | null>(null);
+  const navigationRef = useRef<LinkHistory | null>(null);
+  const [navigation, setNavigation] = useState<HistoryState>({ back: false, forward: false });
   const findRef = useRef<PDFFindController | null>(null);
   const restoreRef = useRef<ReadingView | null>(null);
   const restoringRef = useRef(false);
@@ -272,6 +275,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     trackPageImages(eventBus);
     const stopDrawingPointer = keepDrawingPointer(container);
     linkService.setViewer(viewer);
+    const history = new LinkHistory(viewer, setNavigation);
+    linkService.setHistory(history);
+    navigationRef.current = history;
     viewerRef.current = viewer;
     markupRef.current = new MarkupController(eventBus, viewer, setMarkup);
     busRef.current = eventBus;
@@ -406,6 +412,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         viewer.setDocument(pdf);
         unattached = undefined;
         linkRef.current!.setDocument(pdf, null);
+        navigationRef.current!.reset();
         prev?.pdf.loadingTask.destroy();
 
         // Markup is saved automatically; only documents Folio can't store count as having unsaved changes.
@@ -1045,6 +1052,14 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       }
       if (!docRef.current) return;
 
+      if (e.altKey && !mod && !e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")
+        && !typing && !document.querySelector('[aria-modal="true"]') && !pending && !imageView) {
+        e.preventDefault();
+        if (e.key === "ArrowLeft") navigationRef.current?.back();
+        else navigationRef.current?.forward();
+        return;
+      }
+
       if (mod && !typing && Number(viewerRef.current?.annotationEditorMode) === AnnotationEditorType.NONE
         && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")) {
         e.preventDefault();
@@ -1373,6 +1388,15 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
 
           {doc && (
             <div className="pill" role="toolbar" aria-label="Navigation">
+              <button className="pill-btn" onClick={() => navigationRef.current?.back()} disabled={!navigation.back}
+                aria-label="Back to previous location" title={keys("Back (Alt+←)")}>
+                <Icon name="chevronLeft" size={17} />
+              </button>
+              <button className="pill-btn" onClick={() => navigationRef.current?.forward()} disabled={!navigation.forward}
+                aria-label="Forward to next location" title={keys("Forward (Alt+→)")}>
+                <Icon name="chevronRight" size={17} />
+              </button>
+              <span className="divider" />
               <button className="pill-btn" onClick={() => goTo(page - 1)} disabled={page <= 1} title="Previous page">
                 <Icon name="chevronUp" size={17} />
               </button>

@@ -294,6 +294,102 @@ async function checkContentEditing(app, page, folder, shots) {
   console.log("ok  fragmented embedded-font text in Folio's sample edits as a line and reopens in the reader");
 }
 
+async function checkLinkHistory(app, page, shots) {
+  const viewport = await page.window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  await page.window.setViewportSize({ width: 1000, height: 800 });
+  const content = "BT /F 16 Tf 40 1100 Td (Follow a PDF link, then go Back.) Tj ET";
+  const pdf = testPdf([
+    "<< /Type /Catalog /Pages 2 0 R /Names << /Dests << /Names [(second) [4 0 R /XYZ 0 1000 1.5] (third) [5 0 R /XYZ 0 960 1.25]] >> >> /Outlines 13 0 R >>",
+    "<< /Type /Pages /Count 3 /Kids [3 0 R 4 0 R 5 0 R] >>",
+    ...["7 0 R 8 0 R 12 0 R 15 0 R", "9 0 R", "10 0 R"].map(annots => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 1200] /Resources << /Font << /F 6 0 R >> >> /Contents 11 0 R /Annots [${annots}] >>`),
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Annot /Subtype /Link /Rect [40 1000 160 1040] /Dest (second) >>",
+    "<< /Type /Annot /Subtype /Link /Rect [200 1000 320 1040] /Dest (third) >>",
+    "<< /Type /Annot /Subtype /Link /Rect [40 1000 160 1040] /Dest (third) >>",
+    "<< /Type /Annot /Subtype /Link /Rect [40 1000 160 1040] /A << /S /Named /N /GoBack >> >>",
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    "<< /Type /Annot /Subtype /Link /Rect [360 1000 480 1040] /A << /S /Named /N /GoForward >> >>",
+    "<< /Type /Outlines /First 14 0 R /Last 14 0 R /Count 1 >>",
+    "<< /Title (Third page) /Parent 13 0 R /Dest (third) >>",
+    "<< /Type /Annot /Subtype /Link /Rect [40 900 160 940] /Dest [3 0 R /XYZ 0 500 1.25] >>",
+  ]);
+  const open = name => app.evaluate(({ BrowserWindow }, { name, pdf }) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name, data: Buffer.from(pdf) }), { name, pdf });
+  await open("Link history.pdf");
+  await page.window.waitForFunction(() => document.title.startsWith("Link history.pdf"));
+  const back = page.getByRole("button", { name: "Back to previous location", exact: true });
+  const forward = page.getByRole("button", { name: "Forward to next location", exact: true });
+  const pageNumber = page.getByLabel("Page number");
+  const at = n => page.waitForFunction(n => document.querySelector('[aria-label="Page number"]').value === String(n), n);
+  assert.equal(await back.isDisabled(), true); assert.equal(await forward.isDisabled(), true);
+  const link = (n, name) => page.locator(`.page[data-page-number="${n}"] .annotationLayer a[href$="#${name}"]`);
+  const position = () => page.locator(".viewer-container").evaluate(el => ({ top: el.scrollTop, left: el.scrollLeft }));
+  const zoom = () => page.getByTitle("Zoom", { exact: true }).innerText();
+  await link(1, "second").waitFor();
+  await page.locator(".viewer-container").evaluate(el => { el.scrollTop = 50; });
+  const start = await position(), startZoom = await zoom();
+  await page.locator('.page[data-page-number="1"] .annotationLayer a').nth(3).click();
+  await back.click(); await at(1);
+  assert.ok(Math.abs((await position()).top - start.top) <= 3);
+  await link(1, "second").click(); await at(2);
+  assert.equal(await back.isDisabled(), false);
+  await page.locator(".viewer-container").evaluate(el => { el.scrollTop += 60; el.scrollLeft = 60; });
+  const target = await position(), targetZoom = await zoom();
+  assert.ok(target.left > 0, "the fixture exercises horizontal scrolling");
+  await page.locator(".viewer-container").focus();
+  await page.keyboard.press("Alt+ArrowLeft"); await at(1);
+  assert.ok(Math.abs((await position()).top - start.top) <= 3);
+  assert.equal(await zoom(), startZoom);
+  await page.keyboard.press("Alt+ArrowRight"); await at(2);
+  assert.ok(Math.abs((await position()).top - target.top) <= 3);
+  assert.ok(Math.abs((await position()).left - target.left) <= 3);
+  assert.equal(await zoom(), targetZoom);
+  // An editing field keeps Option/Alt-arrow for moving through words.
+  await pageNumber.focus(); await page.keyboard.press("Alt+ArrowLeft");
+  assert.equal(await pageNumber.inputValue(), "2");
+  await page.locator(".viewer-container").focus();
+  await page.keyboard.press("?");
+  const shortcuts = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await shortcuts.getByText("Back / forward through links", { exact: true }).waitFor();
+  await page.keyboard.press("Alt+ArrowLeft");
+  assert.equal(await pageNumber.inputValue(), "2");
+  await shortcuts.waitFor(); await page.keyboard.press("Escape");
+  await back.click(); await at(1);
+  await link(1, "third").click(); await at(3);
+  assert.equal(await forward.isDisabled(), true);
+  await page.locator('.page[data-page-number="3"][data-loaded="true"] .canvasWrapper canvas').waitFor();
+  await page.screenshot({ path: path.join(shots, "after-link-history.png") });
+  await back.click(); await at(1);
+  await forward.click(); await at(3);
+  const namedBack = page.locator('.page[data-page-number="3"] .annotationLayer a');
+  await namedBack.click(); await at(1);
+  await page.locator('.page[data-page-number="1"] .annotationLayer a').nth(2).click(); await at(3);
+  await back.click(); await at(1);
+  const sidebar = page.getByRole("button", { name: /Toggle sidebar/ });
+  if (await sidebar.getAttribute("aria-pressed") !== "true") await sidebar.click();
+  await page.getByRole("tab", { name: "Outline" }).click();
+  await page.getByRole("button", { name: "Third page", exact: true }).click(); await at(3);
+  await back.click(); await at(1);
+  const sourceTitle = await page.title();
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /New tab/ }).click();
+  await page.getByRole("button", { name: /Try a sample/ }).click();
+  assert.equal(await back.isDisabled(), true); assert.equal(await forward.isDisabled(), true);
+  await page.keyboard.press("Control+Shift+Tab");
+  assert.equal(await page.title(), sourceTitle);
+  assert.equal(await forward.isDisabled(), false);
+  await page.locator(".viewer-container").focus();
+  await page.keyboard.press("Alt+ArrowRight"); await at(3);
+  await page.window.setViewportSize({ width: 420, height: 800 });
+  await page.window.waitForFunction(() => innerWidth <= 420);
+  const box = await page.getByRole("toolbar", { name: "Navigation" }).boundingBox();
+  const width = await page.window.evaluate(() => innerWidth);
+  assert.ok(box && box.x >= 0 && box.x + box.width <= width, `the navigation controls fit a narrow window: ${JSON.stringify({ width, box })}`);
+  await page.screenshot({ path: path.join(shots, "link-history-narrow.png") });
+  await page.window.setViewportSize(viewport);
+  console.log("ok  internal links and outline destinations support per-tab Back/Forward, exact position and zoom, shortcuts and forward branching");
+}
+
 export async function checkReaderTools(app, page, folder, shots) {
   const settings = () => page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
   const wheelSwitch = page.getByRole("switch", { name: "Scroll one page at a time" });
@@ -421,4 +517,5 @@ export async function checkReaderTools(app, page, folder, shots) {
   console.log("ok  the normal Save shortcut and Open reordered copy preserve filled form fields");
   await checkScanSelection(app, page);
   await checkContentEditing(app, page, folder, shots);
+  await checkLinkHistory(app, page, shots);
 }

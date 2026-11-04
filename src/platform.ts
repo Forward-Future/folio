@@ -10,5 +10,6 @@ const IS_MAC = platform === "darwin";
 
 /** Writes a shortcut the way this platform does: "Ctrl S" stays on Windows/Linux, becomes "⌘ S" on macOS. */
 export function keys(label: string) {
-  return IS_MAC ? label.replace(/Ctrl\+/g, "⌘").replace(/Ctrl/g, "⌘").replace(/Shift/g, "⇧") : label;
+  return IS_MAC ? label.replace(/Ctrl\+/g, "⌘").replace(/Ctrl/g, "⌘").replace(/Shift/g, "⇧")
+    .replace(/Alt\+/g, "⌥").replace(/Alt/g, "⌥") : label;
 }
