@@ -16,3 +16,8 @@ for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) {
 
 // File-attachment annotations use these icons even without the standard viewer UI.
 cpSync(resolve(src, "web/images"), resolve(dest, "images"), { recursive: true });
+// Worker-only packages aren't included in Vite's renderer license report.
+for (const [pkg, license] of [
+  ["@embedpdf/pdfium", "LICENSE"], ["@embedpdf/pdfium", "LICENSE.pdfium"], ["pdf-lib", "LICENSE.md"],
+  ["@pdf-lib/standard-fonts", "LICENSE.md"], ["@pdf-lib/upng", "LICENSE"], ["pako", "LICENSE"], ["tslib", "LICENSE.txt"],
+]) cpSync(resolve(root, "node_modules", pkg, license), resolve(dest, "editor-licenses", pkg, license));

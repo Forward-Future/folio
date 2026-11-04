@@ -116,6 +116,44 @@ async function checkPreferences(app, page) {
   console.log("ok  retained attachment readers follow global theme, PDF dark mode, image colors, and native theme");
 }
 
+// Editing replaces the parent PDF while committed children retain their own bytes.
+async function checkParentEditing(_app, page) {
+  const before = await page.evaluate(() => {
+    const { tabs, key } = window.frameElement.readerContext;
+    const tab = tabs.all.find(t => t.key === key);
+    return { key, instance: tab.documentInstance, contentId: tab.contentId };
+  });
+  await page.getByRole("tab", { name: "Files, attachments" }).click();
+  await page.getByRole("button", { name: "Read PDF: child.pdf", exact: true }).click();
+  await page.locator(".attachment-reader .textLayer span").first().waitFor();
+  const childKey = await page.evaluate(() => window.frameElement.readerContext.key);
+  await page.evaluate(key => window.frameElement.readerContext.tabs.select(key), before.key);
+  await page.getByRole("button", { name: "Edit mode", exact: true }).click();
+  const sheet = page.locator('.page[data-page-number="1"]');
+  await sheet.getByRole("button", { name: "Parent with attachments", exact: true }).click();
+  const input = sheet.getByRole("textbox", { name: "Edit text on page" });
+  await input.fill("Edited parent");
+  await input.press("Enter");
+  await sheet.getByRole("button", { name: "Edited parent", exact: true }).waitFor();
+  const after = await page.evaluate(() => {
+    const { tabs, key } = window.frameElement.readerContext;
+    const tab = tabs.all.find(t => t.key === key);
+    return { instance: tab.documentInstance, contentId: tab.contentId };
+  });
+  assert.notEqual(after.instance, before.instance);
+  assert.equal(after.contentId, before.contentId);
+  await page.getByRole("button", { name: "Exit edit mode" }).click();
+  await page.evaluate(key => window.frameElement.readerContext.tabs.select(key), childKey);
+  await page.getByText("Attached PDF content", { exact: true }).waitFor();
+  await page.evaluate(key => window.frameElement.readerContext.tabs.select(key), before.key);
+  await page.getByRole("tab", { name: "Files, attachments" }).click();
+  await page.getByRole("button", { name: "Read PDF: child.pdf", exact: true }).click();
+  await page.locator(".attachment-reader .textLayer span").first().waitFor();
+  assert.notEqual(await page.evaluate(() => window.frameElement.readerContext.key), childKey);
+  await page.getByText("Attached PDF content", { exact: true }).waitFor();
+  console.log("ok  parent text edits refresh attachments, retain tab identity, and preserve open child snapshots");
+}
+
 const selected = process.argv[2];
 if (!selected || selected === "errors") await run(checkCloseErrors);
 if (!selected || selected === "preferences") {
@@ -128,3 +166,5 @@ if (!selected || selected === "preferences") {
   ]);
   await run(checkPreferences, singleAttachmentPdf("child.pdf", Buffer.from(imagePdf)));
 }
+
+if (!selected || selected === "editing") await run(checkParentEditing);
