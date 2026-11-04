@@ -741,6 +741,7 @@ export async function checkReaderTools(app, page, folder, shots) {
   await page.keyboard.press("Enter");
   await confirmation.waitFor({ state: "detached" });
   assert.equal(await newConversation.evaluate(el => el === document.activeElement), true);
+  assert.equal(await savedAnswer(), true);
   for (const dismiss of ["Escape", "Close", "Backdrop"]) {
     await newConversation.click();
     await confirmation.waitFor();
@@ -755,8 +756,24 @@ export async function checkReaderTools(app, page, folder, shots) {
   await page.getByRole("button", { name: "Close Ask AI" }).click();
   await page.getByRole("button", { name: "Ask AI", exact: true }).click();
   await copyResponse.waitFor();
+  const viewport = await page.window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  await page.window.setViewportSize({ width: 420, height: 800 });
+  await page.window.waitForFunction(() => innerWidth <= 420);
+  const theme = await page.evaluate(() => {
+    const theme = document.documentElement.dataset.theme;
+    document.documentElement.dataset.theme = "light";
+    return theme;
+  });
   await newConversation.click();
+  await confirmation.waitFor();
+  await page.locator(".modal-backdrop").evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished)));
+  const box = await confirmation.boundingBox();
+  const width = await page.window.evaluate(() => innerWidth);
+  assert.ok(box && box.x >= 0 && box.x + box.width <= width, `the confirmation fits a narrow window: ${JSON.stringify({ width, box })}`);
+  await page.screenshot({ path: path.join(shots, "new-conversation-narrow-light.png") });
   await confirmation.getByRole("button", { name: "Delete conversation" }).click();
+  await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+  await page.window.setViewportSize(viewport);
   await copyResponse.waitFor({ state: "detached" });
   for (let i = 0; i < 100 && await savedAnswer(); i++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(await savedAnswer(), false);
