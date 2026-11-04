@@ -23,7 +23,12 @@ async function run(check, pdf = attachmentsPdf()) {
       "folio:open-file", { name: "Audit parent.pdf", data: Buffer.from(data) }), pdf);
     await page.locator(".page canvas").first().waitFor();
     await check(app, page);
-  } finally { await app.close(); }
+  } finally {
+    // These disposable fixtures can have unsaved edits. Bypass native close prompts
+    // during teardown, including when an assertion fails, so CI reports the result.
+    await app.evaluate(({ BrowserWindow }) => { for (const window of BrowserWindow.getAllWindows()) window.destroy(); });
+    await app.close();
+  }
 }
 
 async function checkCloseErrors(_app, page) {
