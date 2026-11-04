@@ -13,3 +13,6 @@ for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) {
   const from = resolve(src, dir);
   if (existsSync(from)) cpSync(from, resolve(dest, dir), { recursive: true, filter: (file) => !basename(file).startsWith("quickjs-eval") });
 }
+
+// File-attachment annotations use these icons even without the standard viewer UI.
+cpSync(resolve(src, "web/images"), resolve(dest, "images"), { recursive: true });

@@ -11,6 +11,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
+import { checkAttachments } from "./smoke-attachments.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -503,6 +504,7 @@ try {
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });
   await checkReaderTools(app, page, env.FOLIO_TEST_USER_DATA);
+  await checkAttachments(app, page, env.FOLIO_TEST_USER_DATA);
 
   // A Word document opens converted to PDF (by Word, LibreOffice, or Folio itself, whichever the computer has),
   // and the PDF is saved next to it. Opening the document again reuses that PDF.

@@ -41,6 +41,10 @@ import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./
 import { keepDrawingPointer } from "./drawing";
 import { drawShapes, type Shape } from "./shapes";
 import { enableWheelPaging } from "./wheelPaging";
+import { AttachmentSession } from "./attachmentSession";
+import { AttachmentLinkService } from "./attachmentLinkService";
+import { AttachmentsPanel } from "./AttachmentsPanel";
+import { saveBlob } from "./download";
 
 type Tool = "select" | "highlight" | "ink" | "freetext";
 
@@ -89,6 +93,7 @@ interface OpenDoc {
   /** The file's size; its bytes live in pdf.js's worker (pdf.getData()) rather than in a second copy here. */
   size: number;
   pdf: PDFDocumentProxy;
+  attachments: AttachmentSession;
   /** Used only in memory when reopening an annotated snapshot for page reordering. */
   password?: string;
 }
@@ -103,13 +108,15 @@ interface Pending {
 // SharedArrayBuffer, which pdf.js never hands out, but its types don't say so.)
 const pdfBlob = (bytes: Uint8Array) => new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "application/pdf" });
 
-function saveBlob(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+const noAttachments: ReturnType<AttachmentSession["getSnapshot"]> = { password: null, error: null, actions: [],
+  discovery: { items: [], catalogLoading: false, pagesLoading: false, complete: false, isCollection: false, errors: [], truncated: false } };
+const noSubscription = () => () => {};
+
+function AttachmentSidebar({ session }: { session: AttachmentSession }) {
+  const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  useEffect(() => { if (!session.getSnapshot().discovery.complete) session.discover(); }, [session]);
+  return <AttachmentsPanel state={snapshot.discovery} actions={snapshot.actions}
+    onSave={session.save} onRead={session.read} onRetryDiscovery={session.discover} onCancelAction={session.cancel} />;
 }
 
 export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: number }) {
@@ -133,6 +140,8 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   const exporting = useRef<PDFDocumentProxy | null>(null);
 
   const [doc, setDoc] = useState<OpenDoc | null>(null);
+  const attachmentState = useSyncExternalStore(doc?.attachments.subscribe ?? noSubscription,
+    doc?.attachments.getSnapshot ?? (() => noAttachments));
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [textStatus, setTextStatus] = useState<string | null>(null);
@@ -194,10 +203,10 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   const [aiContext, setAiContext] = useState<AiContext | null>(null);
 
   useLayoutEffect(() => {
-    if (active && window.folioDesktop && !focus && !dialog && !signing && !pending && !imageView) {
+    if (active && window.folioDesktop && !focus && !dialog && !signing && !pending && !attachmentState.password && !imageView) {
       return trackTitlebar(headerRef.current!);
     }
-  }, [active, doc, focus, dialog, signing, pending, imageView]);
+  }, [active, doc, focus, dialog, signing, pending, attachmentState.password, imageView]);
 
   useEffect(() => {
     setSigning(false); setSignatureTargets([]); setSignatureDismissed(false);
@@ -228,7 +237,8 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   useEffect(() => {
     const container = containerRef.current!;
     const eventBus = new EventBus();
-    const linkService = new PDFLinkService({ eventBus, externalLinkTarget: LinkTarget.BLANK });
+    const linkService = new AttachmentLinkService({ eventBus, externalLinkTarget: LinkTarget.BLANK },
+      id => docRef.current?.attachments.pageContent(id) ?? Promise.resolve(null));
     const findController = new PDFFindController({ eventBus, linkService });
     findRef.current = findController;
     const viewer = new PDFViewer({
@@ -238,6 +248,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
       linkService,
       findController,
       annotationEditorMode: AnnotationEditorType.NONE,
+      imageResourcesPath: `${import.meta.env.BASE_URL}pdfjs/images/`,
       annotationEditorHighlightColors: HIGHLIGHTS.map((c) => `${c.name.toLowerCase()}=${c.hex}`).join(","),
       // Records where images are drawn (used to keep them true to color in night reading). The huge
       // minimum size turns off pdf.js's own right-click image targets, which Folio doesn't use.
@@ -342,7 +353,8 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         signal.throwIfAborted();
         const existing = await getRecent(id);
         signal.throwIfAborted();
-        if (!tabs.opened(tabKey, id, name)) return;
+        const instance = tabs.beginDocument(tabKey);
+        if (!tabs.opened(tabKey, id, name, instance, !password && data.byteLength <= MAX_RECENT_FILE_BYTES)) return;
         const saved = readView(id);
         restoreRef.current = saved;
         lastPageRef.current = Math.min(saved?.page ?? existing?.lastPage ?? 1, pdf.numPages);
@@ -355,7 +367,9 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         }
 
         const prev = docRef.current;
-        const next: OpenDoc = { id, name, size: data.byteLength, pdf, password };
+        const next: OpenDoc = { id, name, size: data.byteLength, pdf, password,
+          attachments: new AttachmentSession(pdf, tabs, tabKey, instance) };
+        prev?.attachments.dispose();
         docRef.current = next;
         // Password-protected documents aren't stored by Folio (same rule as Recent).
         persistRef.current = !password;
@@ -366,7 +380,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         viewer.setDocument(pdf);
         unattached = undefined;
         linkRef.current!.setDocument(pdf, null);
-        prev?.pdf.loadingTask.destroy();
+        void prev?.pdf.loadingTask.destroy().catch(() => {});
 
         // Markup is saved automatically; only documents Folio can't store count as having unsaved changes.
         (pdf.annotationStorage as { onSetModified: unknown }).onSetModified = () => {
@@ -871,11 +885,26 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         case "error": setLoading(false); setToast(null); setError(source.message); tabs.failed(tabKey); break;
       }
     };
-    tabs.bind(tabKey, { open: source => { void open(source); }, flush: async () => {
+    return tabs.bind(tabKey, { open: source => { void open(source); }, flush: async () => {
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       markupRef.current?.sync();
       await markupRef.current?.flush();
+    }, dispose: async () => {
+      docRef.current?.attachments.dispose();
       opening.current?.abort();
+      const pdf = docRef.current?.pdf;
+      docRef.current = null;
+      viewerRef.current?.setDocument(null);
+      linkRef.current?.setDocument(null);
+      await pdf?.loadingTask.destroy();
+    }, focusAttachment: origin => {
+      const row = Array.from(document.querySelectorAll<HTMLElement>("[data-attachment-key]"))
+        .find(element => element.dataset.attachmentKey === `${origin.sourceKind}:${origin.retrievalId}`);
+      const visible = (element: HTMLElement | null | undefined) => element && element.getClientRects().length > 0;
+      const files = document.querySelector<HTMLElement>('[data-sidebar-files]');
+      const rowButton = row?.querySelector<HTMLElement>("button:not(:disabled)");
+      const target = visible(rowButton) ? rowButton : visible(files) ? files : headerRef.current;
+      if (target) { if (target === headerRef.current) target.tabIndex = -1; target.focus({ preventScroll: true }); }
     } });
   }, [tabs, tabKey, openBytes, openBlob, openSample, openUrl, beginOpen, flash]);
   useEffect(() => {
@@ -1201,6 +1230,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
             onSelectDest={(dest) => linkRef.current!.goToDestination(dest as string)}
             tab={sidebarTab}
             onTab={setSidebarTab}
+            attachments={<AttachmentSidebar session={doc.attachments} />}
             noteCount={markup.marks.filter((m) => m.type === "highlight").length}
             notes={
               <NotesPanel
@@ -1394,6 +1424,12 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         </div>
       )}
 
+      {attachmentState.password && active && <PasswordDialog
+        key={attachmentState.password.challengeId}
+        name="Embedded content"
+        error={attachmentState.password.reason === 2 ? "Incorrect password. Try again." : undefined}
+        onSubmit={attachmentState.password.submit} onCancel={attachmentState.password.cancel} />}
+      {attachmentState.error && <div className="toast error" role="alert">{attachmentState.error}</div>}
       {pending && (
         <PasswordDialog
           name={pending.name}

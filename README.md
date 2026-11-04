@@ -36,6 +36,23 @@ Or build Folio yourself from source (below).
 
 ## Features
 
+### Files inside a PDF
+
+Open **Files** in the sidebar to list document attachments and file annotations, including annotations on pages you
+haven't visited. Save any supported file, or choose **Read PDF** to read it in a temporary, read-only tab. Files
+without a PDF extension offer **Try as PDF**. Your place and edits in the parent remain intact; **Back to parent**
+returns to that document. Once extracted, the child stays open even if you close its parent.
+
+Attachment tabs have page navigation, zoom, text selection, and **Save original**. They do not enter Recent or
+save reading state, annotations, or AI history. To edit a child or explore its own attachments, save it and open it
+normally. Embedded-stream passwords and the attached PDF's own password are handled separately; saving original
+child bytes does not require unlocking the child PDF.
+
+This is a flat list, not a PDF Portfolio's original layout or folder tree. Associated files outside the document's
+attachment name tree and page file annotations may not appear. The list displays up to 10,000 entries; extraction
+accepts files up to 300 MiB **after decoding**. These checks do not bound PDF.js's decoding memory. Compatibility
+with a particular Portfolio should be checked with that file.
+
 ### Open PDFs and web links
 
 - **Document tabs.** Pick or drop several PDFs together, or choose **More → New tab**. The tab strip appears beneath
@@ -297,3 +314,5 @@ privately, see [SECURITY.md](SECURITY.md).
 
 [MIT](LICENSE). Folio includes third-party software under its own licenses; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Implementation milestones and validation evidence are recorded in [the execution log](docs/project-log/EXECUTION-LOG.md).

@@ -15,10 +15,14 @@ if (reader) {
     } };
     document.documentElement.classList.add("desktop", `platform-${desktop.platform}`);
   }
+  const documentToken = reader.tabs.readerDocumentLoaded(reader.key);
+  window.addEventListener("pagehide", () => {
+    if (documentToken) reader.tabs.readerDocumentUnloaded(reader.key, documentToken);
+  }, { once: true });
   // No StrictMode: the pdf.js viewer binds imperatively to its container once.
-  void import("./App").then(({ default: App }) => {
+  void (reader.kind === "attachment" ? import("./AttachmentReader") : import("./App")).then(({ default: App }) => {
     const frame = window.frameElement as ReaderFrame | null;
-    if (!frame) return;
+    if (!frame || !documentToken || !reader.tabs.isReaderDocument(reader.key, documentToken)) return;
     const app = createRoot(root);
     frame.disposeReader = () => app.unmount();
     app.render(<App tabs={reader.tabs} tabKey={reader.key} />);

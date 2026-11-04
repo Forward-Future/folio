@@ -21,6 +21,17 @@ const MAX_RECENT = 8;
 export const MAX_RECENT_FILE_BYTES = 50 * 1024 * 1024;
 let connection: Promise<IDBDatabase> | null = null;
 
+// All reader frames share one controller. Publish completed mutations in its window,
+// including evictions and best-effort failures, so startup eligibility is rechecked.
+const RECENT_CHANGED = "folio:recent-changed";
+function recentWindow() { return window.top ?? window; }
+function notifyRecent() { recentWindow().dispatchEvent(new Event(RECENT_CHANGED)); }
+export function subscribeRecent(listener: () => void) {
+  const target = recentWindow();
+  target.addEventListener(RECENT_CHANGED, listener);
+  return () => target.removeEventListener(RECENT_CHANGED, listener);
+}
+
 function open(): Promise<IDBDatabase> {
   if (connection) return connection;
   connection = new Promise((resolve, reject) => {
@@ -126,7 +137,7 @@ export async function saveRecent(file: RecentFile) {
     });
   } catch {
     /* storage may be unavailable (private mode); recent files are best-effort */
-  }
+  } finally { notifyRecent(); }
 }
 
 export async function updateLastPage(id: string, lastPage: number) {
@@ -158,7 +169,7 @@ export async function clearRecent() {
     });
   } catch {
     /* ignore */
-  }
+  } finally { notifyRecent(); }
 }
 
 export async function removeRecent(id: string) {
@@ -166,7 +177,7 @@ export async function removeRecent(id: string) {
     await tx("readwrite", (s) => s.delete(id));
   } catch {
     /* ignore */
-  }
+  } finally { notifyRecent(); }
 }
 
 // ── Highlights and notes ──────────────────────────────────────────────

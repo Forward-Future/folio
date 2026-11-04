@@ -17,13 +17,14 @@ interface Props {
   tab: SidebarTab;
   onTab: (tab: SidebarTab) => void;
   notes: ReactNode;
+  attachments: ReactNode;
   noteCount: number;
 }
 
-export type SidebarTab = "pages" | "outline" | "notes";
+export type SidebarTab = "pages" | "outline" | "notes" | "files";
 
 export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order, onOrder, onSaveOrder, onOpenCopy,
-  tab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
+  tab, onTab: setTab, notes, attachments, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
   const [outline, setOutline] = useState<OutlineItem[] | null>(null);
   const [bookmarkedOnly, setBookmarkedOnly] = useState(false);
 
@@ -48,6 +49,8 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order
         <button role="tab" aria-selected={tab === "notes"} className={tab === "notes" ? "on" : ""} onClick={() => setTab("notes")}>
           Notes{noteCount > 0 && <span className="tab-count">{noteCount}</span>}
         </button>
+        <button role="tab" data-sidebar-files aria-label="Files, attachments" aria-selected={tab === "files"}
+          className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>Files</button>
       </div>
       {tab === "pages" && (
         <button type="button" className="bookmark-filter" aria-pressed={bookmarkedOnly} disabled={bookmarkedPages === null}
@@ -56,7 +59,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order
         </button>
       )}
       <div className="sidebar-scroll">
-        {tab === "notes" ? (
+        {tab === "files" ? attachments : tab === "notes" ? (
           notes
         ) : tab === "pages" ? (
           <Thumbnails pdf={pdf} page={page} rotation={rotation} onSelect={onSelectPage}
@@ -74,7 +77,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order
           </ul>
         )}
       </div>
-      {tab !== "notes" && pdf.numPages > 1 && (
+      {(tab === "pages" || tab === "outline") && pdf.numPages > 1 && (
         <div className="organize-actions">
           <button className="link small" onClick={() => onOrder(Array.from({ length: pdf.numPages }, (_, i) => i + 1))}>
             <Icon name="grid" size={14} /> Reorder pages
