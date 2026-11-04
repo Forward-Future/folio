@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { electronPath } from "./electron-path.mjs";
 import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
+import { checkSignatureTargets } from "./smoke-signature-targets.mjs";
 import { checkOpenRouter } from "./smoke-openrouter.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -987,6 +988,7 @@ try {
 
   // Asked again at the end: the windows that convert a webpage or a Word document didn't bring it forward either.
   await checkStaysHidden();
+  await checkSignatureTargets(app, page, photo, shots);
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {
