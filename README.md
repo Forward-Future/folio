@@ -162,7 +162,8 @@ Choose **Sign** in the toolbar to add a signature.
 - **Provider and model selection**, a stop button for an in-progress answer, and a **+** button to start a fresh
   conversation.
 - **Per-document history:** conversations are saved on this computer and restored when you reopen that document,
-  except for password-protected PDFs. Starting a new conversation clears that document's saved chat.
+  except for password-protected PDFs. The **+** button asks for confirmation before deleting that document's current
+  conversation and starting a new one. Choose **Cancel** to keep it.
   Open **Settings → Storage → Stored data** to see how many documents have saved annotations or chats, including documents
   removed from Recent. You can clear either category separately. Annotations include document notes and bookmarks.
 - **Account settings:** choose your default provider, sign in to or out of ChatGPT, and check Claude Code's connection
