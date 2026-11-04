@@ -6,13 +6,27 @@ import { keys } from "./platform";
 export function DocumentTabBar({ tabs, tabKey }: { tabs: ReaderContext["tabs"]; tabKey: number }) {
   useSyncExternalStore(tabs.subscribe, tabs.snapshot);
   const selected = useRef<HTMLButtonElement>(null);
+  const strip = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const element = strip.current;
+    return () => {
+      if (tabs.active !== tabKey || !element?.contains(document.activeElement)) return;
+      // When the last background tab closes, the strip and its focused Close
+      // button disappear. Keep subsequent shortcuts in this reader's window.
+      const reader = element.parentElement;
+      if (reader) {
+        if (!reader.hasAttribute("tabindex")) reader.tabIndex = -1;
+        reader.focus({ preventScroll: true });
+      }
+    };
+  }, [tabs, tabKey]);
   useLayoutEffect(() => {
     if (tabs.active === tabKey) {
       selected.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
       if (tabs.keyboardFocus === tabKey) selected.current?.focus({ preventScroll: true });
     }
   }, [tabs.active, tabs.keyboardFocus, tabKey]);
-  return <nav className="document-tabs" aria-label="Documents">
+  return <nav ref={strip} className="document-tabs" aria-label="Documents">
     <div className="document-tab-list" role="tablist" aria-label="Open documents">
       {tabs.all.map(tab => {
         const active = tab.key === tabKey;

@@ -177,6 +177,9 @@ try {
   await closeSigned.waitFor({ state: "detached" });
   assert.equal(await page.window.evaluate(() => window.tabPrompts.length), 2);
   await page.window.evaluate(() => window.restoreConfirm());
+  await page.locator(".document-tabs").waitFor({ state: "detached" });
+  assert.equal(await page.evaluate(() => document.activeElement?.isConnected && document.activeElement !== document.body), true,
+    "closing the last background tab lost the active reader's keyboard focus");
 
   // Batch opening keeps picker order, never replaces the current reader, and gives each file its own view.
   const choosing = page.waitForEvent("filechooser");
