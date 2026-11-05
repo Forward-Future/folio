@@ -446,6 +446,80 @@ export function linkHistoryPdf() {
   ]);
 }
 
+async function checkPageExport(app, page, folder, shots) {
+  await app.evaluate(({ BrowserWindow }, pdf) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Destinations.pdf", data: Buffer.from(pdf) }), linkHistoryPdf() + "\n% page export");
+  await page.window.waitForFunction(() => document.title.startsWith("Destinations.pdf"));
+  const toggle = page.getByRole("button", { name: /Toggle sidebar/ });
+  if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
+  await page.getByRole("tab", { name: "Pages", exact: true }).click();
+  const sidebar = page.locator("aside.sidebar");
+  const thumb = n => sidebar.getByRole("button", { name: "Page " + n, exact: true });
+  const picked = () => sidebar.locator('.thumb[aria-pressed="true"]').evaluateAll(els => els.map(el => Number(el.dataset.page)));
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await thumb(1).waitFor();
+  assert.equal(await sidebar.getByRole("button", { name: /export|extract/i }).count(), 0);
+  await sidebar.screenshot({ path: path.join(shots, "export-pages-before.png") });
+  await thumb(3).click();
+  await thumb(1).click({ modifiers: ["Shift"] });
+  assert.deepEqual(await picked(), [1, 2, 3]);
+  await thumb(2).click({ modifiers: [modifier] });
+  assert.deepEqual(await picked(), [1, 3]);
+  const action = page.getByRole("menuitem", { name: "Export 2 selected pages…" });
+  await thumb(1).click({ button: "right" });
+  await action.waitFor();
+  await page.keyboard.press("Escape");
+  assert.ok(await thumb(1).evaluate(el => el === document.activeElement));
+  assert.deepEqual(await picked(), [1, 3]);
+
+  // Right-clicking a different thumbnail targets just that page. An empty selection stays empty.
+  await thumb(2).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Export this page…" }).waitFor();
+  await page.keyboard.press("Escape");
+  await thumb(2).click({ modifiers: [modifier] });
+  assert.deepEqual(await picked(), []);
+  await thumb(3).click({ modifiers: [modifier] });
+  await thumb(1).click({ modifiers: [modifier] });
+  assert.deepEqual(await picked(), [1, 3]);
+  await thumb(1).press("Shift+F10");
+  await action.waitFor();
+  const panel = await sidebar.boundingBox(), popup = await action.boundingBox();
+  await page.window.screenshot({ path: path.join(shots, "export-pages-menu.png"), clip: {
+    x: panel.x, y: panel.y, width: Math.max(panel.width, popup.x + popup.width + 10 - panel.x), height: panel.height,
+  } });
+  const file = path.join(folder, "Selected pages.pdf");
+  await captureDownload(app, file);
+  await action.click();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  const result = await page.evaluate(async bytes => {
+    const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
+    try {
+      const pdf = await task.promise;
+      const destination = async dest => {
+        if (typeof dest === "string") dest = await pdf.getDestination(dest);
+        if (!dest) return null;
+        return typeof dest[0] === "number" ? dest[0] : await pdf.getPageIndex(dest[0]);
+      };
+      const links = await (await pdf.getPage(1)).getAnnotations();
+      const linkAt = x => links.find(link => link.rect[0] === x && link.rect[1] === 1000);
+      return { count: pdf.numPages, retained: await destination(linkAt(200)?.dest),
+        omitted: await destination(linkAt(40)?.dest), outline: await destination((await pdf.getOutline())[0].dest),
+        last: (await (await pdf.getPage(2)).getAnnotations()).some(link => link.action === "GoBack") };
+    } finally { await task.destroy(); }
+  }, Array.from(readFileSync(file)));
+  assert.deepEqual(result, { count: 2, retained: 1, omitted: null, outline: 1, last: true });
+  for (const n of [1, 3]) await sidebar.getByRole("button", { name: "Bookmark page " + n, exact: true }).click();
+  await sidebar.getByRole("button", { name: "Bookmarked", exact: true }).click();
+  await thumb(1).click();
+  await thumb(3).click({ modifiers: ["Shift"] });
+  assert.deepEqual(await picked(), [1, 3], "a filtered range can only export visible bookmarks");
+  await page.getByRole("tab", { name: "Outline", exact: true }).click();
+  assert.equal(await page.getByRole("menuitem").count(), 0);
+  await page.getByRole("button", { name: "Close Destinations.pdf", exact: true }).click();
+  await page.getByRole("tab", { name: "Destinations.pdf", exact: true }).waitFor({ state: "detached" });
+  console.log("ok  selected pages export in document order with remapped links and outline destinations");
+}
+
 async function checkLinkHistory(app, page, shots) {
   const viewport = await page.window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   await page.window.setViewportSize({ width: 1000, height: 800 });
@@ -619,9 +693,27 @@ export async function checkReaderTools(app, page, folder, shots) {
 
   const sidebar = page.getByRole("button", { name: /Toggle sidebar/ });
   if (await sidebar.getAttribute("aria-pressed") !== "true") await sidebar.click();
+  await page.getByRole("tab", { name: "Pages", exact: true }).click();
+  const thumb = n => page.locator(`.thumb[data-page="${n}"]`);
+  await thumb(1).click();
+  await thumb(4).click({ modifiers: [process.platform === "darwin" ? "Meta" : "Control"] });
+  await thumb(1).click({ button: "right" });
+  const selectedSample = path.join(folder, "selected-sample.pdf");
+  await captureDownload(app, selectedSample);
+  await page.getByRole("menuitem", { name: "Export 2 selected pages…" }).click();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  const marks = await page.evaluate(async bytes => {
+    const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
+    try {
+      const pdf = await task.promise;
+      return await Promise.all(Array.from({ length: pdf.numPages }, async (_, n) =>
+        (await (await pdf.getPage(n + 1)).getAnnotations()).map(a => a.subtype)));
+    } finally { await task.destroy(); }
+  }, Array.from(readFileSync(selectedSample)));
+  assert.equal(marks.length, 2);
+  assert.ok(marks[0].includes("Highlight") && marks[0].includes("FreeText") && marks[1].includes("Highlight"));
   await page.getByRole("tab", { name: "Outline" }).click();
   await page.getByRole("button", { name: "Reorder pages" }).click();
-  const thumb = n => page.locator(`.thumb[data-page="${n}"]`);
   await thumb(1).dragTo(thumb(2));
   assert.equal(await thumb(1).getAttribute("aria-label"), "Page 1, position 2");
   await page.getByLabel("Move page 1 to").fill("3");
@@ -672,6 +764,19 @@ export async function checkReaderTools(app, page, folder, shots) {
   await documents.getByRole("tab", { name: "Form.pdf", exact: true }).click();
   assert.equal(await field.inputValue(), "A filled field");
   await page.getByRole("tab", { name: "Pages" }).click();
+  await page.getByRole("button", { name: "Page 1", exact: true }).click({ button: "right" });
+  const selectedForm = path.join(folder, "selected-form.pdf");
+  await captureDownload(app, selectedForm);
+  await page.getByRole("menuitem", { name: "Export this page…" }).click();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  assert.equal(await page.evaluate(async bytes => {
+    const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
+    try {
+      const pdf = await task.promise;
+      return pdf.numPages === 1 && (await (await pdf.getPage(1)).getAnnotations()).find(a => a.fieldName === "Name")?.fieldValue;
+    } finally { await task.destroy(); }
+  }, Array.from(readFileSync(selectedForm))), "A filled field");
+  await documents.getByRole("button", { name: "Close Form.pdf, unsaved changes" }).waitFor();
   await page.getByRole("button", { name: "Reorder pages" }).click();
   await page.getByLabel("Move page 1 to").fill("2");
   await page.getByRole("button", { name: "Move", exact: true }).click();
@@ -680,11 +785,13 @@ export async function checkReaderTools(app, page, folder, shots) {
   await openCopy.click();
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
   await page.window.waitForFunction(() => document.title.startsWith("Form (reordered).pdf"));
+  await documents.getByRole("button", { name: "Close Form.pdf", exact: true }).waitFor();
   await page.getByTitle("Next page").click();
   assert.equal(await page.locator('.page[data-page-number="2"] .textWidgetAnnotation input').inputValue(), "A filled field");
   console.log("ok  the normal Save shortcut and Open reordered copy preserve filled form fields");
   await checkScanSelection(app, page);
   await checkContentEditing(app, page, folder, shots);
   await checkLinkHistory(app, page, shots);
+  await checkPageExport(app, page, folder, shots);
   await checkPenDrawing(app, page, folder);
 }
