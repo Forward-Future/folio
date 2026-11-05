@@ -14,6 +14,7 @@ delete env.ELECTRON_RUN_AS_NODE;
 let app;
 try {
   app = await electron.launch({ executablePath: createRequire(import.meta.url)("electron"), args: [root, "--mute-audio"], env, timeout: 60000 });
+  assert.ok(await app.evaluate(({ app }) => app.commandLine.hasSwitch("mute-audio")));
   const page = readerPage(await app.firstWindow());
   await page.getByRole("button", { name: /Try a sample/ }).waitFor({ timeout: 30000 });
   const results = await page.evaluate(async () => {

@@ -1,27 +1,6 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { Modal } from "./Dialogs";
-import changelog from "../CHANGELOG.md?raw";
-
-/** CHANGELOG.md, bundled at build time so it works offline and always matches this build. */
-interface Release {
-  version: string;
-  items: string[];
-}
-
-// CHANGELOG.md only uses "## version" headings and "- " bullets (wrapped onto indented lines), so a full
-// Markdown parser isn't needed.
-function parse(text: string): Release[] {
-  const releases: Release[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const heading = line.match(/^##\s+(.+)/);
-    if (heading) releases.push({ version: heading[1].trim(), items: [] });
-    const current = releases[releases.length - 1];
-    if (!current || heading) continue;
-    if (line.startsWith("- ")) current.items.push(line.slice(2).trim());
-    else if (line.trim() && current.items.length) current.items[current.items.length - 1] += " " + line.trim();
-  }
-  return releases;
-}
+import { releases, type Release } from "./releaseNotes";
 
 // **bold** and `code` are the only inline styles the changelog uses.
 function inline(text: string): ReactNode {
@@ -31,21 +10,41 @@ function inline(text: string): ReactNode {
     : <Fragment key={i}>{part}</Fragment>);
 }
 
-const RELEASES = parse(changelog);
+const PAGE_SIZE = 5;
 
-export function ChangelogDialog({ onClose }: { onClose: () => void }) {
+function ChangeList({ release }: { release: Release }) {
+  return <ul>{release.items.map((item, i) => <li key={i}>{inline(item)}</li>)}</ul>;
+}
+
+export function ChangelogDialog({ upgradeNotes, onClose }: { upgradeNotes?: Release[]; onClose: () => void }) {
+  const [page, setPage] = useState(0);
+  const pages = Math.ceil(releases.length / PAGE_SIZE);
   return (
     <Modal title="What's new" onClose={onClose}>
       <div className="changelog">
-        {RELEASES.map((r) => (
+        {upgradeNotes ? upgradeNotes.map((r) => (
           <section key={r.version}>
             <h3>Folio {r.version}</h3>
-            <ul>
-              {r.items.map((item, i) => <li key={i}>{inline(item)}</li>)}
-            </ul>
+            <ChangeList release={r} />
           </section>
+        )) : releases.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((r, i) => (
+          <details key={r.version} open={i === 0}>
+            <summary>Folio {r.version}</summary>
+            <ChangeList release={r} />
+          </details>
         ))}
       </div>
+      {upgradeNotes ? <div className="upgrade-footer">
+        <span>Read past changes in Settings → About.</span>
+        <button className="btn primary" autoFocus onClick={onClose}>Done</button>
+      </div> : <footer className="history-footer">
+        <nav aria-label="Changelog pages">
+          <button className="btn ghost" disabled={page === 0} onClick={() => setPage(page - 1)}>Newer releases</button>
+          <span aria-live="polite">Page {page + 1} of {pages}</span>
+          <button className="btn ghost" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>Older releases</button>
+        </nav>
+        <a href="https://github.com/Forward-Future/folio-releases/releases" target="_blank" rel="noreferrer">View releases on GitHub</a>
+      </footer>}
     </Modal>
   );
 }

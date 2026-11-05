@@ -26,6 +26,7 @@ jobs:
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run test:chat-math
+      - run: npm run test:thumbnails
       - run: node --test scripts/test-word-files.cjs scripts/test-network-security.cjs scripts/test-release-build.mjs
       - run: npm run build
       - name: Smoke test (Linux, virtual display)
@@ -34,8 +35,9 @@ jobs:
           # Ubuntu 24.04 restricts the user namespaces Chromium's sandbox needs; installed Folio packages
           # ship an AppArmor profile for this, but the development Electron binary doesn't.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          npx --no-install playwright-core install ffmpeg
           xvfb-run -a node scripts/test-reader-security.mjs
-          xvfb-run -a npm run smoke
+          FOLIO_PRINT_VIDEO=1 xvfb-run -a npm run smoke
       - name: Reader security regressions
         if: runner.os != 'Linux'
         run: node scripts/test-reader-security.mjs

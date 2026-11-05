@@ -6,6 +6,12 @@ assert.deepEqual(parsePages("1-3, 5, 2", 8), [1, 2, 3, 5]);
 for (const value of ["", "0", "1-99", "3-1", "1,", "1.5", "<script>"]) assert.throws(() => parsePages(value, 8));
 const sizes = Array.from({ length: 8 }, () => ({ width: 612, height: 792 }));
 const plan = (pages, settings) => planSheets(pages, sizes, { ...DEFAULT_PRINT, ...settings });
+const mixed = [sizes[0], { width: 792, height: 612 }];
+for (const mode of ["size", "poster"]) {
+  const byPage = planSheets([1, 2], mixed, { ...DEFAULT_PRINT, mode });
+  for (const sheet of byPage) assert.deepEqual([sheet.width, sheet.height],
+    sheet.placements[0].page === 1 ? [612, 792] : [792, 612]);
+}
 assert.equal(plan([1], { sizing: "actual" })[0].placements[0].scale, 1);
 assert.equal(plan([1], { sizing: "custom", scale: 75 })[0].placements[0].scale, .75);
 assert.ok(plan([1], { sizing: "shrink" })[0].placements[0].scale < 1);

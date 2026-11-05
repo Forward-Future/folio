@@ -11,6 +11,7 @@ const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir
 delete env.ELECTRON_RUN_AS_NODE;
 const app = await electron.launch({ executablePath: createRequire(import.meta.url)("electron"), args: [root, "--mute-audio"], env, timeout: 60000 });
 try {
+  assert.ok(await app.evaluate(({ app }) => app.commandLine.hasSwitch("mute-audio")));
   // Intercept every printing window before its handler can call print. No printer or native dialog is invoked.
   await app.evaluate(({ app }) => {
     globalThis.printCalls = []; globalThis.printPdf = null;
@@ -29,23 +30,25 @@ try {
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30000 });
   await page.keyboard.press("ControlOrMeta+p");
   await page.getByRole("dialog", { name: "Print", exact: true }).waitFor();
+  await page.getByRole("tab", { name: "Advanced" }).click();
   await page.getByRole("img", { name: "Preview of sheet 1" }).waitFor();
-  await page.screenshot({ path: path.join(shots, "print-size.png") });
-  assert.equal(await page.getByRole("checkbox", { name: "Choose paper source by PDF page size" }).isDisabled(), true);
-  await page.getByRole("radio", { name: "Pages", exact: true }).check();
+  await page.getByRole("dialog", { name: "Print", exact: true }).screenshot({ path: path.join(shots, "print-size.png") });
+  await page.getByText("Paper and quality", { exact: true }).click();
+  await page.getByText("Printer and copies", { exact: true }).click();
+  await page.getByLabel("Pages to print", { exact: true }).selectOption("range");
   await page.getByRole("textbox", { name: "Page range" }).fill("0");
   await page.getByRole("alert").filter({ hasText: /Pages must/ }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Continue to print…" }).isDisabled(), true);
   await page.getByRole("textbox", { name: "Page range" }).fill("1-3");
   await page.getByRole("textbox", { name: "Page range" }).press("ControlOrMeta+a");
   assert.deepEqual(await page.getByRole("textbox", { name: "Page range" }).evaluate(el => [el.selectionStart, el.selectionEnd]), [0, 3]);
-  await page.getByRole("button", { name: "Multiple", exact: true }).click();
+  await page.getByRole("button", { name: "Pages per sheet", exact: true }).click();
   await page.getByLabel("Pages per sheet").selectOption("2");
   await page.getByRole("checkbox", { name: "Print in grayscale" }).check();
   await page.getByRole("checkbox", { name: /Save ink/ }).check();
   await page.getByLabel("Copies", { exact: true }).fill("2");
   await page.getByRole("img", { name: "Preview of sheet 1" }).waitFor();
-  await page.screenshot({ path: path.join(shots, "print-multiple.png") });
+  await page.getByRole("dialog", { name: "Print", exact: true }).screenshot({ path: path.join(shots, "print-multiple.png") });
   await page.getByRole("button", { name: "Continue to print…" }).click();
   await page.getByRole("status").filter({ hasText: "Printing cancelled." }).waitFor({ timeout: 60000 });
   const captured = await app.evaluate(() => ({ options: globalThis.printCalls[0], pdf: globalThis.printPdf }));
@@ -73,7 +76,7 @@ try {
   await pdf.loadingTask.destroy();
   await page.getByRole("button", { name: "Booklet", exact: true }).click();
   await page.getByRole("img", { name: "Preview of sheet 1" }).waitFor();
-  await page.screenshot({ path: path.join(shots, "print-booklet.png") });
+  await page.getByRole("dialog", { name: "Print", exact: true }).screenshot({ path: path.join(shots, "print-booklet.png") });
   await checkOutput("booklet", 2, "shortEdge");
   await page.getByRole("radio", { name: "Portrait", exact: true }).check();
   await page.getByRole("img", { name: "Preview of sheet 1" }).waitFor();
@@ -97,22 +100,32 @@ try {
   await page.getByRole("alert").filter({ hasText: /Overlap must/ }).waitFor();
   await page.getByLabel("Poster overlap", { exact: true }).fill("0.25");
   await page.getByRole("img", { name: "Preview of sheet 1" }).waitFor();
-  await page.screenshot({ path: path.join(shots, "print-poster.png") });
+  await page.getByRole("dialog", { name: "Print", exact: true }).screenshot({ path: path.join(shots, "print-poster.png") });
   await checkOutput("poster", 4, "simplex");
   assert.deepEqual(await app.evaluate(() => globalThis.printCalls.at(-1).dpi), { horizontal: 600, vertical: 600 });
   const callCount = await app.evaluate(() => globalThis.printCalls.length);
+  // Hold the first encoding in flight so even a fast runner cancels before native handoff.
+  await page.evaluate(() => {
+    const original = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.toBlob = function (...args) {
+      HTMLCanvasElement.prototype.toBlob = original;
+      window.finishPrintEncoding = () => original.apply(this, args);
+    };
+  });
   await page.getByRole("button", { name: "Continue to print…" }).click();
+  await page.waitForFunction(() => typeof window.finishPrintEncoding === "function");
   await page.getByRole("button", { name: "Cancel preparation", exact: true }).click();
+  await page.evaluate(() => { window.finishPrintEncoding(); delete window.finishPrintEncoding; });
   await page.waitForFunction(() => !document.querySelector(".print-printer")?.disabled, null, { timeout: 30000 });
   assert.equal(await app.evaluate(() => globalThis.printCalls.length), callCount, "Cancelled preparation reached the print handoff");
   await page.getByRole("button", { name: "Next sheet", exact: true }).click();
   await page.getByRole("img", { name: "Preview of sheet 2" }).waitFor();
-  await page.screenshot({ path: path.join(shots, "print-poster-tile-2.png") });
+  await page.getByRole("dialog", { name: "Print", exact: true }).screenshot({ path: path.join(shots, "print-poster-tile-2.png") });
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   assert.equal(await page.getByRole("dialog", { name: "Print", exact: true }).count(), 0);
   await page.keyboard.press("ControlOrMeta+p");
-  await page.getByRole("img", { name: "Preview of sheet 1" }).waitFor();
-  const continueButton = page.getByRole("button", { name: "Continue to print…" });
+  await page.getByRole("img", { name: "Preview of page 1" }).waitFor();
+  const continueButton = page.getByRole("button", { name: "Print…", exact: true });
   await continueButton.focus(); await page.keyboard.press("Tab");
   assert.equal(await page.getByRole("button", { name: "Close", exact: true }).evaluate(el => document.activeElement === el), true);
   await page.keyboard.press("Escape");

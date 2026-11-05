@@ -35,9 +35,13 @@ import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
 import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
 import { SignatureDialog } from "./SignatureDialog";
+import { ContentEditor, type ContentEditorHandle, type NextSelection } from "./ContentEditor";
+import { VersionHistoryPanel } from "./VersionHistoryPanel";
+import { saveVersion, type PdfChange } from "./versionHistory";
 import { SettingsDialog } from "./SettingsDialog";
 import { ChangelogDialog } from "./ChangelogDialog";
 import { PrintDialog } from "./PrintDialog";
+import type { Release } from "./releaseNotes";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
 import { drawShapes, type Shape } from "./shapes";
@@ -92,6 +96,17 @@ interface OpenDoc {
   pdf: PDFDocumentProxy;
   /** Used only in memory when reopening an annotated snapshot for page reordering. */
   password?: string;
+  /** Original library entry while content edits are held in memory. */
+  sourceId?: string;
+  historyAllowed: boolean;
+  edits?: { original?: Blob; changes: PdfChange[] };
+}
+
+function changesForCopy(doc: OpenDoc, annotated: boolean, order?: number[]) {
+  const changes = [...(doc.edits?.changes ?? [])];
+  if (annotated && !changes.some(change => change.kind === "annotations")) changes.push({ kind: "annotations" });
+  if (order) changes.push({ kind: "pages", order });
+  return changes;
 }
 
 interface Pending {
@@ -113,7 +128,7 @@ function saveBlob(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: number }) {
+export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs; tabKey: number; upgradeNotes: Release[] }) {
   const headerRef = useRef<HTMLElement>(null);
   const active = useSyncExternalStore(tabs.subscribe, () => tabs.active === tabKey);
   const multipleTabs = useSyncExternalStore(tabs.subscribe, () => tabs.all.length > 1);
@@ -132,6 +147,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   const markupRef = useRef<MarkupController | null>(null);
   const persistRef = useRef(false);
   const exporting = useRef<PDFDocumentProxy | null>(null);
+  const savingCopy = useRef(false);
 
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const [loading, setLoading] = useState(false);
@@ -166,15 +182,20 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   colorsRef.current = colors;
   const pageRef = useRef(1);
   const [dirty, setDirty] = useState(false);
+  const [contentEditing, setContentEditing] = useState(false);
+  const contentRef = useRef<ContentEditorHandle>(null);
+  const nextSelection = useRef<NextSelection | null>(null);
+  const [editorDirty, setEditorDirty] = useState(false);
   const [pageDraft, setPageDraft] = useState<{ order: number[]; copy?: Uint8Array } | null>(null);
   const pageOrder = pageDraft?.order.some((n, i) => n !== i + 1) ? pageDraft.order : undefined;
-  const unsaved = dirty || (!!pageOrder && !pageDraft?.copy);
+  const unsaved = !!doc?.sourceId || dirty || editorDirty || (!!pageOrder && !pageDraft?.copy);
   const [focus, setFocus] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [dialog, setDialog] = useState<"info" | "shortcuts" | "about" | "url" | "settings" | "changelog" | null>(null);
-  const [printCopy, setPrintCopy] = useState<{ pdf: PDFDocumentProxy; page: number; name: string } | null>(null);
+  const [printCopy, setPrintCopy] = useState<{ pdf: PDFDocumentProxy; bytes: Uint8Array; page: number; name: string } | null>(null);
   const preparingPrint = useRef(false);
   useEffect(() => () => { if (printCopy) void printCopy.pdf.loadingTask.destroy(); }, [printCopy]);
+  const [dialog, setDialog] = useState<"info" | "shortcuts" | "about" | "url" | "settings" | "changelog" | "upgrade" | null>(
+    upgradeNotes.length ? "upgrade" : null);
   // A pasted or dropped link waits in Open from URL, so the user sees where it goes before Folio contacts it.
   const [linkDraft, setLinkDraft] = useState("");
   const openUrlDialog = (link = "") => { setLinkDraft(link); setDialog("url"); };
@@ -195,6 +216,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   const [imageMenu, setImageMenu] = useState<{ target: ImageTarget; x: number; y: number } | null>(null);
   const [imageView, setImageView] = useState<ImageTarget | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [aiContext, setAiContext] = useState<AiContext | null>(null);
 
   useLayoutEffect(() => {
@@ -205,7 +227,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
 
   useEffect(() => {
     setSigning(false); setSignatureTargets([]); setSignatureDismissed(false);
-    if (!doc) return;
+    if (!doc || contentEditing) return;
     let cancelled = false;
     const timer = setTimeout(() => {
       void detectSignatureTargets(doc.pdf, page).then(targets => {
@@ -213,7 +235,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
       }).catch(() => {});
     }, 350);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [doc, page]);
+  }, [doc, page, contentEditing]);
 
   docRef.current = doc;
   preferencesRef.current = { sidebar, spread };
@@ -334,7 +356,9 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   }, []);
 
   const openBytes = useCallback(
-    async (name: string, data: Uint8Array, password?: string, signal = beginOpen()) => {
+    async (name: string, data: Uint8Array, password?: string, signal = beginOpen(), initialPage?: number,
+      edit?: { doc: OpenDoc; change: PdfChange }, exported?: OpenDoc, exportedOrder?: number[]) => {
+      const revision = edit?.doc;
       const viewer = viewerRef.current!;
       setLoading(true);
       setError(null);
@@ -344,12 +368,19 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         unattached = pdf;
         const id = await contentKey(data);
         signal.throwIfAborted();
-        const existing = await getRecent(id);
+        const existing = revision ? undefined : await getRecent(id);
+        const historyAllowed = !password && data.byteLength <= MAX_RECENT_FILE_BYTES && (revision ? revision.historyAllowed :
+          await pdf.getMetadata().then(({ info }) => !(info as { EncryptFilterName?: string }).EncryptFilterName).catch(() => false));
+        const edits = edit && { original: edit.doc.edits?.original ?? (historyAllowed ? pdfBlob(await edit.doc.pdf.getData()) : undefined),
+          changes: [...changesForCopy(edit.doc, edit.doc.pdf.annotationStorage.size > 0), edit.change] };
         signal.throwIfAborted();
-        if (!tabs.opened(tabKey, id, name)) return;
-        const saved = readView(id);
-        restoreRef.current = saved;
-        lastPageRef.current = Math.min(saved?.page ?? existing?.lastPage ?? 1, pdf.numPages);
+        const previous = revision ?? exported;
+        if (previous && docRef.current !== previous) return false;
+        if (!revision && !tabs.opened(tabKey, id, name)) return false;
+        const saved = previous ? readView(previous.id) ?? { page: pageRef.current, scale: viewer.currentScaleValue,
+          rotation: viewer.pagesRotation, ...preferencesRef.current } : readView(id);
+        restoreRef.current = initialPage && !previous ? null : saved;
+        lastPageRef.current = Math.min(initialPage ?? saved?.page ?? existing?.lastPage ?? 1, pdf.numPages);
         pageRef.current = lastPageRef.current;
         if (saved) {
           setSidebar(saved.sidebar);
@@ -359,11 +390,16 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         }
 
         const prev = docRef.current;
-        const next: OpenDoc = { id, name, size: data.byteLength, pdf, password };
+        const next: OpenDoc = { id, name, size: data.byteLength, pdf, password, sourceId: revision?.sourceId ?? revision?.id, historyAllowed, edits };
         docRef.current = next;
         // Password-protected documents aren't stored by Folio (same rule as Recent).
-        persistRef.current = !password;
-        void markupRef.current!.load(id, !password);
+        const reading = previous ? markupRef.current!.state : undefined;
+        if (reading?.bookmarkedPages && exportedOrder) {
+          const bookmarks = new Set(reading.bookmarkedPages);
+          reading.bookmarkedPages = exportedOrder.flatMap((n, i) => bookmarks.has(n) ? [i + 1] : []);
+        }
+        persistRef.current = !password && !revision;
+        void markupRef.current!.load(id, persistRef.current, reading);
         setNoteBox(null);
         setPinned(null);
         setAiContext(null);
@@ -381,11 +417,13 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         };
 
         setDoc(next);
-        setPageDraft(null);
+        if (!revision) { nextSelection.current = null; setContentEditing(false); }
+        setEditorDirty(false);
+        setPageDraft(draft => revision && draft ? { order: draft.order } : null);
         setNumPages(pdf.numPages);
         setPage(lastPageRef.current);
         setPageInput(String(lastPageRef.current));
-        setRotation(0);
+        setRotation(revision ? saved?.rotation ?? 0 : 0);
         setDirty(false);
         setTool("select");
         setPending(null);
@@ -396,7 +434,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         setLoading(false);
         // Password-protected documents stay out of Recent: it would keep their bytes and a page-1
         // thumbnail unprotected on disk. Very large files are skipped too — see MAX_RECENT_FILE_BYTES.
-        if (!password && data.byteLength <= MAX_RECENT_FILE_BYTES) void (async () => {
+        if (!revision && !password && data.byteLength <= MAX_RECENT_FILE_BYTES) void (async () => {
           const thumb = existing?.thumb || (await thumbnailDataUrl(pdf).catch(() => ""));
           if (signal.aborted) return;
           await saveRecent({
@@ -410,6 +448,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
             data: pdfBlob(data),
           });
         })().catch(() => {});
+        return true;
       } catch (err) {
         if (signal.aborted) return;
         const e = err as { name?: string; code?: number; message?: string };
@@ -552,18 +591,25 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
     if (v.pdfDocument) v.pagesRotation = (v.pagesRotation + 90) % 360;
   };
 
-  const chooseTool = (next: Tool) => {
+  const chooseTool = async (next: Tool, editContent = false) => {
+    if (contentRef.current && !(await contentRef.current.finish())) return false;
     const v = viewerRef.current!;
-    if (!v.pdfDocument) return;
+    if (!v.pdfDocument) return false;
     try {
-      v.annotationEditorMode = { mode: TOOL_MODES[next] };
+      const owner = v.pdfDocument;
+      if (next !== "select") await v.firstPagePromise;
+      if (v.pdfDocument !== owner) return false;
+      const current = Number(v.annotationEditorMode);
+      if (current !== TOOL_MODES[next] && !(next === "select" && current === AnnotationEditorType.DISABLE)) {
+        v.annotationEditorMode = { mode: TOOL_MODES[next] };
+      }
+      nextSelection.current = null;
       setPinned(null);
-      setTool(next);
-    } catch {
-      flash("Annotations aren't supported for this document");
-    }
+      setTool(next); setContentEditing(editContent); return true;
+    } catch { flash("Annotations aren’t supported for this document"); return false; }
   };
-  const startSigning = () => { chooseTool("select"); setSigning(true); };
+  const leaveEditMode = () => chooseTool("select");
+  const startSigning = async () => { if (await chooseTool("select")) setSigning(true); };
 
   useEffect(() => {
     if (!doc || tool !== "ink" || drawTool === "Pen") return;
@@ -581,7 +627,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   };
 
   // ── Highlights and notes ────────────────────────────────────────────
-  const liveSelection = useTextSelection(container, !!doc && tool === "select" && !signing && !noteBox, doc?.pdf);
+  const liveSelection = useTextSelection(container, !!doc && !contentEditing && tool === "select" && !signing && !noteBox, doc?.pdf);
   // Typing in the popover's note field clears the page selection, so the popover keeps its own copy.
   const selection = pinned ?? liveSelection;
   const highlightColor = colors.highlight ?? HIGHLIGHTS[0].hex;
@@ -621,7 +667,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
       if (toolRef.current !== "select" || e.button !== 0) return;
       const current = document.getSelection();
       if (current && !current.isCollapsed) return;
-      if ((e.target as HTMLElement).closest("a, .annotationCommentButton")) return;
+      if ((e.target as HTMLElement).closest("a, .annotationCommentButton, .folio-content-layer")) return;
       const hit = markupRef.current?.markAt(e.clientX, e.clientY);
       if (!hit) return setHighlightMenu(null);
       const stage = container.parentElement!.getBoundingClientRect();
@@ -645,6 +691,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
     if (!container) return;
     const onClick = (e: MouseEvent) => {
       setImageMenu(null);
+      if ((e.target as Element).closest(".folio-content-layer")) return;
       if (toolRef.current !== "select" || e.button !== 0) return;
       const current = document.getSelection();
       if (current && !current.isCollapsed) return;
@@ -694,6 +741,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   const askAbout = (text: string, pageNumber: number) => {
     setAiContext({ text, page: pageNumber });
     setAiOpen(true);
+    setHistoryOpen(false);
     document.getSelection()?.removeAllRanges();
   };
 
@@ -741,7 +789,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
     return () => window.removeEventListener("pagehide", flush);
   }, []);
 
-  const currentBytes = async () => {
+  const currentBytes = async (doc = docRef.current, order = pageOrder) => {
     if (!doc || exporting.current === doc.pdf) return null;
     exporting.current = doc.pdf;
     const signal = opening.current!.signal;
@@ -757,7 +805,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         keys.push(key);
       }
       const annotated = storage.size > 0;
-      if (pageOrder) return { bytes: await reorderPdf(doc.pdf, pageOrder, signal, doc.password), annotated };
+      if (order?.length) return { bytes: await reorderPdf(doc.pdf, order, signal, doc.password), annotated };
       return { bytes: annotated ? await doc.pdf.saveDocument() : await doc.pdf.getData(), annotated };
     } finally {
       for (const key of keys) storage.remove(key);
@@ -788,51 +836,70 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
   };
 
   const download = async () => {
+    if (contentRef.current && !(await contentRef.current.finish())) return;
+    const doc = docRef.current;
+    if (!doc || savingCopy.current) return;
+    savingCopy.current = true;
     try {
       const copy = await currentBytes();
       if (!copy || docRef.current !== doc) return;
-      saveBytes(copy.bytes);
+      const name = doc.sourceId ? copyName.replace(/\.pdf$/i, "") + " (edited).pdf" : copyName;
+      const blob = pdfBlob(copy.bytes);
+      saveBlob(blob, /\.pdf$/i.test(name) ? name : name + ".pdf");
+      const changes = changesForCopy(doc, copy.annotated, pageOrder);
+      let historyMessage = "";
+      if (changes.length && doc.historyAllowed && blob.size <= MAX_RECENT_FILE_BYTES) {
+        try {
+          const original = doc.edits?.original ?? pdfBlob(await doc.pdf.getData());
+          await saveVersion({ id: doc.sourceId ?? doc.id, name: doc.name, data: original },
+            { id: await contentKey(copy.bytes), name, data: blob }, changes);
+        } catch { historyMessage = "Copy exported. Couldn’t save its version history on this device."; }
+      } else if (changes.length) {
+        historyMessage = "Copy exported. History is available for unencrypted PDFs up to 50 MB.";
+      }
+      if (docRef.current !== doc) return;
       setError(null);
-      if (pageOrder) {
+      if (doc.sourceId) {
+        await openBytes(name, copy.bytes, undefined, beginOpen(), pageOrder ? pageOrder.indexOf(pageRef.current) + 1 : pageRef.current, undefined, doc, pageOrder);
+      } else if (pageOrder) {
         setPageDraft(draft => draft?.order === pageOrder ? { order: pageOrder, copy: copy.bytes } : draft);
         flash("Downloading reordered copy");
       } else {
         flash(copy.annotated ? "Saved a copy with your highlights and notes" : "Download started");
       }
+      if (historyMessage) flash(historyMessage);
     } catch {
       if (docRef.current === doc) {
         if (dirty) setDirty(true);
         setError("Couldn't save a copy of this document.");
       }
-    }
+    } finally { savingCopy.current = false; }
   };
 
   const print = async () => {
     if (printCopy || preparingPrint.current) return;
     preparingPrint.current = true;
-    // pdf.js marks the document as saved once it has written the bytes, but printing saves nothing.
-    let copy: Awaited<ReturnType<typeof currentBytes>>;
     try {
-      copy = await currentBytes();
+      if (contentRef.current && !(await contentRef.current.finish())) return;
+      const source = docRef.current;
+      if (!source) return;
+      // Printing writes a snapshot, so preserve the unsaved marker after pdf.js serializes the edits.
+      const copy = await currentBytes(source).finally(() => {
+        if (dirty && docRef.current === source) setDirty(true);
+      });
+      if (!copy || docRef.current !== source) return;
+      if (!window.folioDesktop) { printPdfBytes(copy.bytes); return; }
+      const snapshot = await loadPdf(copy.bytes, opening.current!.signal, source.password);
+      if (docRef.current !== source) { void snapshot.loadingTask.destroy(); return; }
+      setPrintCopy({ pdf: snapshot, bytes: copy.bytes, page: pageOrder ? pageOrder.indexOf(page) + 1 : page, name: source.name });
     } catch {
       if (docRef.current === doc) setError("Couldn't print this document.");
-      return;
     } finally {
       preparingPrint.current = false;
-      if (dirty && docRef.current === doc) setDirty(true);
     }
-    if (!copy || docRef.current !== doc) return;
-    const { bytes } = copy;
-    if (window.folioDesktop && doc) {
-      preparingPrint.current = true;
-      try {
-        const snapshot = await loadPdf(bytes, opening.current!.signal, doc.password);
-        if (docRef.current !== doc) { void snapshot.loadingTask.destroy(); return; }
-        setPrintCopy({ pdf: snapshot, page: pageOrder ? pageOrder.indexOf(page) + 1 : page, name: doc.name });
-      } catch { if (docRef.current === doc) setError("Couldn't prepare this document for printing."); }
-      finally { preparingPrint.current = false; }
-      return;
-    }
+  };
+
+  const printPdfBytes = (bytes: Uint8Array) => {
     const url = URL.createObjectURL(pdfBlob(bytes));
     const frame = document.createElement("iframe");
     frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
@@ -920,6 +987,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
 
   const toggleFocus = async () => {
     const next = !focus;
+    if (next && contentEditing) leaveEditMode();
     setFocus(next);
     try {
       if (next && !document.fullscreenElement) await document.documentElement.requestFullscreen();
@@ -1020,7 +1088,8 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         // Each dialog's Modal closes itself on Escape (the changelog goes back to Settings); closing here too would override it.
         else if (dialog) return;
         else if (searchOpen) setSearchOpen(false);
-        else if (tool !== "select") chooseTool("select");
+        else if (contentRef.current?.deselect()) return;
+        else if (contentEditing || tool !== "select") void leaveEditMode();
         else if (focus) toggleFocus();
       } else if (e.key === "f" || e.key === "F") {
         toggleFocus();
@@ -1032,7 +1101,10 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         rotate();
       } else {
         const t = TOOLS.find((t) => t.key.toLowerCase() === e.key.toLowerCase());
-        if (t) chooseTool(t.id);
+        if (t && !dialog && !pending && !imageView) {
+          if (focus && t.id !== "select") void toggleFocus();
+          chooseTool(t.id);
+        }
         else if (e.key === "Home") goTo(1);
         else if (e.key === "End") goTo(numPages);
       }
@@ -1123,14 +1195,13 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
     busRef.current!.dispatch("findbarclose", { source: null });
   };
 
-  const isEditing = tool !== "select";
-
   return (
     <div
       className="app"
       data-focus={focus || undefined}
       data-sidebar={(sidebar && !!doc && !focus) || undefined}
       data-night={night || undefined}
+      data-content-edit={contentEditing || undefined}
       data-tool={tool}
     >
       <header className="topbar" ref={headerRef}>
@@ -1156,9 +1227,9 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
               {TOOLS.map((t) => (
                 <button
                   key={t.id}
-                  className={tool === t.id ? "on" : ""}
+                  className={!contentEditing && tool === t.id ? "on" : ""}
                   aria-label={t.label}
-                  aria-pressed={tool === t.id}
+                  aria-pressed={!contentEditing && tool === t.id}
                   onClick={() => chooseTool(t.id)}
                   title={`${t.id === "highlight" ? "Automatically highlight selected text" : t.label} (${t.key})`}
                 >
@@ -1166,7 +1237,13 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
                   <span>{t.label}</span>
                 </button>
               ))}
-              <button onClick={startSigning} title="Add a signature"><Icon name="signature" size={16} /><span>Sign</span></button>
+              <button onClick={startSigning} aria-label="Sign" title="Add a signature"><Icon name="signature" size={16} /><span>Sign</span></button>
+              <button className={contentEditing ? "on edit-mode-toggle" : "edit-mode-toggle"} aria-pressed={contentEditing}
+                aria-label={contentEditing ? "Exit edit mode" : "Edit mode"} title={contentEditing ? "Exit edit mode" : "Edit existing text and images"}
+                onClick={() => contentEditing ? leaveEditMode() : chooseTool("select", true)}>
+                <Icon name={contentEditing ? "check" : "edit"} size={16} /><span>{contentEditing ? "Exit edit mode" : "Edit mode"}</span>
+              </button>
+              {(doc.sourceId || editorDirty) && <button aria-label="Save copy" title="Save edited copy" onClick={download}><Icon name="download" size={16} /><span>Save copy</span></button>}
             </div>
           )}
         </div>
@@ -1174,7 +1251,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         <div className="topbar-right">
           {doc && (
             <>
-              <IconButton icon="sparkle" label="Ask AI" active={aiOpen} onClick={() => setAiOpen(!aiOpen)} />
+              <IconButton icon="sparkle" label="Ask AI" active={aiOpen} onClick={() => { setHistoryOpen(false); setAiOpen(!aiOpen); }} />
               <IconButton icon="search" label={keys("Search (Ctrl+F)")} active={searchOpen} onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))} />
             </>
           )}
@@ -1186,6 +1263,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
                     { kind: "action", icon: "close", label: "Close document", shortcut: keys("Ctrl W"), onSelect: () => void tabs.close(tabKey) },
                     { kind: "divider" },
                     { kind: "action", icon: "download", label: "Save a copy", shortcut: keys("Ctrl S"), onSelect: download },
+                    { kind: "action", icon: "history", label: "Version history", onSelect: () => { setAiOpen(false); setHistoryOpen(true); } },
                     { kind: "action", icon: "print", label: "Print", shortcut: keys("Ctrl P"), onSelect: print },
                     { kind: "action", icon: "info", label: "Document info", onSelect: () => setDialog("info") },
                     { kind: "divider" },
@@ -1246,6 +1324,15 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
             }}>
             <div ref={innerRef} className="pdfViewer" />
           </div>
+          {contentEditing && doc && <ContentEditor key={doc.pdf.loadingTask.docId} ref={contentRef} nextSelection={nextSelection} pdf={doc.pdf} viewer={viewerRef.current!} bus={busRef.current!}
+            onDirty={setEditorDirty} snapshot={async () => {
+              if (doc.password || await doc.pdf.getPermissions() || (await doc.pdf.getSignatures())?.length) throw new Error("Editing requires an unsigned, unencrypted PDF.");
+              try {
+                const copy = await currentBytes(doc, []);
+                if (!copy || docRef.current !== doc) throw new Error("The document changed. Try again.");
+                return copy.bytes;
+              } finally { if (dirty && docRef.current === doc) setDirty(true); }
+            }} apply={async (bytes, change) => docRef.current === doc && !!await openBytes(doc.name, bytes, undefined, opening.current!.signal, undefined, { doc, change })} />}
           {doc && <div className="page-text-status" role="status">{textStatus}</div>}
 
           {doc && searchOpen && (
@@ -1255,7 +1342,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
             </>
           )}
 
-          {doc && isEditing && PALETTE[tool] && (
+          {doc && !contentEditing && PALETTE[tool] && (
             <div className="color-pill" role="toolbar" aria-label="Annotation options">
               {tool === "ink" && (
                 <select className="draw-tool" aria-label="Drawing tool" value={drawTool}
@@ -1386,12 +1473,18 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
           )}
         </main>
 
+        {doc && historyOpen && !focus && <VersionHistoryPanel key={doc.sourceId ?? doc.id} id={doc.sourceId ?? doc.id}
+          allowed={doc.historyAllowed} active={active} pending={changesForCopy(doc, dirty || markup.marks.length > 0, pageOrder)}
+          canOpen={id => !tabs.all.some(t => t.contentId === id && t.dirty)}
+          onOpen={(v, blob) => tabs.open([{ kind: "blob", name: v.name, blob }])}
+          onDownload={(v, blob) => saveBlob(blob, v.name.replace(/\.pdf$/i, "") + ` (v${v.number}).pdf`)}
+          onClose={() => setHistoryOpen(false)} />}
         {doc && aiOpen && !focus && (
           <AiPanel
-            key={doc.id}
+            key={doc.sourceId ?? doc.id}
             pdf={doc.pdf}
-            docId={doc.id}
-            persist={persistRef.current}
+            docId={doc.sourceId ?? doc.id}
+            persist={!doc.password}
             docName={doc.name}
             context={aiContext}
             onClearContext={() => setAiContext(null)}
@@ -1424,7 +1517,8 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         />
       )}
       {dialog === "info" && doc && <InfoDialog key={doc.pdf.loadingTask.docId} pdf={doc.pdf} name={doc.name} size={doc.size} onClose={() => setDialog(null)} />}
-      {printCopy && <PrintDialog pdf={printCopy.pdf} currentPage={printCopy.page} name={printCopy.name} onClose={() => setPrintCopy(null)} />}
+      {printCopy && <PrintDialog pdf={printCopy.pdf} currentPage={printCopy.page} name={printCopy.name}
+        onPrint={() => { printPdfBytes(printCopy.bytes); setPrintCopy(null); }} onClose={() => setPrintCopy(null)} />}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} />}
       {dialog === "settings" && <SettingsDialog theme={theme} onTheme={setThemeTo} night={night} onNight={setNightTo}
@@ -1436,6 +1530,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
         onOpenChangelog={() => setDialog("changelog")} onClose={() => setDialog(null)} />}
       {/* Closing goes back to Settings, where the changelog is opened from. */}
       {dialog === "changelog" && <ChangelogDialog onClose={() => setDialog("settings")} />}
+      {dialog === "upgrade" && <ChangelogDialog upgradeNotes={upgradeNotes} onClose={() => setDialog(null)} />}
       {doc && imageView && <ImageViewer pdf={doc.pdf} target={imageView} onClose={() => setImageView(null)} />}
       {dialog === "url" && <OpenUrlDialog key={linkDraft} initial={linkDraft} onClose={() => setDialog(null)} onSubmit={(url) => { setDialog(null); tabs.open([{ kind: "url", name: new URL(url).hostname, url }]); }} />}
       {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}
@@ -1443,7 +1538,7 @@ export default function App({ tabs, tabKey }: { tabs: DocumentTabs; tabKey: numb
           await placeSignature(viewerRef.current!, doc.pdf, page, signature, rect);
           setDirty(true); setSignatureDismissed(true); flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
         }} />}
-      {doc && !signing && signatureTargets.length > 0 && !signatureDismissed && <div className="signature-suggestion" role="status">
+      {doc && !contentEditing && !signing && signatureTargets.length > 0 && !signatureDismissed && <div className="signature-suggestion" role="status">
         <span>{signatureTargets[0].kind === "field" ? "Signature field detected" : "Possible signature area"} on page {page}</span>
         <button className="btn primary" onClick={startSigning}>Review signature</button>
         <button className="pill-btn" aria-label="Dismiss signature suggestion" onClick={() => setSignatureDismissed(true)}><Icon name="close" size={14} /></button>

@@ -2,7 +2,7 @@ import type { PDFDocumentProxy } from "./pdf";
 import { MAX_PRINT_PIXELS, printPixels, type PrintSettings, type PrintSheet } from "./printLayout";
 
 export async function renderPrintSheet(pdf: PDFDocumentProxy, sheet: PrintSheet, settings: PrintSettings,
-  dpi: number, signal: AbortSignal): Promise<HTMLCanvasElement> {
+  dpi: number, signal: AbortSignal, jobLandscape?: boolean): Promise<HTMLCanvasElement> {
   signal.throwIfAborted();
   const pixels = printPixels(sheet, dpi);
   if (!(dpi > 0) || !Number.isFinite(pixels.width * pixels.height) || pixels.width * pixels.height > MAX_PRINT_PIXELS) {
@@ -10,12 +10,16 @@ export async function renderPrintSheet(pdf: PDFDocumentProxy, sheet: PrintSheet,
   }
   const canvas = document.createElement("canvas");
   const factor = dpi / 72;
-  canvas.width = pixels.width;
-  canvas.height = pixels.height;
+  // Native print jobs have one paper orientation. Turn only the differently oriented sheets
+  // for the driver; the preview still shows each one the way the reader holds it.
+  const rotate = jobLandscape !== undefined && jobLandscape !== (sheet.width > sheet.height);
+  canvas.width = rotate ? pixels.height : pixels.width;
+  canvas.height = rotate ? pixels.width : pixels.height;
   const ctx = canvas.getContext("2d");
   if (!ctx) { canvas.width = canvas.height = 0; throw new Error("Couldn't allocate the print sheet. Close other documents or choose a lower DPI."); }
   try {
     ctx.fillStyle = "white"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (rotate) { ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2); }
     for (const item of sheet.placements) {
       signal.throwIfAborted();
       const page = await pdf.getPage(item.page);
@@ -24,8 +28,8 @@ export async function renderPrintSheet(pdf: PDFDocumentProxy, sheet: PrintSheet,
       const viewport = page.getViewport({ scale: item.scale * factor });
       const left = Math.max(0, Math.floor(item.clip.x * factor));
       const top = Math.max(0, Math.floor(item.clip.y * factor));
-      const right = Math.min(canvas.width, Math.ceil((item.clip.x + item.clip.width) * factor));
-      const bottom = Math.min(canvas.height, Math.ceil((item.clip.y + item.clip.height) * factor));
+      const right = Math.min(pixels.width, Math.ceil((item.clip.x + item.clip.width) * factor));
+      const bottom = Math.min(pixels.height, Math.ceil((item.clip.y + item.clip.height) * factor));
       const source = document.createElement("canvas");
       source.width = right - left; source.height = bottom - top;
       try {

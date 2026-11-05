@@ -50,13 +50,19 @@ export function planSheets(pages: number[], sizes: PageSize[], settings: PrintSe
   if (!pages.length) throw new Error("Select at least one page.");
   if (!Number.isFinite(settings.scale) || settings.scale < 10 || settings.scale > 400) throw new Error("Scale must be between 10% and 400%.");
   const base = PAPER[settings.paper];
-  const first = sizes[pages[0] - 1];
-  const landscape = settings.orientation === "landscape" || (settings.orientation === "auto" &&
-    (settings.mode === "booklet" || settings.mode === "multiple" || first.width > first.height));
-  const width = landscape ? base.height : base.width, height = landscape ? base.width : base.height;
-  const margin = 18, availableW = width - 2 * margin, availableH = height - 2 * margin;
+  const margin = 18;
   const sheets: PrintSheet[] = [];
-  const sheet = () => { const value = { width, height, placements: [] as Placement[] }; sheets.push(value); return value; };
+  const sheetSize = (page: number) => {
+    const size = sizes[page - 1];
+    const landscape = settings.orientation === "landscape" || (settings.orientation === "auto" &&
+      (settings.mode === "booklet" || settings.mode === "multiple" || size.width > size.height));
+    return landscape ? { width: base.height, height: base.width } : base;
+  };
+  const sheet = (page: number) => {
+    if (sheets.length >= 100) throw new Error("Print up to 100 sheets at a time. Select a smaller page range.");
+    const value: PrintSheet = { ...sheetSize(page), placements: [] };
+    sheets.push(value); return value;
+  };
   const place = (target: PrintSheet, page: number, x: number, y: number, w: number, h: number, sizing = "fit") => {
     const size = sizes[page - 1];
     const fit = Math.min(w / size.width, h / size.height);
@@ -70,7 +76,7 @@ export function planSheets(pages: number[], sizes: PageSize[], settings: PrintSe
     while (padded.length % 4) padded.push(null);
     for (let i = 0; i < padded.length / 4; i++) {
       for (const pair of [[padded[padded.length - 1 - i * 2], padded[i * 2]], [padded[i * 2 + 1], padded[padded.length - 2 - i * 2]]]) {
-        const target = sheet();
+        const target = sheet(pages[0]), availableW = target.width - 2 * margin, availableH = target.height - 2 * margin;
         pair.forEach((page, side) => { if (page) place(target, page, margin + side * availableW / 2, margin, availableW / 2, availableH); });
       }
     }
@@ -78,27 +84,31 @@ export function planSheets(pages: number[], sizes: PageSize[], settings: PrintSe
     const grids: Record<number, [number, number]> = { 2: [2, 1], 4: [2, 2], 6: [3, 2], 9: [3, 3], 16: [4, 4] };
     const [cols, rows] = grids[settings.perSheet] ?? grids[2];
     pages.forEach((page, i) => {
-      const slot = i % (cols * rows), target = slot === 0 ? sheet() : sheets[sheets.length - 1];
+      const slot = i % (cols * rows), target = slot === 0 ? sheet(page) : sheets[sheets.length - 1];
+      const availableW = target.width - 2 * margin, availableH = target.height - 2 * margin;
       place(target, page, margin + slot % cols * availableW / cols, margin + Math.floor(slot / cols) * availableH / rows,
         availableW / cols, availableH / rows);
     });
   } else if (settings.mode === "poster") {
     const overlap = settings.overlapPoints;
-    if (!Number.isFinite(overlap) || overlap < 0 || overlap >= Math.min(availableW, availableH)) throw new Error("Overlap must be nonnegative and smaller than the printable width and height.");
-    const stepX = availableW - overlap, stepY = availableH - overlap;
+    if (!Number.isFinite(overlap) || overlap < 0 || overlap >= Math.min(base.width, base.height) - 2 * margin) throw new Error("Overlap must be nonnegative and smaller than the printable width and height.");
     for (const page of pages) {
+      const paper = sheetSize(page), availableW = paper.width - 2 * margin, availableH = paper.height - 2 * margin;
+      const stepX = availableW - overlap, stepY = availableH - overlap;
       const size = sizes[page - 1], scale = settings.scale / 100;
       const w = size.width * scale, h = size.height * scale;
       const cols = Math.max(1, 1 + Math.ceil((w - availableW) / stepX - 1e-10));
       const rows = Math.max(1, 1 + Math.ceil((h - availableH) / stepY - 1e-10));
       if (sheets.length + cols * rows > 100) throw new Error("This layout exceeds 100 sheets. Select fewer pages or reduce the scale.");
-      for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) sheet().placements.push({ page,
+      for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) sheet(page).placements.push({ page,
         x: margin - col * stepX, y: margin - row * stepY, width: w, height: h, scale,
         clip: { x: margin, y: margin, width: availableW, height: availableH } });
     }
   } else {
-    for (const page of pages) place(sheet(), page, margin, margin, availableW, availableH, settings.sizing);
+    for (const page of pages) {
+      const target = sheet(page);
+      place(target, page, margin, margin, target.width - 2 * margin, target.height - 2 * margin, settings.sizing);
+    }
   }
-  if (sheets.length > 100) throw new Error("Print up to 100 sheets at a time. Select a smaller page range.");
   return sheets;
 }
