@@ -797,6 +797,51 @@ try {
   await aiPanel.getByRole("button", { name: "Close Ask AI" }).click();
   console.log("ok  closing Ask AI stops the answer in progress");
 
+  await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+  await aiPanel.getByText("First question").waitFor();
+  if (await sidebarToggle.getAttribute("aria-pressed") !== "true") await sidebarToggle.click();
+  await page.getByRole("tab", { name: /^Notes/ }).click();
+  const documentNote = page.getByLabel("Notes about this document");
+  await documentNote.fill("Note in the other tab");
+  const readerName = await page.evaluate(() => document.title.replace(/ — Folio$/, ""));
+  await page.keyboard.press("ControlOrMeta+t");
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^Settings/ }).click();
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  const stored = settings.locator(".stored-data");
+  const clearNotes = stored.getByRole("button", { name: "Clear annotations…", exact: true });
+  const clearChats = stored.getByRole("button", { name: "Clear chats…", exact: true });
+  assert.equal(await stored.evaluate(el => el.open), false);
+  // The baseline has Reading followed directly by Ask AI. Only the new row differs.
+  await settings.screenshot({ path: path.join(shots, "stored-data-previous-layout.png"), style: ".stored-data { display: none !important; }" });
+  await settings.screenshot({ path: path.join(shots, "stored-data-collapsed.png") });
+  await stored.locator("summary").click();
+  await stored.getByText(/^\d+ documents?$/).first().waitFor();
+  assert.ok(await clearNotes.isEnabled() && await clearChats.isEnabled());
+  await stored.screenshot({ path: path.join(shots, "stored-data-expanded.png") });
+  const confirmation = stored.getByRole("alertdialog");
+  for (const [trigger, question] of [[clearNotes, "Clear all saved annotations?"], [clearChats, "Clear all saved chats?"]]) {
+    await trigger.click();
+    await confirmation.getByText(question, { exact: true }).waitFor();
+    assert.ok(await confirmation.getByRole("button", { name: "Cancel" }).evaluate(el => el === document.activeElement));
+    await confirmation.getByRole("button", { name: "Cancel" }).click();
+    assert.ok(await clearNotes.isEnabled() && await clearChats.isEnabled());
+  }
+  await clearNotes.click();
+  await confirmation.getByRole("button", { name: "Clear annotations", exact: true }).click();
+  await stored.getByText("0 documents", { exact: true }).waitFor();
+  assert.ok(await clearNotes.isDisabled() && await clearChats.isEnabled());
+  await clearChats.click();
+  await confirmation.getByRole("button", { name: "Clear chats", exact: true }).click();
+  await confirmation.waitFor({ state: "detached" });
+  assert.ok(await clearChats.isDisabled());
+  await settings.getByRole("button", { name: "Close" }).click();
+  await docs.getByRole("tab", { name: readerName, exact: true }).click();
+  assert.equal(await documentNote.inputValue(), "");
+  assert.equal(await aiPanel.getByText("First question").count(), 0);
+  await aiPanel.getByRole("button", { name: "Close Ask AI" }).click();
+  console.log("ok  Stored data counts, cancellation, separate confirmations and open readers");
+
   const longPdf = pdfWithPageSizes(Array.from({ length: 101 }, () => [612, 792]));
   await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
     "folio:open-file", { name: "Print 101 pages.pdf", data: Buffer.from(data) }), [...longPdf]);

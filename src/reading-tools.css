@@ -800,6 +800,26 @@
   letter-spacing: 0.06em;
   color: var(--text-3);
 }
+.stored-data { border-block: 1px solid var(--line); }
+.stored-data > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 550;
+  list-style: none;
+  cursor: pointer;
+}
+.stored-data > summary::-webkit-details-marker { display: none; }
+.stored-data > summary svg { color: var(--text-2); }
+.stored-data[open] > summary svg { transform: rotate(90deg); }
+.stored-body { padding: 0 0 5px 23px; }
+.stored-hint { margin: 0 0 5px; font-size: 12px; color: var(--text-2); }
+.stored-confirm { padding-block: 10px; font-size: 13px; }
+.stored-confirm p { color: var(--text-2); }
+.stored-confirm button + button { margin-left: 6px; }
 .settings-row {
   display: flex;
   align-items: center;

@@ -154,6 +154,8 @@ Choose **Sign** in the toolbar to add a signature.
   conversation.
 - **Per-document history:** conversations are saved on this computer and restored when you reopen that document,
   except for password-protected PDFs. Starting a new conversation clears that document's saved chat.
+  Open **Settings → Stored data** to see how many documents have saved annotations or chats, including documents
+  removed from Recent. You can clear either category separately. Annotations include document notes and bookmarks.
 - **Account settings:** choose your default provider, sign in to or out of ChatGPT, and check Claude Code's connection
   from **Settings → Ask AI**.
 

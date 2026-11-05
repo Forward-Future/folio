@@ -10,7 +10,7 @@ import {
 } from "./viewer";
 import { AnnotationEditorParamsType, AnnotationEditorType } from "pdfjs-dist";
 import { loadPdf, reorderPdf, thumbnailDataUrl, type PDFDocumentProxy } from "./pdf";
-import { contentKey, getRecent, MAX_RECENT_FILE_BYTES, removeRecent, saveRecent, updateLastPage } from "./recent";
+import { contentKey, getRecent, MAX_RECENT_FILE_BYTES, onStoredDataCleared, removeRecent, saveRecent, updateLastPage } from "./recent";
 import { readPdfBlob, readPdfResponse } from "./pdfInput";
 import { FIT_SCALES, readView, writeView, type ReadingView } from "./session";
 import { DocumentTabBar } from "./DocumentTabBar";
@@ -31,7 +31,7 @@ import { scanLanguagesFrom } from "./scanLanguage";
 import { ImageMenu, ImageViewer, type ImageTarget } from "./ImageViewer";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { IS_MAC, keys } from "./platform";
-import { AiPanel, type AiContext } from "./AiPanel";
+import { AiPanel, forgetClearedChats, type AiContext } from "./AiPanel";
 import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
 import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
@@ -158,6 +158,20 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const lastPageRef = useRef<number>(1);
   const docRef = useRef<OpenDoc | null>(null);
   const markupRef = useRef<MarkupController | null>(null);
+  const [chatGeneration, setChatGeneration] = useState(0);
+  const [notesGeneration, setNotesGeneration] = useState(0);
+  useEffect(() => onStoredDataCleared((category, generation) => {
+    if (category === "ai") {
+      forgetClearedChats(generation);
+      setChatGeneration(current => Math.max(current, generation));
+    } else if (category === "notes") {
+      markupRef.current?.clearSaved(generation);
+      if (persistRef.current) {
+        setNotesGeneration(current => Math.max(current, generation));
+        setNoteBox(null);
+      }
+    }
+  }), []);
   const persistRef = useRef(false);
   const exporting = useRef<PDFDocumentProxy | null>(null);
   const savingCopy = useRef(false);
@@ -1354,6 +1368,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             noteCount={markup.marks.filter((m) => m.type === "highlight").length}
             notes={
               <NotesPanel
+                key={notesGeneration}
                 state={markup}
                 onExport={exportNotes}
                 persisted={persistRef.current}
@@ -1532,7 +1547,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
           onClose={() => setHistoryOpen(false)} />}
         {doc && aiOpen && !focus && (
           <AiPanel
-            key={doc.sourceId ?? doc.id}
+            key={`${doc.sourceId ?? doc.id}:${doc.password ? 0 : chatGeneration}`}
             pdf={doc.pdf}
             docId={doc.sourceId ?? doc.id}
             persist={!doc.password}

@@ -30,6 +30,7 @@ interface Editor {
   remove(): void;
   constructor: { _type?: string };
   __folioMark?: string;
+  __folioGeneration?: number;
   __folioText?: string;
   __folioShape?: Mark["shape"];
 }
@@ -66,6 +67,7 @@ export class MarkupController {
   #ui: UIManager | null = null;
   #docId: string | null = null;
   #generation = 0;
+  #storageGeneration = 0;
   #persist = false;
   #note = "";
   #bookmarkedPages: number[] | null = null;
@@ -122,11 +124,16 @@ export class MarkupController {
 
   /** Loads saved markup for a newly opened document. Password-protected documents aren't persisted. */
   async load(docId: string, persist: boolean, reading?: Pick<MarkupState, "note" | "bookmarkedPages">) {
+    const readingGeneration = this.#storageGeneration;
     this.unload();
     const generation = this.#generation;
     this.#docId = docId;
-    const saved = persist ? await getNotes(docId) : undefined;
+    const record = persist ? await getNotes(docId) : undefined;
     if (generation !== this.#generation) return;
+    const cleared = record && record.generation < this.#storageGeneration;
+    if (cleared || (record && readingGeneration < record.generation)) reading = undefined;
+    const saved = cleared ? undefined : record?.value;
+    if (record) this.#storageGeneration = Math.max(this.#storageGeneration, record.generation);
     this.#persist = persist;
     this.#note = reading?.note ?? saved?.note ?? "";
     this.#bookmarkedPages = reading?.bookmarkedPages ?? saved?.bookmarkedPages ?? [];
@@ -163,6 +170,22 @@ export class MarkupController {
     this.#emit();
   }
 
+  clearSaved(generation: number) {
+    if (generation <= this.#storageGeneration) return;
+    this.#storageGeneration = generation;
+    if (!this.#persist) return;
+    this.#generation++;
+    this.quickHighlighting = false;
+    window.clearTimeout(this.#saveTimer);
+    this.#restoring.clear();
+    this.#pending.clear();
+    this.#known.clear();
+    this.#note = "";
+    this.#bookmarkedPages = [];
+    for (const editor of this.#liveEditors()) editor.remove();
+    this.#emit();
+  }
+
   async #restorePage(page: number) {
     const marks = this.#pending.get(page);
     const layer = this.#ui?.getLayer(page);
@@ -185,6 +208,7 @@ export class MarkupController {
           continue;
         }
         editor.__folioMark = mark.id;
+        editor.__folioGeneration = this.#storageGeneration;
         if (mark.type === "highlight") editor.__folioText = mark.text;
         editor.__folioShape = mark.shape;
         if (textBox) editor.isClone = true;
@@ -269,6 +293,12 @@ export class MarkupController {
     const fresh: string[] = [];
     const live = new Map<string, Mark>();
     for (const editor of this.#liveEditors()) {
+      // pdf.js can reattach a removed editor through its Undo history.
+      if (this.#persist && editor.__folioGeneration !== undefined && editor.__folioGeneration < this.#storageGeneration) {
+        editor.remove();
+        continue;
+      }
+      editor.__folioGeneration = this.#storageGeneration;
       if (editor.isEmpty()) {
         // A saved mark whose editor reads empty (a text box cleared but not yet committed) keeps its record until
         // the edit is committed. Removing a mark removes its editor, so deletes still work.
@@ -339,7 +369,7 @@ export class MarkupController {
     if (!this.#persist || !this.#docId) return;
     const notes: DocNotes = { id: this.#docId, note: this.#note, marks: [...this.#known.values()],
       bookmarkedPages: this.#bookmarkedPages ?? [], updatedAt: Date.now() };
-    return saveNotes(notes);
+    return saveNotes(notes, this.#storageGeneration);
   }
 
   /**

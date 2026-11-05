@@ -24,7 +24,7 @@ let connection: Promise<IDBDatabase> | null = null;
 export function openFolioDatabase(): Promise<IDBDatabase> {
   if (connection) return connection;
   connection = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 5);
+    const req = indexedDB.open(DB_NAME, 6);
     req.onupgradeneeded = event => {
       const database = req.result;
       // Older cards can pair one file's preview and position with another file's bytes.
@@ -34,8 +34,11 @@ export function openFolioDatabase(): Promise<IDBDatabase> {
       }
       if (!database.objectStoreNames.contains(NOTES)) database.createObjectStore(NOTES, { keyPath: "id" });
       if (!database.objectStoreNames.contains(AI)) database.createObjectStore(AI, { keyPath: "id" });
-      database.createObjectStore("versions", { keyPath: "id" }).createIndex("byFamily", ["family", "number"], { unique: true });
-      database.createObjectStore("versionPdfs");
+      if (event.oldVersion < 5) {
+        database.createObjectStore("versions", { keyPath: "id" }).createIndex("byFamily", ["family", "number"], { unique: true });
+        database.createObjectStore("versionPdfs");
+      }
+      database.createObjectStore("clearGenerations");
     };
     req.onsuccess = () => {
       const database = req.result;
@@ -197,21 +200,68 @@ export interface DocNotes {
   updatedAt: number;
 }
 
-export async function getNotes(id: string): Promise<DocNotes | undefined> {
-  try {
-    return await tx<DocNotes | undefined>("readonly", (s) => s.get(id), NOTES);
-  } catch {
-    return undefined;
-  }
+export type StoredCategory = typeof NOTES | typeof AI;
+const CLEAR_CHANNEL = "folio:stored-data-cleared";
+
+export function onStoredDataCleared(listener: (category: StoredCategory, generation: number) => void) {
+  const channel = new BroadcastChannel(CLEAR_CHANNEL);
+  channel.onmessage = ({ data }) => listener(data.category, data.generation);
+  return () => channel.close();
 }
 
-export async function saveNotes(notes: DocNotes) {
+export async function countStoredData() {
+  const [notes, ai] = await Promise.all([NOTES, AI].map(store => tx("readonly", s => s.count(), store)));
+  return { notes, ai };
+}
+
+// Read the generation in the same transaction as the record. A suspended tab or an old autosave
+// can then never write a cleared annotation or conversation back, even before its notification arrives.
+async function withGeneration<T>(category: StoredCategory, mode: IDBTransactionMode,
+  run: (store: IDBObjectStore, generation: number, generations: IDBObjectStore) => IDBRequest<T> | void) {
+  const db = await openFolioDatabase();
+  return new Promise<{ value: T | undefined; generation: number }>((resolve, reject) => {
+    const transaction = db.transaction([category, "clearGenerations"], mode);
+    const generations = transaction.objectStore("clearGenerations");
+    const read = generations.get(category);
+    let result: IDBRequest<T> | void;
+    read.onsuccess = () => { result = run(transaction.objectStore(category), read.result ?? 0, generations); };
+    transaction.oncomplete = () => resolve({ value: result?.result, generation: read.result ?? 0 });
+    transaction.onabort = () => reject(transaction.error ?? new Error("Stored data is unavailable."));
+  });
+}
+
+export async function clearStoredData(category: StoredCategory) {
+  const { generation } = await withGeneration(category, "readwrite", (store, current, generations) => {
+    generations.put(current + 1, category);
+    return store.clear();
+  });
+  const channel = new BroadcastChannel(CLEAR_CHANNEL);
+  channel.postMessage({ category, generation: generation + 1 });
+  channel.close();
+}
+
+async function readStored<T>(category: StoredCategory, id: string) {
+  try { return await withGeneration<T | undefined>(category, "readonly", store => store.get(id)); }
+  catch { return { value: undefined, generation: 0 }; }
+}
+
+async function saveStored(category: StoredCategory, id: string, value: unknown, generation: number) {
   try {
-    if (!notes.note.trim() && !notes.marks.length && !notes.bookmarkedPages?.length) await tx("readwrite", (s) => s.delete(notes.id), NOTES);
-    else await tx("readwrite", (s) => s.put(notes), NOTES);
-  } catch {
-    /* best-effort, like Recent */
-  }
+    await withGeneration(category, "readwrite", (store, current) => {
+      if (generation !== current) return;
+      if (value) store.put(value);
+      else store.delete(id);
+    });
+  } catch { /* Autosaves are best effort when storage is unavailable. */ }
+}
+
+export function getNotes(id: string) {
+  return readStored<DocNotes>(NOTES, id);
+}
+
+export function saveNotes(notes: DocNotes, generation: number) {
+  const keep = notes.note.trim() || notes.marks.length || notes.bookmarkedPages?.length;
+  return saveStored(NOTES, notes.id, keep ? notes : undefined, generation);
 }
 
 // ── Ask AI conversations ──────────────────────────────────────────────
@@ -223,20 +273,11 @@ export interface StoredAiMessage {
   context?: { text: string; page: number };
 }
 
-export async function getAiHistory(id: string): Promise<StoredAiMessage[]> {
-  try {
-    const record = await tx<{ id: string; messages: StoredAiMessage[] } | undefined>("readonly", (s) => s.get(id), AI);
-    return Array.isArray(record?.messages) ? record.messages : [];
-  } catch {
-    return [];
-  }
+export async function getAiHistory(id: string) {
+  const { value, generation } = await readStored<{ messages: StoredAiMessage[] }>(AI, id);
+  return { messages: Array.isArray(value?.messages) ? value.messages : [], generation };
 }
 
-export async function saveAiHistory(id: string, messages: StoredAiMessage[]) {
-  try {
-    if (messages.length === 0) await tx("readwrite", (s) => s.delete(id), AI);
-    else await tx("readwrite", (s) => s.put({ id, messages, updatedAt: Date.now() }), AI);
-  } catch {
-    /* best-effort, like notes */
-  }
+export function saveAiHistory(id: string, messages: StoredAiMessage[], generation: number) {
+  return saveStored(AI, id, messages.length ? { id, messages, updatedAt: Date.now() } : undefined, generation);
 }

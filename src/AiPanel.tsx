@@ -53,7 +53,19 @@ function documentText(pdf: PDFDocumentProxy) {
 }
 
 // ── Panel ─────────────────────────────────────────────────────────────────────────────────
-const conversations = new Map<string, Message[]>();
+// Keep partial replies and provider errors when the panel closes. Protected documents are session-only.
+const conversations = new Map<string, { messages: Message[]; generation: number; persist: boolean }>();
+let lastChatClear = 0;
+export function forgetClearedChats(generation: number) {
+  lastChatClear = Math.max(lastChatClear, generation);
+  for (const [id, chat] of conversations) {
+    if (chat.persist && chat.generation < generation) conversations.delete(id);
+  }
+}
+
+function rememberChat(id: string, persist: boolean, messages: Message[], generation: number) {
+  if (!persist || generation >= lastChatClear) conversations.set(id, { messages, generation, persist });
+}
 
 function CopyResponse({ text }: { text: string }) {
   const [label, setLabel] = useState("Copy response");
@@ -94,7 +106,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const [provider, setProviderState] = useState<AiProvider>(() => (localStorage.getItem("folio:ai-provider") as AiProvider) || "chatgpt");
   const [models, setModels] = useState<{ id: string; name: string }[]>([]);
   const [model, setModelState] = useState(() => localStorage.getItem(`folio:ai-model:${provider}`) ?? "");
-  const [messages, setMessages] = useState<Message[]>(() => conversations.get(docId) ?? []);
+  const [messages, setMessages] = useState<Message[]>(() => conversations.get(docId)?.messages ?? []);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
@@ -105,23 +117,24 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // The panel is mounted per document (keyed by docId in App), so this conversation always belongs to docId.
-  const [loaded, setLoaded] = useState(() => conversations.has(docId) || !persist);
+  const [generation, setGeneration] = useState<number | null>(() => conversations.get(docId)?.generation ?? (persist ? null : 0));
+  const loaded = generation !== null;
   useEffect(() => {
     if (loaded) return;
     let cancelled = false;
-    void getAiHistory(docId).then((saved) => {
+    void getAiHistory(docId).then(({ messages, generation }) => {
       if (cancelled) return;
-      if (saved.length) setMessages(saved);
-      setLoaded(true);
+      setMessages(messages);
+      setGeneration(generation);
     });
     return () => { cancelled = true; };
   }, [docId, loaded]);
   useEffect(() => {
-    if (!loaded) return;
-    conversations.set(docId, messages);
+    if (generation === null) return;
+    rememberChat(docId, persist, messages, generation);
     // Save once an answer has finished (not on every streamed word).
-    if (persist && !busy) void saveAiHistory(docId, storedMessages(messages));
-  }, [docId, messages, busy, loaded, persist]);
+    if (persist && !busy) void saveAiHistory(docId, storedMessages(messages), generation);
+  }, [docId, messages, busy, generation, persist]);
   useEffect(() => { void ai?.status().then(setStatus); }, [ai]);
   useEffect(() => { if (context) inputRef.current?.focus(); }, [context]);
 
@@ -193,9 +206,11 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     const list = messagesRef.current;
     const last = list[list.length - 1];
     const kept = last?.role === "assistant" && !last.content && !last.error ? list.slice(0, -1) : list;
-    conversations.set(docId, kept);
-    if (persist) void saveAiHistory(docId, storedMessages(kept));
-  }, [ai, docId, persist]);
+    if (generation !== null) {
+      rememberChat(docId, persist, kept, generation);
+      if (persist) void saveAiHistory(docId, storedMessages(kept), generation);
+    }
+  }, [ai, docId, persist, generation]);
   const stop = () => {
     if (!busy) return;
     if (preparing.current !== busy) { void ai?.cancel(busy); return; }

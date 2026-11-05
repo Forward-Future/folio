@@ -1,9 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Modal } from "./Dialogs";
 import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
 import { updateSummary } from "./updates";
 import { ScanLanguagePicker } from "./ScanLanguagePicker";
 import type { ScanLanguage } from "./scanLanguage";
+import { Icon } from "./icons";
+import { clearStoredData, countStoredData, onStoredDataCleared, type StoredCategory } from "./recent";
 
 /** One place for every Folio preference. */
 interface Props {
@@ -68,6 +70,81 @@ function Choice<T extends string>({ value, options, onChange, label }: { value: 
   );
 }
 
+const storedCategories = {
+  notes: { label: "Saved annotations", action: "Clear annotations", question: "Clear all saved annotations?",
+    detail: "This permanently removes the highlights, drawings, text boxes, notes, and bookmarks Folio saved on this device. Your PDF files are kept." },
+  ai: { label: "Ask AI conversations", action: "Clear chats", question: "Clear all saved chats?",
+    detail: "This permanently removes the Ask AI conversations Folio saved on this device." },
+} as const;
+
+function StoredData() {
+  const [open, setOpen] = useState(false);
+  const [counts, setCounts] = useState<Awaited<ReturnType<typeof countStoredData>> | null>(null);
+  const [confirm, setConfirm] = useState<StoredCategory | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  const summary = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const next = await countStoredData();
+        if (active) setCounts(next);
+      } catch {
+        if (active) setError("Couldn't count stored documents. Close and reopen this section to try again.");
+      }
+    };
+    void refresh();
+    const stop = onStoredDataCleared(() => void refresh());
+    return () => { active = false; stop(); };
+  }, [open]);
+
+  const cancel = () => { setConfirm(null); trigger.current?.focus(); };
+  const clear = async (kind: StoredCategory) => {
+    setBusy(true);
+    setError("");
+    try {
+      await clearStoredData(kind);
+      setCounts(current => current && { ...current, [kind]: 0 });
+      setConfirm(null);
+      summary.current?.focus();
+    } catch { setError("Couldn't clear the saved data. Try again."); }
+    finally { setBusy(false); }
+  };
+
+  return <details className="settings-section stored-data" onToggle={event => {
+    setOpen(event.currentTarget.open);
+    if (!event.currentTarget.open) { setConfirm(null); setError(""); setCounts(null); }
+  }}>
+    <summary ref={summary}><Icon name="chevronRight" size={15} />Stored data</summary>
+    {open && <div className="stored-body">
+      <p className="stored-hint">Includes documents no longer in Recent.</p>
+      {(["notes", "ai"] as const).map(kind => {
+        const { label, action } = storedCategories[kind];
+        const count = counts?.[kind];
+        return <Row key={kind} label={label} hint={count === undefined ? "…" : `${count} document${count === 1 ? "" : "s"}`}>
+          <button className="btn ghost" disabled={!count || busy} onClick={event => {
+            trigger.current = event.currentTarget;
+            setError("");
+            setConfirm(kind);
+          }}>{action}…</button>
+        </Row>;
+      })}
+      {confirm && <div key={confirm} className="stored-confirm" role="alertdialog" aria-labelledby="stored-question" aria-describedby="stored-detail"
+        onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); if (!busy) cancel(); } }}>
+        <strong id="stored-question">{storedCategories[confirm].question}</strong>
+        <p id="stored-detail">{storedCategories[confirm].detail}</p>
+        <button className="btn ghost" autoFocus disabled={busy} onClick={cancel}>Cancel</button>
+        <button className="btn primary" disabled={busy} onClick={() => void clear(confirm)}>{storedCategories[confirm].action}</button>
+      </div>}
+      {error && <p className="form-error" role="alert">{error}</p>}
+    </div>}
+  </details>;
+}
+
 export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, onWheelPaging, scanLanguages, onScanLanguages, onOpenChangelog, onClose }: Props) {
   const desktop = window.folioDesktop;
   const ai = desktop?.ai;
@@ -124,6 +201,8 @@ export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, on
             <ScanLanguagePicker value={scanLanguages} onChange={onScanLanguages} />
           </Row>
         </Section>
+
+        <StoredData />
 
         {desktop && (
           <Section title="Ask AI">
