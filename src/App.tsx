@@ -40,6 +40,7 @@ import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { saveVersion, type PdfChange } from "./versionHistory";
 import { SettingsDialog } from "./SettingsDialog";
 import { ChangelogDialog } from "./ChangelogDialog";
+import { PrintDialog } from "./PrintDialog";
 import type { Release } from "./releaseNotes";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
@@ -196,6 +197,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const unsaved = !!doc?.sourceId || dirty || editorDirty || (!!pageOrder && !pageDraft?.copy);
   const [focus, setFocus] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [printCopy, setPrintCopy] = useState<{ pdf: PDFDocumentProxy; bytes: Uint8Array; page: number; name: string } | null>(null);
+  const preparingPrint = useRef(false);
+  useEffect(() => () => { if (printCopy) void printCopy.pdf.loadingTask.destroy(); }, [printCopy]);
   const [dialog, setDialog] = useState<"info" | "shortcuts" | "about" | "url" | "settings" | "changelog" | "upgrade" | null>(
     upgradeNotes.length ? "upgrade" : null);
   // A pasted or dropped link waits in Open from URL, so the user sees where it goes before Folio contacts it.
@@ -901,20 +905,29 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   };
 
   const print = async () => {
-    if (contentRef.current && !(await contentRef.current.finish())) return;
-    const doc = docRef.current;
-    // pdf.js marks the document as saved once it has written the bytes, but printing saves nothing.
-    let copy: Awaited<ReturnType<typeof currentBytes>>;
+    if (printCopy || preparingPrint.current) return;
+    preparingPrint.current = true;
     try {
-      copy = await currentBytes();
+      if (contentRef.current && !(await contentRef.current.finish())) return;
+      const source = docRef.current;
+      if (!source) return;
+      // Printing writes a snapshot, so preserve the unsaved marker after pdf.js serializes the edits.
+      const copy = await currentBytes(source).finally(() => {
+        if (dirty && docRef.current === source) setDirty(true);
+      });
+      if (!copy || docRef.current !== source) return;
+      if (!window.folioDesktop) { printPdfBytes(copy.bytes); return; }
+      const snapshot = await loadPdf(copy.bytes, opening.current!.signal, source.password);
+      if (docRef.current !== source) { void snapshot.loadingTask.destroy(); return; }
+      setPrintCopy({ pdf: snapshot, bytes: copy.bytes, page: pageOrder ? pageOrder.indexOf(page) + 1 : page, name: source.name });
     } catch {
       if (docRef.current === doc) setError("Couldn't print this document.");
-      return;
     } finally {
-      if (dirty && docRef.current === doc) setDirty(true);
+      preparingPrint.current = false;
     }
-    if (!copy || docRef.current !== doc) return;
-    const { bytes } = copy;
+  };
+
+  const printPdfBytes = (bytes: Uint8Array) => {
     const url = URL.createObjectURL(pdfBlob(bytes));
     const frame = document.createElement("iframe");
     frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
@@ -1029,6 +1042,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (tabs.active !== tabKey) return;
+      if (printCopy) {
+        if ((e.ctrlKey || e.metaKey) && ["p", "o", "w", "t", "s", ",", "tab"].includes(e.key.toLowerCase())) e.preventDefault();
+        return;
+      }
       const mod = e.ctrlKey || e.metaKey;
       if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "t") {
         e.preventDefault(); tabs.library(); return;
@@ -1530,6 +1547,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         />
       )}
       {dialog === "info" && doc && <InfoDialog key={doc.pdf.loadingTask.docId} pdf={doc.pdf} name={doc.name} size={doc.size} onClose={() => setDialog(null)} />}
+      {printCopy && <PrintDialog pdf={printCopy.pdf} currentPage={printCopy.page} name={printCopy.name}
+        onPrint={() => { printPdfBytes(printCopy.bytes); setPrintCopy(null); }} onClose={() => setPrintCopy(null)} />}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} />}
       {dialog === "settings" && <SettingsDialog theme={theme} onTheme={setThemeTo} night={night} onNight={setNightTo}

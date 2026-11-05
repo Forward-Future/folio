@@ -174,7 +174,7 @@ Ask AI is optional and desktop-only. See [Using Ask AI](#using-ask-ai) for setup
 - **Save a copy** (`Ctrl+S`) exports a PDF with page annotations, including highlights and attached notes, drawings,
   text boxes, and visual signatures. Your original file is not overwritten. Whole-document notes and AI chat history
   stay in Folio; copy notes as Markdown when you want to share them.
-- **Print** (`Ctrl+P`) prints the current document with its page annotations.
+- **Print** (`Ctrl+P`, or `⌘P` on macOS) previews each page at its own proportions and prints the annotated PDF. On desktop, choose **Advanced** for [poster, booklet, or multiple pages per sheet](docs/printing.md).
 - **Document info** shows available metadata: filename, title, author, subject, page count and size, file size,
   creation/modification dates, generating application, producer, and PDF version.
 

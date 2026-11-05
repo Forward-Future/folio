@@ -162,21 +162,21 @@ try {
   await page.getByRole("button", { name: /Approve and add signature/ }).click();
   await page.locator(".dirty-dot").waitFor();
 
-  // Printing saves nothing, so the signature stays marked as unsaved. The print frame is stubbed for the check, so no
-  // system print dialog opens.
-  await page.evaluate(() => {
-    const frame = HTMLIFrameElement.prototype;
-    const stub = { printed: 0, src: Object.getOwnPropertyDescriptor(frame, "src"), contentWindow: Object.getOwnPropertyDescriptor(frame, "contentWindow") };
-    window.folioPrintStub = stub;
-    Object.defineProperty(frame, "src", { configurable: true, set(url) { this.dataset.src = url; } });
-    Object.defineProperty(frame, "contentWindow", { configurable: true, get: () => ({ focus() {}, print() { stub.printed++; } }) });
-  });
+  // Stub the PDF viewer handoff in this renderer so printing cannot open a system dialog.
+  await page.evaluate(interceptPdfPrint);
   await page.keyboard.press("ControlOrMeta+p");
-  await page.waitForFunction(() => window.folioPrintStub.printed === 1, null, { timeout: 15_000 });
-  await page.evaluate(() => {
-    Object.defineProperty(HTMLIFrameElement.prototype, "src", window.folioPrintStub.src);
-    Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", window.folioPrintStub.contentWindow);
-  });
+  const printDialog = page.getByRole("dialog", { name: "Print", exact: true });
+  await printDialog.getByRole("img", { name: "Preview of page 1" }).waitFor({ timeout: 15_000 });
+  await printDialog.screenshot({ path: path.join(shots, "print-basic.png") });
+  await printDialog.getByRole("tab", { name: "Advanced" }).click();
+  await printDialog.getByRole("button", { name: "Booklet" }).click();
+  await printDialog.getByRole("img", { name: "Preview of sheet 1" }).waitFor();
+  await printDialog.screenshot({ path: path.join(shots, "print-advanced.png") });
+  await printDialog.getByRole("tab", { name: "Basic" }).click();
+  await printDialog.getByRole("button", { name: "Print…", exact: true }).click();
+  await page.waitForFunction(() => window.printedPdf);
+  assert.ok(await page.evaluate(() => window.printedPdf.type === "application/pdf" && /\/Subtype\s*\/Stamp\b/.test(window.printedPdf.bytes)));
+  await page.evaluate(() => window.restorePrintFrame());
   assert.ok(await page.locator(".dirty-dot").isVisible(), "printing cleared the unsaved marker");
   console.log("ok  printing keeps unsaved work marked as unsaved");
 
@@ -633,6 +633,29 @@ try {
   await app.evaluate(({ BrowserWindow }, data) =>
     BrowserWindow.getAllWindows()[0].webContents.send("folio:open-file", { name: "Mixed sizes.pdf", data: Buffer.from(data) }), [...mixed]);
   await page.window.waitForFunction(() => document.title.startsWith("Mixed sizes.pdf"), null, { timeout: 15_000 });
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^Print\b/ }).click();
+  const recordPrint = process.env.FOLIO_PRINT_VIDEO === "1";
+  if (recordPrint) {
+    await printDialog.getByRole("img", { name: "Preview of page 1" }).waitFor();
+    const size = await page.window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    await page.window.screencast.start({ path: path.join(shots, "print-preview.webm"), size, fps: 12 });
+  }
+  for (const [i, ratio] of [612 / 792, 792 / 612, 1224 / 792].entries()) {
+    if (i) await printDialog.getByRole("button", { name: "Next page" }).click();
+    await printDialog.getByRole("img", { name: `Preview of page ${i + 1}` }).waitFor();
+    const bounds = await printDialog.locator(".print-paper").boundingBox();
+    assert.ok(Math.abs(bounds.width / bounds.height - ratio) < 0.01, "print preview lost the page dimensions");
+    if (recordPrint) await page.waitForTimeout(1050);
+  }
+  if (recordPrint) {
+    await printDialog.getByRole("tab", { name: "Advanced" }).click();
+    await printDialog.getByRole("button", { name: "Booklet" }).click();
+    await printDialog.getByRole("img", { name: "Preview of sheet 1" }).waitFor();
+    await page.waitForTimeout(1300);
+    await page.window.screencast.stop();
+  }
+  await printDialog.getByRole("button", { name: "Close", exact: true }).click();
   if (!(await page.locator(".sidebar").count())) await page.keyboard.press("ControlOrMeta+Backslash");
   await page.getByRole("tab", { name: "Pages" }).click();
   // Waits until the page sizes have loaded and the third thumbnail is wider than the first.
@@ -850,6 +873,23 @@ try {
   await aiPanel.getByRole("button", { name: "Close Ask AI" }).click();
   console.log("ok  closing Ask AI stops the answer in progress");
 
+  const longPdf = pdfWithPageSizes(Array.from({ length: 101 }, () => [612, 792]));
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Print 101 pages.pdf", data: Buffer.from(data) }), [...longPdf]);
+  await page.window.waitForFunction(() => document.title.startsWith("Print 101 pages.pdf"));
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^Print\b/ }).click();
+  await printDialog.getByRole("img", { name: "Preview of page 1" }).waitFor();
+  await printDialog.getByRole("tab", { name: "Advanced" }).click();
+  await printDialog.getByRole("alert").filter({ hasText: /100 sheets/ }).waitFor();
+  await printDialog.getByRole("tab", { name: "Basic" }).click();
+  await page.evaluate(interceptPdfPrint);
+  await printDialog.getByRole("button", { name: "Print…", exact: true }).click();
+  await page.waitForFunction(() => window.printedPdf);
+  assert.equal(await page.evaluate(() => window.printedPdf.bytes), longPdf.toString("utf8"));
+  await page.evaluate(() => window.restorePrintFrame());
+  console.log("ok  ordinary PDF printing remains available beyond the advanced sheet limit");
+
   // Cancel must keep both Recent and saved text, including text whose PDF is no longer recent.
   await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("menuitem", { name: /New tab/ }).click();
@@ -895,18 +935,46 @@ try {
   assert.deepEqual(await database("read"), { recent: [], saved: undefined, linked: undefined });
   console.log("ok  cancelling Clear all preserves recent files and all saved recognized text");
 
+
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {
   await app.close();
 }
 
-// A blank PDF whose pages have the given [width, height] sizes in points.
+function interceptPdfPrint() {
+  const proto = HTMLIFrameElement.prototype;
+  const src = Object.getOwnPropertyDescriptor(proto, "src"), content = Object.getOwnPropertyDescriptor(proto, "contentWindow");
+  window.printedPdf = null;
+  Object.defineProperty(proto, "src", { configurable: true, set(url) { this.dataset.printUrl = url; } });
+  Object.defineProperty(proto, "contentWindow", { configurable: true, get() { return {
+    focus() {}, print: async () => {
+      const response = await fetch(this.dataset.printUrl);
+      window.printedPdf = { type: response.headers.get("Content-Type"), bytes: await response.text() };
+    },
+  }; } });
+  window.restorePrintFrame = () => { Object.defineProperty(proto, "src", src); Object.defineProperty(proto, "contentWindow", content); };
+}
+
+// Vector artwork makes orientation and clipping visible in the preview recording.
 function pdfWithPageSizes(sizes) {
+  const fontId = sizes.length + 3;
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     `<< /Type /Pages /Kids [${sizes.map((_, i) => `${i + 3} 0 R`).join(" ")}] /Count ${sizes.length} >>`,
-    ...sizes.map(([w, h]) => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] >>`),
+    ...sizes.map(([w, h], i) => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${fontId + 1 + i} 0 R >>`),
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ...sizes.map(([w, h], i) => {
+      const lines = [
+        `0.98 0.97 0.94 rg 0 0 ${w} ${h} re f`,
+        `0.13 0.24 0.22 rg BT /F1 16 Tf 40 ${h - 55} Td (NORTH COVE FIELD SURVEY) Tj ET`,
+        `BT /F1 34 Tf 40 ${h - 116} Td (Shoreline profile) Tj ET`,
+        `0.85 0.90 0.84 rg 40 ${h * .32} ${w - 80} ${h * .35} re f`,
+        `0.44 0.61 0.54 rg 40 ${h * .32} m 40 ${h * .47} l ${w * .28} ${h * .42} ${w * .54} ${h * .60} ${w - 40} ${h * .52} c ${w - 40} ${h * .32} l h f`,
+        `0.13 0.24 0.22 rg BT /F1 18 Tf 40 ${h * .26} Td (Field observations / Station ${i + 1}) Tj ET`,
+      ].join("\n");
+      return `<< /Length ${lines.length} >>\nstream\n${lines}\nendstream`;
+    }),
   ];
   let body = "%PDF-1.4\n";
   const offsets = objects.map((object, i) => {
