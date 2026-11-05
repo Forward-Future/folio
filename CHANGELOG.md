@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.15.2
+
+- The Pages sidebar shows each page’s shape and relative size, including when you filter to bookmarks or reorder pages.
+- Updated the desktop app to Electron 45.2.1.
+
 ## 1.15.1
 
 - After you update Folio, **What's new** shows the changes once. If you skip versions, it includes the releases you missed.

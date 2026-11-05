@@ -1,7 +1,7 @@
 {
   "name": "folio-pdf-reader",
   "private": true,
-  "version": "1.15.1",
+  "version": "1.15.2",
   "type": "module",
   "scripts": {
     "assets": "node scripts/copy-pdfjs-assets.mjs && node scripts/copy-ocr-assets.mjs",
@@ -17,7 +17,8 @@
     "dist:linux": "npm run build && electron-builder --linux --publish never",
     "smoke": "node scripts/smoke-test.mjs",
     "test": "vitest run",
-    "test:chat-math": "node scripts/test-chat-math.mjs"
+    "test:chat-math": "node scripts/test-chat-math.mjs",
+    "test:thumbnails": "node scripts/test-thumbnails.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
