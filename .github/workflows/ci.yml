@@ -30,6 +30,10 @@ jobs:
       - run: node --test scripts/test-word-files.cjs scripts/test-network-security.cjs scripts/test-release-build.mjs scripts/test-claude-path.cjs
       - run: node --test scripts/test-link-history.mjs
       - run: npm run build
+      - name: Browser Edition link shortcuts
+        run: |
+          npx --no-install playwright-core install chromium --only-shell
+          node scripts/test-browser-link-shortcuts.mjs
       - name: Smoke test (Linux, virtual display)
         if: runner.os == 'Linux'
         run: |
@@ -38,7 +42,7 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           npx --no-install playwright-core install ffmpeg
           xvfb-run -a node scripts/test-reader-security.mjs
-          FOLIO_PRINT_VIDEO=1 xvfb-run -a npm run smoke
+          FOLIO_PRINT_VIDEO=1 FOLIO_LINK_VIDEO=1 xvfb-run -a npm run smoke
       - name: Reader security regressions
         if: runner.os != 'Linux'
         run: node scripts/test-reader-security.mjs

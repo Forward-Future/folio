@@ -294,11 +294,9 @@ async function checkContentEditing(app, page, folder, shots) {
   console.log("ok  fragmented embedded-font text in Folio's sample edits as a line and reopens in the reader");
 }
 
-async function checkLinkHistory(app, page, shots) {
-  const viewport = await page.window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
-  await page.window.setViewportSize({ width: 1000, height: 800 });
+export function linkHistoryPdf() {
   const content = "BT /F 16 Tf 40 1100 Td (Follow a PDF link, then go Back.) Tj ET";
-  const pdf = testPdf([
+  return testPdf([
     "<< /Type /Catalog /Pages 2 0 R /Names << /Dests << /Names [(second) [4 0 R /XYZ 0 1000 1.5] (third) [5 0 R /XYZ 0 960 1.25]] >> >> /Outlines 13 0 R >>",
     "<< /Type /Pages /Count 3 /Kids [3 0 R 4 0 R 5 0 R] >>",
     ...["7 0 R 8 0 R 12 0 R 15 0 R", "9 0 R", "10 0 R"].map(annots => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 1200] /Resources << /Font << /F 6 0 R >> >> /Contents 11 0 R /Annots [${annots}] >>`),
@@ -313,26 +311,63 @@ async function checkLinkHistory(app, page, shots) {
     "<< /Title (Third page) /Parent 13 0 R /Dest (third) >>",
     "<< /Type /Annot /Subtype /Link /Rect [40 900 160 940] /Dest [3 0 R /XYZ 0 500 1.25] >>",
   ]);
+}
+
+async function checkLinkHistory(app, page, shots) {
+  const viewport = await page.window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  await page.window.setViewportSize({ width: 1000, height: 800 });
+  const pdf = linkHistoryPdf();
   const open = name => app.evaluate(({ BrowserWindow }, { name, pdf }) => BrowserWindow.getAllWindows()[0].webContents.send(
     "folio:open-file", { name, data: Buffer.from(pdf) }), { name, pdf });
   await open("Link history.pdf");
   await page.window.waitForFunction(() => document.title.startsWith("Link history.pdf"));
-  const back = page.getByRole("button", { name: "Back to previous location", exact: true });
-  const forward = page.getByRole("button", { name: "Forward to next location", exact: true });
+  const more = page.getByRole("button", { name: "More", exact: true });
+  const back = page.getByRole("menuitem", { name: /^Back\b/ });
+  const forward = page.getByRole("menuitem", { name: /^Forward\b/ });
+  const choose = async item => { await more.click(); await item.click(); };
+  const checkMenu = async (canBack, canForward) => {
+    await more.click();
+    assert.equal(await back.count(), Number(canBack));
+    assert.equal(await forward.count(), Number(canForward));
+    await page.keyboard.press("Escape");
+  };
   const pageNumber = page.getByLabel("Page number");
   const at = n => page.waitForFunction(n => document.querySelector('[aria-label="Page number"]').value === String(n), n);
-  assert.equal(await back.isDisabled(), true); assert.equal(await forward.isDisabled(), true);
+  await checkMenu(false, false);
   const link = (n, name) => page.locator(`.page[data-page-number="${n}"] .annotationLayer a[href$="#${name}"]`);
   const position = () => page.locator(".viewer-container").evaluate(el => ({ top: el.scrollTop, left: el.scrollLeft }));
   const zoom = () => page.getByTitle("Zoom", { exact: true }).innerText();
   await link(1, "second").waitFor();
   await page.locator(".viewer-container").evaluate(el => { el.scrollTop = 50; });
   const start = await position(), startZoom = await zoom();
+  const record = process.env.FOLIO_LINK_VIDEO === "1";
+  if (record) {
+    await page.window.screencast.start({ path: path.join(shots, "link-history.webm"), size: { width: 1000, height: 800 }, fps: 12 });
+    await page.waitForTimeout(800);
+  }
+  await link(1, "second").click(); await at(2);
+  const hint = page.getByRole("button", { name: "Back to page 1", exact: true });
+  await hint.waitFor();
+  if (record) await page.waitForTimeout(900);
+  await more.click(); await back.waitFor();
+  assert.equal(await forward.count(), 0);
+  await page.screenshot({ path: path.join(shots, "link-history-menu-and-hint.png") });
+  if (record) await page.waitForTimeout(800);
+  await page.keyboard.press("Escape");
+  await hint.click(); await at(1);
+  if (record) {
+    await more.click(); await forward.waitFor();
+    await page.waitForTimeout(1000);
+    await page.window.screencast.stop();
+    await page.keyboard.press("Escape");
+  }
+  assert.ok(Math.abs((await position()).top - start.top) <= 3);
   await page.locator('.page[data-page-number="1"] .annotationLayer a').nth(3).click();
-  await back.click(); await at(1);
+  assert.equal(await page.locator(".link-return").count(), 0, "the first-use hint repeated");
+  await choose(back); await at(1);
   assert.ok(Math.abs((await position()).top - start.top) <= 3);
   await link(1, "second").click(); await at(2);
-  assert.equal(await back.isDisabled(), false);
+  await checkMenu(true, false);
   await page.locator(".viewer-container").evaluate(el => { el.scrollTop += 60; el.scrollLeft = 60; });
   const target = await position(), targetZoom = await zoom();
   assert.ok(target.left > 0, "the fixture exercises horizontal scrolling");
@@ -344,7 +379,7 @@ async function checkLinkHistory(app, page, shots) {
   assert.ok(Math.abs((await position()).top - target.top) <= 3);
   assert.ok(Math.abs((await position()).left - target.left) <= 3);
   assert.equal(await zoom(), targetZoom);
-  // An editing field keeps Option/Alt-arrow for moving through words.
+  // A shortcut in an editable control or dialog must not traverse PDF locations.
   await pageNumber.focus(); await page.keyboard.press("Alt+ArrowLeft");
   assert.equal(await pageNumber.inputValue(), "2");
   await page.locator(".viewer-container").focus();
@@ -354,30 +389,30 @@ async function checkLinkHistory(app, page, shots) {
   await page.keyboard.press("Alt+ArrowLeft");
   assert.equal(await pageNumber.inputValue(), "2");
   await shortcuts.waitFor(); await page.keyboard.press("Escape");
-  await back.click(); await at(1);
+  await choose(back); await at(1);
   await link(1, "third").click(); await at(3);
-  assert.equal(await forward.isDisabled(), true);
+  await checkMenu(true, false);
   await page.locator('.page[data-page-number="3"][data-loaded="true"] .canvasWrapper canvas').waitFor();
   await page.screenshot({ path: path.join(shots, "after-link-history.png") });
-  await back.click(); await at(1);
-  await forward.click(); await at(3);
+  await choose(back); await at(1);
+  await choose(forward); await at(3);
   const namedBack = page.locator('.page[data-page-number="3"] .annotationLayer a');
   await namedBack.click(); await at(1);
   await page.locator('.page[data-page-number="1"] .annotationLayer a').nth(2).click(); await at(3);
-  await back.click(); await at(1);
+  await choose(back); await at(1);
   const sidebar = page.getByRole("button", { name: /Toggle sidebar/ });
   if (await sidebar.getAttribute("aria-pressed") !== "true") await sidebar.click();
   await page.getByRole("tab", { name: "Outline" }).click();
   await page.getByRole("button", { name: "Third page", exact: true }).click(); await at(3);
-  await back.click(); await at(1);
+  await choose(back); await at(1);
   const sourceTitle = await page.title();
   await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("menuitem", { name: /New tab/ }).click();
   await page.getByRole("button", { name: /Try a sample/ }).click();
-  assert.equal(await back.isDisabled(), true); assert.equal(await forward.isDisabled(), true);
+  await checkMenu(false, false);
   await page.keyboard.press("Control+Shift+Tab");
   assert.equal(await page.title(), sourceTitle);
-  assert.equal(await forward.isDisabled(), false);
+  await checkMenu(false, true);
   await page.locator(".viewer-container").focus();
   await page.keyboard.press("Alt+ArrowRight"); await at(3);
   await page.window.setViewportSize({ width: 420, height: 800 });
@@ -387,7 +422,7 @@ async function checkLinkHistory(app, page, shots) {
   assert.ok(box && box.x >= 0 && box.x + box.width <= width, `the navigation controls fit a narrow window: ${JSON.stringify({ width, box })}`);
   await page.screenshot({ path: path.join(shots, "link-history-narrow.png") });
   await page.window.setViewportSize(viewport);
-  console.log("ok  internal links and outline destinations support per-tab Back/Forward, exact position and zoom, shortcuts and forward branching");
+  console.log("ok  internal links and outlines support a one-time Back hint, contextual More commands, per-tab position and zoom, shortcuts and forward branching");
 }
 
 export async function checkReaderTools(app, page, folder, shots) {

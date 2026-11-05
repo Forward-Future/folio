@@ -1267,6 +1267,7 @@ kbd {
   color: #fff;
   cursor: pointer;
 }
+.toast.link-return { display: inline-flex; align-items: center; gap: 6px; border: 0; cursor: pointer; }
 
 .update-card {
   position: fixed;

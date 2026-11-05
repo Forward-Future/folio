@@ -10,17 +10,18 @@ interface Location {
 }
 
 export interface HistoryState { back: boolean; forward: boolean }
+type HistoryChange = (state: HistoryState, followed?: { from: number; to: number }) => void;
 
 /** PDF.js calls this only after resolving a valid link. Keep its history inside this reader,
  * rather than using the browser's joint history across Folio's document iframes. */
 export class LinkHistory {
   private viewer: PDFViewer;
-  private changed: (state: HistoryState) => void;
+  private changed: HistoryChange;
   private entries: Location[] = [];
   private index = -1;
   private pending: Location | null = null;
 
-  constructor(viewer: PDFViewer, changed: (state: HistoryState) => void) {
+  constructor(viewer: PDFViewer, changed: HistoryChange) {
     this.viewer = viewer;
     this.changed = changed;
   }
@@ -32,8 +33,8 @@ export class LinkHistory {
     this.notify();
   }
 
-  private notify() {
-    this.changed({ back: this.index > 0, forward: this.index >= 0 && this.index < this.entries.length - 1 });
+  private notify(followed?: { from: number; to: number }) {
+    this.changed({ back: this.index > 0, forward: this.index >= 0 && this.index < this.entries.length - 1 }, followed);
   }
 
   private capture(): Location | null {
@@ -61,7 +62,7 @@ export class LinkHistory {
     this.entries.push({ page: pageNumber, destination: explicitDest, scale: current.scale, rotation: current.rotation });
     this.index++;
     if (this.entries.length > 100) { this.entries.shift(); this.index--; }
-    this.notify();
+    this.notify({ from: current.page, to: pageNumber });
   }
 
   pushPage(pageNumber: number) { this.push({ pageNumber }); }
