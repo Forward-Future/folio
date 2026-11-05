@@ -27,6 +27,7 @@ import { notesJson, notesMarkdown } from "./noteExport";
 import { copyText } from "./clipboard";
 import { imageRegions, trackPageImages } from "./nightImages";
 import { recognizeScannedPages } from "./pageOcr";
+import { scanLanguageFrom } from "./scanLanguage";
 import { ImageMenu, ImageViewer, type ImageTarget } from "./ImageViewer";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { IS_MAC, keys } from "./platform";
@@ -165,6 +166,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [textStatus, setTextStatus] = useState<string | null>(null);
+  const [scanLanguage, setScanLanguage] = useState(() => scanLanguageFrom(localStorage.getItem("folio:scan-language")));
   const [pageInput, setPageInput] = useState("1");
   const [numPages, setNumPages] = useState(0);
   const [scale, setScale] = useState(1);
@@ -310,7 +312,6 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         viewer.scrollPageIntoView({ pageNumber: restoredPage, destArray: [null, { name: "XYZ" }, saved.left, saved.top, null] });
       }
       restoringRef.current = false;
-      recognizeScannedPages(eventBus, viewer, setTextStatus);
     });
     eventBus.on("updateviewarea", ({ location }: { location: { pageNumber: number; top: number; left: number } }) => {
       const current = docRef.current;
@@ -359,6 +360,18 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     container.addEventListener("wheel", onWheel, { passive: false });
     return () => { stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
   }, [tabs, tabKey]);
+
+  useEffect(() => {
+    const viewer = viewerRef.current!, bus = busRef.current!;
+    const events = new AbortController();
+    let stop: (() => void) | undefined;
+    const start = () => { stop = recognizeScannedPages(bus, viewer, scanLanguage, setTextStatus); };
+    const end = () => { stop?.(); stop = undefined; };
+    bus.on("pagesinit", start, { signal: events.signal });
+    bus.on("pagesdestroy", end, { signal: events.signal });
+    if (viewer.pagesCount) start();
+    return () => { events.abort(); end(); };
+  }, [scanLanguage]);
 
   useEffect(() => {
     const viewer = viewerRef.current!;
@@ -990,6 +1003,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       }
       if (event.key === "folio:night") setNight(event.newValue === "1");
       if (event.key === "folio:wheel-paging") setWheelPaging(event.newValue === "1");
+      if (event.key === "folio:scan-language" || event.key === null) setScanLanguage(scanLanguageFrom(event.newValue));
     };
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
@@ -1559,6 +1573,11 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} />}
       {dialog === "settings" && <SettingsDialog theme={theme} onTheme={setThemeTo} night={night} onNight={setNightTo}
+        scanLanguage={scanLanguage} onScanLanguage={next => {
+          setScanLanguage(next);
+          try { localStorage.setItem("folio:scan-language", next); }
+          catch { flash("Scan language changed, but couldn't save the preference."); }
+        }}
         wheelPaging={wheelPaging} onWheelPaging={(next) => {
           setWheelPaging(next);
           try { localStorage.setItem("folio:wheel-paging", next ? "1" : "0"); }

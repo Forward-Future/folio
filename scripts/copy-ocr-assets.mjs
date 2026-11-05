@@ -13,5 +13,7 @@ for (const cpu of ["", "-simd", "-relaxedsimd"]) {
   const name = `tesseract-core${cpu}-lstm.wasm.js`;
   copy(`tesseract.js-core/${name}`, name);
 }
-copy("@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz", "eng.traineddata.gz");
+for (const lang of ["eng", "deu"]) {
+  copy(`@tesseract.js-data/${lang}/4.0.0_best_int/${lang}.traineddata.gz`, `${lang}.traineddata.gz`);
+}
 copy("tesseract.js-core/LICENSE", "LICENSE.txt");

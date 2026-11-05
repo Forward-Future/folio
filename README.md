@@ -98,7 +98,8 @@ The editor works with unsigned, unencrypted PDFs.
 
 ### Highlight, draw, and take notes
 
-- **Select text in scans.** Folio starts recognizing English text in the background when you open a PDF.
+- **Select text in scans.** Folio recognizes English by default. In **Settings → Reading → Scan language**, choose
+  **German** or **Both** for bilingual scans. Changing the language also updates scans you already have open.
   The page you jump to gets priority. A message above the page controls shows when text is still being prepared.
   Once it clears, drag across the words to copy, highlight, or ask about a passage. Recognition runs offline.
 - **One-click highlights:** select text, then choose yellow, green, blue, pink, or red from the selection toolbar;

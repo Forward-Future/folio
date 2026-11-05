@@ -36,6 +36,7 @@ async function checkScanSelection(app, page) {
     ctx.font = "56px sans-serif";
     ctx.fillText("Select these words", 100, 225);
     ctx.fillText("from a scanned page.", 100, 300);
+    ctx.fillText("Grüße aus Köln", 100, 375);
     const rgba = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     const bits = new Uint8Array(canvas.width * canvas.height / 8);
     for (let i = 0; i < canvas.width * canvas.height; i++) {
@@ -139,6 +140,24 @@ async function checkScanSelection(app, page) {
   await page.locator('.page[data-page-number="4"] .ocr-word').first().waitFor();
   assert.equal(await status.innerText(), "");
   console.log("ok  background OCR prepares unvisited scans, prioritizes page jumps, and shows selectable text in dark mode");
+
+  const settingsShortcut = process.platform === "darwin" ? "Meta+Comma" : "Control+Comma";
+  await page.keyboard.press(settingsShortcut);
+  const language = page.getByRole("radiogroup", { name: "Scan language" });
+  assert.equal(await language.getByRole("radio", { name: "English" }).getAttribute("aria-checked"), "true");
+  await language.getByRole("radio", { name: "German" }).click();
+  await page.keyboard.press("Escape");
+  const currentScan = page.locator('.page[data-page-number="4"] .textLayer');
+  await currentScan.getByText("Grüße", { exact: true }).waitFor({ timeout: 45_000 });
+  await page.keyboard.press(settingsShortcut);
+  await language.getByRole("radio", { name: "Both" }).click();
+  await page.keyboard.press("Escape");
+  await currentScan.getByText("Grüße", { exact: true }).waitFor({ timeout: 45_000 });
+  await currentScan.getByText("Select", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem("folio:scan-language")), "eng+deu");
+  await goTo(1);
+  assert.equal((await mixed.innerText()).trim(), "Embedded text");
+  console.log("ok  switching scan languages re-reads the open PDF with locally bundled German and English");
 }
 
 async function captureDownload(app, file) {

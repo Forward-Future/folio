@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Modal } from "./Dialogs";
 import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
 import { updateSummary } from "./updates";
+import { SCAN_LANGUAGES, type ScanLanguage } from "./scanLanguage";
 
 /** One place for every Folio preference. */
 interface Props {
@@ -11,6 +12,8 @@ interface Props {
   onNight: (on: boolean) => void;
   wheelPaging: boolean;
   onWheelPaging: (on: boolean) => void;
+  scanLanguage: ScanLanguage;
+  onScanLanguage: (language: ScanLanguage) => void;
   onOpenChangelog: () => void;
   onClose: () => void;
 }
@@ -52,7 +55,7 @@ function Switch({ checked, onChange, label, disabled }: { checked: boolean; onCh
   );
 }
 
-function Choice<T extends string>({ value, options, onChange, label }: { value: T; options: { id: T; name: string }[]; onChange: (v: T) => void; label: string }) {
+function Choice<T extends string>({ value, options, onChange, label }: { value: T; options: readonly { id: T; name: string }[]; onChange: (v: T) => void; label: string }) {
   return (
     <div className="segmented small" role="radiogroup" aria-label={label}>
       {options.map((o) => (
@@ -64,7 +67,7 @@ function Choice<T extends string>({ value, options, onChange, label }: { value: 
   );
 }
 
-export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, onWheelPaging, onOpenChangelog, onClose }: Props) {
+export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, onWheelPaging, scanLanguage, onScanLanguage, onOpenChangelog, onClose }: Props) {
   const desktop = window.folioDesktop;
   const ai = desktop?.ai;
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +118,9 @@ export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, on
         <Section title="Reading">
           <Row label="Scroll one page at a time" hint="Turn a page with each mouse wheel click or trackpad swipe.">
             <Switch label="Scroll one page at a time" checked={wheelPaging} onChange={onWheelPaging} />
+          </Row>
+          <Row label="Scan language" hint="Which text to recognize in scanned PDFs.">
+            <Choice label="Scan language" value={scanLanguage} options={SCAN_LANGUAGES} onChange={onScanLanguage} />
           </Row>
         </Section>
 

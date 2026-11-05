@@ -1,5 +1,6 @@
 import { AnnotationMode, OPS, type PDFPageProxy } from "pdfjs-dist";
 import type { Worker as OcrWorker } from "tesseract.js";
+import type { ScanLanguage } from "./scanLanguage";
 import type { EventBus, PDFPageView, PDFViewer } from "./viewer";
 
 interface Word {
@@ -23,12 +24,12 @@ async function hasPageImage(page: PDFPageProxy) {
   return fnArray.some(op => IMAGE_OPS.has(op));
 }
 
-async function startWorker() {
+async function startWorker(language: ScanLanguage) {
   const { createWorker, OEM, PSM } = await import("tesseract.js");
   const base = `${import.meta.env.BASE_URL}ocr`;
   // Language initialization errors in Tesseract are delivered to errorHandler.
   const worker = await new Promise<OcrWorker>((resolve, reject) => {
-    createWorker("eng", OEM.LSTM_ONLY, {
+    createWorker(language, OEM.LSTM_ONLY, {
       workerPath: `${base}/worker.min.js`, workerBlobURL: false, corePath: base, langPath: base,
       cacheMethod: "none", errorHandler: reject,
     }).then(resolve, reject);
@@ -97,7 +98,11 @@ function addWords(view: PDFPageView, words: Word[]) {
     span.style.setProperty("--scale-x", String(word.scaleX));
     span.style.setProperty("--rotate", `${-view.pdfPage.rotate}deg`);
     fragment.append(span);
-    if (word.endOfLine) fragment.append(document.createElement("br"));
+    if (word.endOfLine) {
+      const br = document.createElement("br");
+      br.className = "ocr-break";
+      fragment.append(br);
+    }
     lineStart = word.endOfLine;
   }
   end.before(fragment);
@@ -120,7 +125,7 @@ async function hasEmbeddedText(page: PDFPageProxy, signal: AbortSignal) {
 }
 
 /** Prepare the document sequentially, giving the reader's current page and its successor the next turns. */
-export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus: (text: string | null) => void) {
+export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language: ScanLanguage, onStatus: (text: string | null) => void) {
   const pdf = viewer.pdfDocument!;
   const controller = new AbortController();
   const { signal } = controller;
@@ -192,7 +197,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
       }
       recognizing = true;
       if (n === viewer.currentPageNumber) updateStatus();
-      worker ??= startWorker().catch(error => { workerStartFailed = true; throw error; });
+      worker ??= startWorker(language).catch(error => { workerStartFailed = true; throw error; });
       const words = await readWords(page, await worker, signal);
       signal.throwIfAborted();
       if (words.length) {
@@ -245,14 +250,19 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
     schedule();
   }, { signal });
   window.addEventListener("folio:tab-visibility", schedule, { signal });
-  bus.on("pagesdestroy", () => {
+  updateStatus();
+  schedule();
+  return () => {
     controller.abort();
     window.clearTimeout(timer);
     cache.clear();
     pending.clear();
+    // A language change replaces only the text Folio added to the open document.
+    // In one-page scrolling mode some rendered layers are detached from the viewer.
+    for (const view of viewer.getCachedPageViews() as Set<PDFPageView>) {
+      view.textLayer?.div.querySelectorAll(".ocr-word, .ocr-break").forEach(node => node.remove());
+    }
     onStatus(null);
     void worker?.then(w => w.terminate()).catch(() => {});
-  }, { once: true });
-  updateStatus();
-  schedule();
+  };
 }
