@@ -14,6 +14,7 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const { chatRequest, claudePrompt } = require("./ai-prompt.cjs");
+const { claudeChildPath, findClaude: lookUpClaude } = require("./claude-path.cjs");
 
 const AUTH_ISSUER = "https://auth.openai.com";
 const AUTHORIZE_URL = "https://auth.openai.com/api/accounts/authorize";
@@ -333,19 +334,14 @@ function run(cmd, args, timeout = 10_000) {
 function claudeEnv() {
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
+  if (claudePath && process.platform !== "win32") env.PATH = claudeChildPath(env.PATH, claudePath);
   return env;
 }
 
 let claudePath;
 async function findClaude() {
   if (claudePath) return claudePath;
-  const name = process.platform === "win32" ? "claude.exe" : "claude";
-  // Search absolute PATH entries ourselves (never the current folder, which `where.exe` checks first),
-  // with Claude Code's default install location first. Only native executables: .cmd/.bat shims would need a shell.
-  const dirs = [path.join(os.homedir(), ".local", "bin"), ...String(process.env.PATH ?? "").split(path.delimiter)]
-    .map((d) => d.trim().replace(/^"|"$/g, ""))
-    .filter((d) => d && path.isAbsolute(d));
-  claudePath = dirs.map((d) => path.join(d, name)).find((c) => { try { return fs.statSync(c).isFile(); } catch { return false; } }) ?? null;
+  claudePath = lookUpClaude({ platform: process.platform, home: os.homedir(), envPath: process.env.PATH });
   return claudePath;
 }
 

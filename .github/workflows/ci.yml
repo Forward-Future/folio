@@ -27,7 +27,7 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run test:chat-math
       - run: npm run test:thumbnails
-      - run: node --test scripts/test-word-files.cjs scripts/test-network-security.cjs scripts/test-release-build.mjs
+      - run: node --test scripts/test-word-files.cjs scripts/test-network-security.cjs scripts/test-release-build.mjs scripts/test-claude-path.cjs
       - run: npm run build
       - name: Smoke test (Linux, virtual display)
         if: runner.os == 'Linux'
