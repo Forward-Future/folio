@@ -1,11 +1,11 @@
-export const SCAN_LANGUAGES = [
-  { id: "eng", name: "English" },
-  { id: "deu", name: "German" },
-  { id: "eng+deu", name: "Both" },
-] as const;
+import catalog from "../electron/ocr-models.json";
 
-export type ScanLanguage = typeof SCAN_LANGUAGES[number]["id"];
+export type ScanLanguage = keyof typeof catalog.languages;
+export const SCAN_LANGUAGES = (Object.keys(catalog.languages) as ScanLanguage[]).map(id => ({
+  id, ...catalog.languages[id],
+}));
 
-export function scanLanguageFrom(value: string | null): ScanLanguage {
-  return SCAN_LANGUAGES.find(language => language.id === value)?.id ?? "eng";
+export function scanLanguagesFrom(value: string | null): ScanLanguage[] {
+  const languages = (value ?? "").split("+").filter((id): id is ScanLanguage => Object.hasOwn(catalog.languages, id));
+  return languages.length ? [...new Set(languages)] : ["eng"];
 }

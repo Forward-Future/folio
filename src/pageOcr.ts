@@ -1,6 +1,7 @@
 import { AnnotationMode, OPS, type PDFPageProxy } from "pdfjs-dist";
 import type { Worker as OcrWorker } from "tesseract.js";
-import type { ScanLanguage } from "./scanLanguage";
+import { SCAN_LANGUAGES, type ScanLanguage } from "./scanLanguage";
+import { installedScanLanguages, OCR_CACHE_PATH } from "./scanLanguagePacks";
 import type { EventBus, PDFPageView, PDFViewer } from "./viewer";
 
 interface Word {
@@ -24,19 +25,26 @@ async function hasPageImage(page: PDFPageProxy) {
   return fnArray.some(op => IMAGE_OPS.has(op));
 }
 
-async function startWorker(language: ScanLanguage) {
+async function startWorker(languages: ScanLanguage[]) {
+  if (languages.some(code => code !== "eng")) {
+    const installed = await installedScanLanguages();
+    const missing = SCAN_LANGUAGES.find(({ id }) => languages.includes(id) && !installed.has(id));
+    if (missing) throw new MissingScanPack(`Download the ${missing.name} pack in Settings to read this scan.`);
+  }
   const { createWorker, OEM, PSM } = await import("tesseract.js");
   const base = `${import.meta.env.BASE_URL}ocr`;
   // Language initialization errors in Tesseract are delivered to errorHandler.
   const worker = await new Promise<OcrWorker>((resolve, reject) => {
-    createWorker(language, OEM.LSTM_ONLY, {
+    createWorker(languages, OEM.LSTM_ONLY, {
       workerPath: `${base}/worker.min.js`, workerBlobURL: false, corePath: base, langPath: base,
-      cacheMethod: "none", errorHandler: reject,
+      cachePath: OCR_CACHE_PATH, cacheMethod: "readOnly", errorHandler: reject,
     }).then(resolve, reject);
   });
   await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
   return worker;
 }
+
+class MissingScanPack extends Error {}
 
 async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSignal): Promise<Word[]> {
   signal.throwIfAborted();
@@ -125,7 +133,7 @@ async function hasEmbeddedText(page: PDFPageProxy, signal: AbortSignal) {
 }
 
 /** Prepare the document sequentially, giving the reader's current page and its successor the next turns. */
-export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language: ScanLanguage, onStatus: (text: string | null) => void) {
+export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, languages: ScanLanguage[], onStatus: (text: string | null) => void) {
   const pdf = viewer.pdfDocument!;
   const controller = new AbortController();
   const { signal } = controller;
@@ -141,6 +149,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language
   let timer: number | undefined;
   let worker: Promise<OcrWorker> | undefined;
   let workerStartFailed = false;
+  let missingPackMessage: string | undefined;
 
   function updateStatus() {
     const n = viewer.currentPageNumber;
@@ -148,7 +157,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language
     const layer = view.textLayer?.div;
     if (layer?.isConnected && !layer.hidden && layer.textContent.trim()) onStatus(null);
     else if (notices.get(n) === "noWords") onStatus(`No readable text found on page ${n}.`);
-    else if (notices.has(n)) onStatus(`Text unavailable on page ${n}.`);
+    else if (notices.has(n)) onStatus(missingPackMessage ?? `Text unavailable on page ${n}.`);
     else if (active === n && recognizing) onStatus(`Recognizing text on page ${n}…`);
     else if (pending.has(n) || active === n || !layer?.isConnected || layer.hidden || !layer.querySelector(".endOfContent")) {
       onStatus(`Preparing text on page ${n}…`);
@@ -197,7 +206,11 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language
       }
       recognizing = true;
       if (n === viewer.currentPageNumber) updateStatus();
-      worker ??= startWorker(language).catch(error => { workerStartFailed = true; throw error; });
+      worker ??= startWorker(languages).catch(error => {
+        workerStartFailed = true;
+        missingPackMessage = error instanceof MissingScanPack ? error.message : undefined;
+        throw error;
+      });
       const words = await readWords(page, await worker, signal);
       signal.throwIfAborted();
       if (words.length) {

@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld("folioDesktop", {
   ready: () => ipcRenderer.invoke("folio:ready"),
   platform: process.platform,
   openDownload: () => ipcRenderer.invoke("folio:open-download"),
+  downloadOcrModel: (code) => ipcRenderer.invoke("folio:download-ocr-model", code),
   /** Downloads a PDF from an http(s) link; resolves to { name, data: Uint8Array }, or null if the user said no. */
   async fetchPdf(url) {
     const file = await ipcRenderer.invoke("folio:fetch-pdf", url);

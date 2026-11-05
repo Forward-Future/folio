@@ -2,7 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Modal } from "./Dialogs";
 import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
 import { updateSummary } from "./updates";
-import { SCAN_LANGUAGES, type ScanLanguage } from "./scanLanguage";
+import { ScanLanguagePicker } from "./ScanLanguagePicker";
+import type { ScanLanguage } from "./scanLanguage";
 
 /** One place for every Folio preference. */
 interface Props {
@@ -12,8 +13,8 @@ interface Props {
   onNight: (on: boolean) => void;
   wheelPaging: boolean;
   onWheelPaging: (on: boolean) => void;
-  scanLanguage: ScanLanguage;
-  onScanLanguage: (language: ScanLanguage) => void;
+  scanLanguages: ScanLanguage[];
+  onScanLanguages: (languages: ScanLanguage[]) => void;
   onOpenChangelog: () => void;
   onClose: () => void;
 }
@@ -67,7 +68,7 @@ function Choice<T extends string>({ value, options, onChange, label }: { value: 
   );
 }
 
-export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, onWheelPaging, scanLanguage, onScanLanguage, onOpenChangelog, onClose }: Props) {
+export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, onWheelPaging, scanLanguages, onScanLanguages, onOpenChangelog, onClose }: Props) {
   const desktop = window.folioDesktop;
   const ai = desktop?.ai;
   const [error, setError] = useState<string | null>(null);
@@ -119,8 +120,8 @@ export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, on
           <Row label="Scroll one page at a time" hint="Turn a page with each mouse wheel click or trackpad swipe.">
             <Switch label="Scroll one page at a time" checked={wheelPaging} onChange={onWheelPaging} />
           </Row>
-          <Row label="Scan language" hint="Which text to recognize in scanned PDFs.">
-            <Choice label="Scan language" value={scanLanguage} options={SCAN_LANGUAGES} onChange={onScanLanguage} />
+          <Row label="Scan languages" hint="Download languages once to recognize scans offline.">
+            <ScanLanguagePicker value={scanLanguages} onChange={onScanLanguages} />
           </Row>
         </Section>
 

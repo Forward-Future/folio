@@ -563,6 +563,10 @@ if (!app.requestSingleInstanceLock()) {
       notifyOnly: NOTIFY_ONLY }));
     handle("folio:open-installation", () => shell.openPath(installLocation()));
     handle("folio:open-download", () => shell.openExternal(RELEASES_PAGE));
+    handle("folio:download-ocr-model", async (_event, code) => {
+      const { downloadOcrModel } = await import("./ocr-download.mjs");
+      return downloadOcrModel(code, (url, options) => net.fetch(url, options));
+    });
     handle("folio:update-state", () => updateStatus);
     handle("folio:auto-update-setting", () => automaticUpdates);
     handle("folio:set-auto-update-setting", (_event, enabled) => saveUpdatePreference(enabled));

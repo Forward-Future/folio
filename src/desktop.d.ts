@@ -27,6 +27,7 @@ interface FolioDesktop {
   platform: string;
   /** Opens the releases page (macOS, where updates are downloaded manually). */
   openDownload(): Promise<void>;
+  downloadOcrModel(code: string): Promise<Uint8Array<ArrayBuffer>>;
   openInstallation(): Promise<string>;
   setTheme(theme: string): void;
   installUpdate(): void;

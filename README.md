@@ -98,8 +98,9 @@ The editor works with unsigned, unencrypted PDFs.
 
 ### Highlight, draw, and take notes
 
-- **Select text in scans.** Folio recognizes English by default. In **Settings → Reading → Scan language**, choose
-  **German** or **Both** for bilingual scans. Changing the language also updates scans you already have open.
+- **Select text in scans.** Folio recognizes English by default. In **Settings → Reading → Scan languages**, search
+  for a language by its English or local name. Select the languages in your document. The dropdown shows the total
+  size of any packs to download. Folio keeps them on this device for offline use and re-reads open scans.
   The page you jump to gets priority. A message above the page controls shows when text is still being prepared.
   Once it clears, drag across the words to copy, highlight, or ask about a passage. Recognition runs offline.
 - **One-click highlights:** select text, then choose yellow, green, blue, pink, or red from the selection toolbar;
@@ -256,6 +257,7 @@ Folio requires no Folio account, has no analytics or telemetry, and never upload
 network requests only to:
 
 - check GitHub for updates (installed copies; can be turned off in **Settings**),
+- download the scan language packs you choose in **Settings** from the Tesseract.js project on GitHub,
 - open a link you give it (a webpage is loaded in a hidden, sandboxed window with its own temporary session, so no
   cookies or sign-ins are shared, and every permission is denied; its scripts run while it loads, as in any browser,
   and it's then printed to PDF), and

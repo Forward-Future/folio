@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
+import ocrCatalog from "../electron/ocr-models.json" with { type: "json" };
 
 // A two-page form with a text field on its first page.
 function formPdf() {
@@ -37,6 +38,7 @@ async function checkScanSelection(app, page) {
     ctx.fillText("Select these words", 100, 225);
     ctx.fillText("from a scanned page.", 100, 300);
     ctx.fillText("Grüße aus Köln", 100, 375);
+    ctx.fillText("El niño español", 100, 450);
     const rgba = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     const bits = new Uint8Array(canvas.width * canvas.height / 8);
     for (let i = 0; i < canvas.width * canvas.height; i++) {
@@ -141,23 +143,71 @@ async function checkScanSelection(app, page) {
   assert.equal(await status.innerText(), "");
   console.log("ok  background OCR prepares unvisited scans, prioritizes page jumps, and shows selectable text in dark mode");
 
+  // Exercise the real desktop download and checksum path without reaching GitHub from CI.
+  await app.evaluate(({ net }, { base, fixtures }) => {
+    const original = net.fetch;
+    const requests = [];
+    net.fetch = async (url, options) => {
+      if (!String(url).startsWith(base)) return original.call(net, url, options);
+      const file = url.slice(base.length);
+      if (!Object.hasOwn(fixtures, file)) throw new Error("Unexpected language download");
+      requests.push(file);
+      const bytes = process.getBuiltinModule("fs").readFileSync(fixtures[file]);
+      if (requests.length === 1) bytes[0] ^= 1;
+      return new Response(bytes);
+    };
+    globalThis.finishModelDownloads = () => { net.fetch = original; return requests; };
+  }, { base: ocrCatalog.baseUrl, fixtures: Object.fromEntries(["spa", "deu"].map(code => {
+    const file = code + ".traineddata.gz";
+    return [file, path.resolve(import.meta.dirname, "../node_modules/@tesseract.js-data", code, "4.0.0_best_int", file)];
+  })) });
   const settingsShortcut = process.platform === "darwin" ? "Meta+Comma" : "Control+Comma";
   await page.keyboard.press(settingsShortcut);
-  const language = page.getByRole("radiogroup", { name: "Scan language" });
-  assert.equal(await language.getByRole("radio", { name: "English" }).getAttribute("aria-checked"), "true");
-  await language.getByRole("radio", { name: "German" }).click();
+  const picker = page.getByRole("button", { name: /^Scan languages:/ });
+  await picker.click();
+  const languages = page.getByRole("dialog", { name: "Choose scan languages" });
+  const search = languages.getByRole("searchbox");
+  const apply = languages.getByRole("button", { name: "Apply" });
+  const download = languages.getByRole("button", { name: /^Download ·/ });
+  assert.equal(await languages.getByRole("checkbox").count(), Object.keys(ocrCatalog.languages).length);
+  assert.ok(await languages.getByRole("checkbox", { name: "English", exact: true }).isChecked());
+  await languages.getByRole("checkbox", { name: "English", exact: true }).uncheck();
+  assert.ok(await apply.isDisabled());
+  await search.fill("espanol");
+  await languages.getByRole("checkbox", { name: "Spanish", exact: true }).check();
+  await download.click();
+  await languages.getByRole("alert").waitFor();
+  assert.equal(await picker.innerText(), "English", "a damaged pack must not replace the active selection");
+  await download.click();
+  await languages.waitFor({ state: "hidden" });
   await page.keyboard.press("Escape");
   const currentScan = page.locator('.page[data-page-number="4"] .textLayer');
-  await currentScan.getByText("Grüße", { exact: true }).waitFor({ timeout: 45_000 });
+  await currentScan.getByText("niño", { exact: true }).waitFor({ timeout: 45_000 });
   await page.keyboard.press(settingsShortcut);
-  await language.getByRole("radio", { name: "Both" }).click();
+  await picker.click();
+  await search.fill("Deutsch");
+  await languages.getByRole("checkbox", { name: "German", exact: true }).check();
+  await download.click();
+  await languages.waitFor({ state: "hidden" });
   await page.keyboard.press("Escape");
   await currentScan.getByText("Grüße", { exact: true }).waitFor({ timeout: 45_000 });
-  await currentScan.getByText("Select", { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => localStorage.getItem("folio:scan-language")), "eng+deu");
+  await currentScan.getByText("niño", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem("folio:scan-language")), "spa+deu");
+  await page.keyboard.press(settingsShortcut);
+  await picker.click();
+  await languages.getByRole("checkbox", { name: "German", exact: true }).uncheck();
+  await apply.click();
+  await languages.waitFor({ state: "hidden" });
+  await picker.click();
+  await search.fill("German");
+  await languages.getByRole("checkbox", { name: "German", exact: true }).check();
+  await apply.click();
+  await languages.waitFor({ state: "hidden" });
+  await page.keyboard.press("Escape");
+  assert.deepEqual(await app.evaluate(() => globalThis.finishModelDownloads()), ["spa.traineddata.gz", "spa.traineddata.gz", "deu.traineddata.gz"]);
   await goTo(1);
   assert.equal((await mixed.innerText()).trim(), "Embedded text");
-  console.log("ok  switching scan languages re-reads the open PDF with locally bundled German and English");
+  console.log("ok  scan languages verify downloads, retry a corrupt pack, and reuse saved models for mixed-language scans");
 }
 
 async function captureDownload(app, file) {
