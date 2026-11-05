@@ -1,3 +1,4 @@
+import { clearRecognizedText } from "./recent";
 import { useEffect, useState, type ReactNode } from "react";
 import { Modal } from "./Dialogs";
 import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
@@ -68,6 +69,7 @@ export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, on
   const desktop = window.folioDesktop;
   const ai = desktop?.ai;
   const [error, setError] = useState<string | null>(null);
+  const [ocrCleared, setOcrCleared] = useState(false);
 
   // Updates
   const [info, setInfo] = useState<Awaited<ReturnType<FolioDesktop["getAppInfo"]>> | null>(null);
@@ -156,6 +158,15 @@ export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, on
             </Row>
           </Section>
         )}
+
+        <Section title="Recognized text">
+          <Row label="Saved recognized text" hint={ocrCleared ? "Saved recognized text has been removed." : "Recognized text is stored on this device so you can search it later."}>
+            <button className="btn ghost" onClick={async () => {
+              try { await clearRecognizedText(); setOcrCleared(true); setError(null); }
+              catch { setError("Couldn't clear saved recognized text. Please try again."); }
+            }}>Clear saved text</button>
+          </Row>
+        </Section>
 
         <Section title="Signature">
           <Row label="Remembered signature" hint={savedSignature

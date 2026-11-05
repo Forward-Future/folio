@@ -8,6 +8,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 const base = `${import.meta.env.BASE_URL}pdfjs/`;
 
+export { pdfjs };
 export type { PDFDocumentProxy };
 
 export async function loadPdf(data: Uint8Array, signal: AbortSignal, password?: string) {

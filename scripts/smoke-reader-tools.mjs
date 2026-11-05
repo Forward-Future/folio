@@ -46,7 +46,7 @@ async function checkScanSelection(app, page) {
   const image = deflateSync(Buffer.from(pixels)).toString("hex") + ">";
   // The scan is upright when displayed, on a rotated, offset page with a non-default unit.
   const draw = "q 0 400 -200 0 220 30 cm /Scan Do Q";
-  const native = draw + "\nBT /F 12 Tf 30 50 Td (Embedded text) Tj ET";
+  const native = draw + "\nBT /F 12 Tf 30 50 Td (Embedded text) Tj " + "0 20 Td (More embedded text) Tj ".repeat(9) + "ET";
   const pageDict = "/Type /Page /Parent 2 0 R /MediaBox [20 30 220 430] /Rotate 90 /UserUnit 1.25";
   const resources = scan => `/Resources << /XObject << /Scan ${scan} 0 R >> /Font << /F 8 0 R >> >>`;
   const imageObject = kind => `<< /Type /XObject /Subtype /Image /Width 1000 /Height 500 ${kind} /BitsPerComponent 1 /Filter [/ASCIIHexDecode /FlateDecode] /Length ${image.length} >>\nstream\n${image}\nendstream`;
@@ -84,10 +84,12 @@ async function checkScanSelection(app, page) {
   const status = page.locator(".page-text-status");
   const waitForJob = n => page.waitForFunction(n => window.ocrJob === n, n, { timeout: 45_000 });
   await waitForJob(1);
+  await page.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: "Recognize text" }).click();
   assert.equal(await pageNumber.inputValue(), "1");
   const mixed = page.locator('.page[data-page-number="1"] .textLayer');
-  await mixed.getByText("Embedded text", { exact: true }).waitFor();
-  assert.equal((await mixed.innerText()).trim(), "Embedded text");
+  await mixed.getByText("Embedded text", { exact: true }).first().waitFor();
+  assert.match((await mixed.innerText()).trim(), /^Embedded text/);
   await goTo(2);
   await status.filter({ hasText: "Recognizing text on page 2…" }).waitFor();
   await page.evaluate(() => window.resumeOcr());
@@ -126,7 +128,7 @@ async function checkScanSelection(app, page) {
   await waitForJob(3);
   assert.equal(await status.innerText(), "Recognizing text on page 5…");
   await page.evaluate(() => window.resumeOcr());
-  await page.locator('.page[data-page-number="5"] .ocr-word').first().waitFor();
+  await page.locator('.page[data-page-number="5"] .textLayer span:not(.markedContent)').first().waitFor();
   assert.equal(await status.innerText(), "");
   await goTo(3);
   await page.locator('.page[data-page-number="3"] .textLayer').getByText("Select", { exact: true }).waitFor();
@@ -134,11 +136,35 @@ async function checkScanSelection(app, page) {
   await goTo(4);
   await page.evaluate(() => window.failOcr());
   await status.filter({ hasText: "Text unavailable on page 4." }).waitFor();
-  await goTo(3);
-  await goTo(4);
-  await page.locator('.page[data-page-number="4"] .ocr-word').first().waitFor();
+  await page.getByRole("button", { name: "Try again" }).click();
+  await page.locator('.page[data-page-number="4"] .textLayer span:not(.markedContent)').first().waitFor();
   assert.equal(await status.innerText(), "");
   console.log("ok  background OCR prepares unvisited scans, prioritizes page jumps, and shows selectable text in dark mode");
+
+  // A mixed 12-page document still exposes a document-level action when the only scan is on page 1.
+  const mixedKids = Array.from({ length: 12 }, (_, i) => `${i + 3} 0 R`).join(" ");
+  const mixedResources = `/Resources << /XObject << /Scan 15 0 R >> /Font << /F 18 0 R >> >>`;
+  const stamped = draw + "\nBT /F 12 Tf 30 50 Td (Stamp) Tj ET";
+  const mixedTwelve = testPdf([
+    "<< /Type /Catalog /Pages 2 0 R >>", `<< /Type /Pages /Count 12 /Kids [${mixedKids}] >>`,
+    `<< ${pageDict} ${mixedResources} /Contents 19 0 R >>`,
+    ...Array.from({ length: 11 }, () => `<< ${pageDict} ${mixedResources} /Contents 17 0 R >>`),
+    imageObject("/ColorSpace /DeviceGray"),
+    `<< /Length ${draw.length} >>\nstream\n${draw}\nendstream`,
+    `<< /Length ${native.length} >>\nstream\n${native}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${stamped.length} >>\nstream\n${stamped}\nendstream`,
+  ]);
+  await app.evaluate(({ BrowserWindow }, bytes) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Twelve page mixed.pdf", data: Buffer.from(bytes) }), mixedTwelve);
+  await page.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: "Recognize text" }).click();
+  await page.waitForFunction(() => window.ocrJob === 1, null, { timeout: 45_000 });
+  await page.evaluate(() => window.resumeOcr());
+  const stampedLayer = page.locator('.page[data-page-number="1"] .textLayer');
+  await stampedLayer.getByText("Stamp", { exact: true }).waitFor({ timeout: 45_000 });
+  await stampedLayer.getByText("Select", { exact: true }).waitFor({ timeout: 45_000 });
+  console.log("ok  recognition preserves native text on a stamped scan in a mixed 12-page PDF");
 }
 
 async function captureDownload(app, file) {
@@ -301,6 +327,8 @@ export async function checkReaderTools(app, page, folder, shots) {
     el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, ...options })), options);
   const atPage = n => page.waitForFunction(n => document.querySelector('[aria-label="Page number"]').value === String(n), n);
   await settings();
+  await page.getByRole("button", { name: "Clear saved text" }).click();
+  await page.getByText("Saved recognized text has been removed.").waitFor();
   assert.equal(await wheelSwitch.getAttribute("aria-checked"), "false");
   await wheelSwitch.click();
   await page.keyboard.press("Escape");

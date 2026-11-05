@@ -12,10 +12,12 @@ type FindOpts = { again?: boolean; previous?: boolean; caseSensitive?: boolean; 
 
 export function SearchBar({
   result,
+  recognizing,
   onFind,
   onClose,
 }: {
   result: FindResult;
+  recognizing: boolean;
   onFind: (q: string, o: FindOpts) => void;
   onClose: () => void;
 }) {
@@ -56,7 +58,8 @@ export function SearchBar({
         }}
         spellCheck={false}
       />
-      <span className={`search-status ${query && result.total === 0 && result.state !== 3 ? "miss" : ""}`}>{status}</span>
+      <span className={`search-status ${query && result.total === 0 && result.state !== 3 && !recognizing ? "miss" : ""}`} role="status">{status}</span>
+      {query && recognizing && <span className="search-progress" role="status">Results may be incomplete while text is being recognized</span>}
       <button className={`chip ${caseSensitive ? "on" : ""}`} onClick={() => setCase(!caseSensitive)} title="Match case">
         Aa
       </button>

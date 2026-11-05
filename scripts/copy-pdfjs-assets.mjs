@@ -1,6 +1,6 @@
 // Copies pdf.js runtime assets (CJK cmaps, standard fonts, wasm decoders, ICC profiles) into public/.
 // quickjs-eval.* runs JavaScript embedded in PDFs, which Folio never does, so it stays out.
-import { cpSync, existsSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");

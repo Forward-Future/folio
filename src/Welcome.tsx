@@ -66,6 +66,7 @@ interface Props {
 
 export function Welcome({ active, onPick, onOpenUrl, onOpenRecent, onSample, loading }: Props) {
   const [recent, setRecent] = useState<RecentFile[]>([]);
+  const [recentError, setRecentError] = useState<string | null>(null);
   const [version, setVersion] = useState<string | null>(null);
 
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
@@ -83,8 +84,8 @@ export function Welcome({ active, onPick, onOpenUrl, onOpenRecent, onSample, loa
   }, [active]);
 
   const forget = async (id: string) => {
-    await removeRecent(id);
-    setRecent((r) => r.filter((f) => f.id !== id));
+    try { await removeRecent(id); setRecent((r) => r.filter((f) => f.id !== id)); setRecentError(null); }
+    catch { setRecentError("Couldn’t remove the recent file and its recognized text. Please try again."); }
   };
 
   return (
@@ -123,14 +124,15 @@ export function Welcome({ active, onPick, onOpenUrl, onOpenRecent, onSample, loa
               <button
                 className="link"
                 onClick={async () => {
-                  if (!confirm("Remove all recent files from Folio? The original files aren't affected.")) return;
-                  await clearRecent();
-                  setRecent([]);
+                  if (!confirm("Remove all recent files and all saved recognized text from this device?")) return;
+                  try { await clearRecent(); setRecent([]); setRecentError(null); }
+                  catch { setRecentError("Couldn’t clear recent files and recognized text. Please try again."); }
                 }}
               >
                 Clear all
               </button>
             </div>
+            {recentError && <p role="alert">{recentError}</p>}
             <div className="recent-grid">
               {recent.map((f) => (
                 <div key={f.id} className="recent-card" onClick={() => onOpenRecent(f)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onOpenRecent(f)}>
