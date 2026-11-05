@@ -9,7 +9,7 @@ import {
   SpreadMode,
 } from "./viewer";
 import { AnnotationEditorParamsType, AnnotationEditorType } from "pdfjs-dist";
-import { loadPdf, reorderPdf, thumbnailDataUrl, type PDFDocumentProxy } from "./pdf";
+import { loadPdf, copyPdfPages, thumbnailDataUrl, type PDFDocumentProxy } from "./pdf";
 import { contentKey, getRecent, MAX_RECENT_FILE_BYTES, onStoredDataCleared, removeRecent, saveRecent, updateLastPage } from "./recent";
 import { readPdfBlob, readPdfResponse } from "./pdfInput";
 import { FIT_SCALES, readView, writeView, type ReadingView } from "./session";
@@ -210,6 +210,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   colorsRef.current = colors;
   const pageRef = useRef(1);
   const [dirty, setDirty] = useState(false);
+  const editRevision = useRef(0);
+  const markDirty = useCallback(() => { editRevision.current++; setDirty(true); }, []);
   const [contentEditing, setContentEditing] = useState(false);
   const contentRef = useRef<ContentEditorHandle>(null);
   const nextSelection = useRef<NextSelection | null>(null);
@@ -458,10 +460,11 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
 
         // Markup is saved automatically; only documents Folio can't store count as having unsaved changes.
         (pdf.annotationStorage as { onSetModified: unknown }).onSetModified = () => {
-          if (docRef.current === next && !persistRef.current) setDirty(true);
+          if (docRef.current === next && !persistRef.current) markDirty();
         };
         (pdf.annotationStorage as { onResetModified: unknown }).onResetModified = () => {
-          if (docRef.current === next) setDirty(false);
+          // Serializing a subset or printout also resets pdf.js's flag. Only a full save clears ours.
+          if (docRef.current === next && exporting.current !== pdf) setDirty(false);
         };
 
         setDoc(next);
@@ -837,7 +840,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     return () => window.removeEventListener("pagehide", flush);
   }, []);
 
-  const currentBytes = async (doc = docRef.current, order = pageOrder) => {
+  const currentBytes = async (doc = docRef.current, pages = pageOrder) => {
     if (!doc || exporting.current === doc.pdf) return null;
     exporting.current = doc.pdf;
     const signal = opening.current!.signal;
@@ -853,7 +856,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         keys.push(key);
       }
       const annotated = storage.size > 0;
-      if (order?.length) return { bytes: await reorderPdf(doc.pdf, order, signal, doc.password), annotated };
+      if (pages?.length) return { bytes: await copyPdfPages(doc.pdf, pages, signal, doc.password), annotated };
       return { bytes: annotated ? await doc.pdf.saveDocument() : await doc.pdf.getData(), annotated };
     } finally {
       for (const key of keys) storage.remove(key);
@@ -864,6 +867,20 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const copyName = pageOrder && doc ? doc.name.replace(/\.pdf$/i, "") + " (reordered).pdf" : doc?.name ?? "document.pdf";
   const saveBytes = (bytes: Uint8Array) => {
     saveBlob(pdfBlob(bytes), copyName.toLowerCase().endsWith(".pdf") ? copyName : `${copyName}.pdf`);
+  };
+
+  const exportPages = async (pages: number[]) => {
+    if (contentRef.current && !(await contentRef.current.finish())) return;
+    const source = docRef.current;
+    if (!source || (source.sourceId ?? source.id) !== (doc?.sourceId ?? doc?.id)) return;
+    try {
+      const copy = await currentBytes(source, pages);
+      if (docRef.current !== source) return;
+      if (!copy) { flash("Another export is in progress. Try again in a moment."); return; }
+      saveBlob(pdfBlob(copy.bytes), source.name.replace(/\.pdf$/i, "") + " (selected pages).pdf");
+    } catch {
+      if (docRef.current === source) flash("Couldn't export the selected pages.");
+    }
   };
 
   const exportNotes = async (format: "markdown" | "json") => {
@@ -888,12 +905,14 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     const doc = docRef.current;
     if (!doc || savingCopy.current) return;
     savingCopy.current = true;
+    const revision = editRevision.current;
     try {
-      const copy = await currentBytes();
+      const copy = await currentBytes(doc, pageOrder);
       if (!copy || docRef.current !== doc) return;
       const name = doc.sourceId ? copyName.replace(/\.pdf$/i, "") + " (edited).pdf" : copyName;
       const blob = pdfBlob(copy.bytes);
       saveBlob(blob, /\.pdf$/i.test(name) ? name : name + ".pdf");
+      if (editRevision.current === revision) setDirty(false);
       const changes = changesForCopy(doc, copy.annotated, pageOrder);
       let historyMessage = "";
       if (changes.length && doc.historyAllowed && blob.size <= MAX_RECENT_FILE_BYTES) {
@@ -931,10 +950,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (contentRef.current && !(await contentRef.current.finish())) return;
       const source = docRef.current;
       if (!source) return;
-      // Printing writes a snapshot, so preserve the unsaved marker after pdf.js serializes the edits.
-      const copy = await currentBytes(source).finally(() => {
-        if (dirty && docRef.current === source) setDirty(true);
-      });
+      const copy = await currentBytes(source);
       if (!copy || docRef.current !== source) return;
       if (!window.folioDesktop) { printPdfBytes(copy.bytes); return; }
       const snapshot = await loadPdf(copy.bytes, opening.current!.signal, source.password);
@@ -1359,6 +1375,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             order={pageDraft?.order ?? null}
             onOrder={order => setPageDraft(order ? { order } : null)}
             onSaveOrder={download}
+              onExportPages={exportPages}
             onOpenCopy={pageDraft?.copy ? () => {
               tabs.open([{ kind: "bytes", name: copyName, data: pageDraft.copy!, password: doc.password }]);
             } : undefined}
@@ -1386,18 +1403,16 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
           <div ref={containerRef} className="viewer-container" tabIndex={-1}
             onInput={event => {
               // Form values live in the PDF until a copy is saved. Folio only auto-saves its own markup.
-              if ((event.target as HTMLElement).closest(".annotationLayer :is(input, textarea, select)")) setDirty(true);
+              if ((event.target as HTMLElement).closest(".annotationLayer :is(input, textarea, select)")) markDirty();
             }}>
             <div ref={innerRef} className="pdfViewer" />
           </div>
           {contentEditing && doc && <ContentEditor key={doc.pdf.loadingTask.docId} ref={contentRef} nextSelection={nextSelection} pdf={doc.pdf} viewer={viewerRef.current!} bus={busRef.current!}
             onDirty={setEditorDirty} snapshot={async () => {
               if (doc.password || await doc.pdf.getPermissions() || (await doc.pdf.getSignatures())?.length) throw new Error("Editing requires an unsigned, unencrypted PDF.");
-              try {
-                const copy = await currentBytes(doc, []);
-                if (!copy || docRef.current !== doc) throw new Error("The document changed. Try again.");
-                return copy.bytes;
-              } finally { if (dirty && docRef.current === doc) setDirty(true); }
+              const copy = await currentBytes(doc, []);
+              if (!copy || docRef.current !== doc) throw new Error("The document changed. Try again.");
+              return copy.bytes;
             }} apply={async (bytes, change) => docRef.current === doc && !!await openBytes(doc.name, bytes, undefined, opening.current!.signal, undefined, { doc, change })} />}
           {doc && <div className="page-text-status" role="status">{textStatus}</div>}
 
@@ -1617,7 +1632,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}
         onClose={() => setSigning(false)} onApprove={async (signature, rect) => {
           await placeSignature(viewerRef.current!, doc.pdf, page, signature, rect);
-          setDirty(true); setSignatureDismissed(true); flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
+          markDirty(); setSignatureDismissed(true); flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
         }} />}
       {doc && !contentEditing && !signing && signatureTargets.length > 0 && !signatureDismissed && <div className="signature-suggestion" role="status">
         <span>{signatureTargets[0].kind === "field" ? "Signature field detected" : "Possible signature area"} on page {page}</span>

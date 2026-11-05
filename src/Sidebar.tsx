@@ -1,6 +1,8 @@
-import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
 import { Icon } from "./icons";
+import { IS_MAC } from "./platform";
 import { anchoredScrollTop, loadPageSizes, rowAt, thumbLayout, THUMB_ROW_EXTRA, type PageSize } from "./thumbnails";
 
 interface Props {
@@ -14,6 +16,7 @@ interface Props {
   order: number[] | null;
   onOrder: (order: number[] | null) => void;
   onSaveOrder: () => Promise<void>;
+  onExportPages: (pages: number[]) => Promise<void>;
   onOpenCopy?: () => void;
   tab: SidebarTab;
   onTab: (tab: SidebarTab) => void;
@@ -23,7 +26,7 @@ interface Props {
 
 export type SidebarTab = "pages" | "outline" | "notes";
 
-export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order, onOrder, onSaveOrder, onOpenCopy,
+export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order, onOrder, onSaveOrder, onOpenCopy, onExportPages,
   tab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
   const [outline, setOutline] = useState<OutlineItem[] | null>(null);
   const [bookmarkedOnly, setBookmarkedOnly] = useState(false);
@@ -60,7 +63,8 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order
         {tab === "notes" ? (
           notes
         ) : tab === "pages" ? (
-          <Thumbnails pdf={pdf} page={page} rotation={rotation} onSelect={onSelectPage}
+          <Thumbnails pdf={pdf} page={page} rotation={rotation}
+            onSelect={onSelectPage} onExportPages={onExportPages}
             bookmarkedPages={bookmarkedPages} onToggleBookmark={onToggleBookmark} bookmarkedOnly={bookmarkedOnly} />
         ) : outline === null ? null : outline.length === 0 ? (
           <div className="empty-outline">
@@ -182,9 +186,46 @@ function PageOrganizer({ pdf, page, rotation, onSelect, order, onOrder, onSave, 
   );
 }
 
-function Thumbnails({ pdf, page, rotation, onSelect, order, onMove, bookmarkedPages, onToggleBookmark, bookmarkedOnly = false }: ThumbnailProps & {
+type PageMenuTarget = { x: number; y: number; thumbnail: HTMLButtonElement };
+
+function PageExportMenu({ target, count, onExport, onClose }: {
+  target: PageMenuTarget; count: number; onExport: () => void; onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current!;
+    el.style.left = Math.max(4, Math.min(target.x, window.innerWidth - el.offsetWidth - 4)) + "px";
+    el.style.top = Math.max(4, Math.min(target.y, window.innerHeight - el.offsetHeight - 4)) + "px";
+    el.querySelector("button")!.focus({ preventScroll: true });
+  }, [target]);
+  useEffect(() => {
+    const outside = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
+    window.addEventListener("pointerdown", outside, true);
+    window.addEventListener("scroll", onClose, true);
+    window.addEventListener("resize", onClose);
+    window.addEventListener("blur", onClose);
+    return () => {
+      window.removeEventListener("pointerdown", outside, true);
+      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("resize", onClose);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [onClose]);
+  const dismiss = () => { onClose(); target.thumbnail.focus({ preventScroll: true }); };
+  return createPortal(
+    <div ref={ref} className="menu page-export-menu" role="menu" aria-label="Page actions" onKeyDown={e => {
+      if (e.key === "Escape" || e.key === "Tab") { e.stopPropagation(); dismiss(); }
+    }}>
+      <button role="menuitem" onClick={() => { dismiss(); onExport(); }}>
+        <Icon name="download" size={16} />{count === 1 ? "Export this page…" : `Export ${count} selected pages…`}
+      </button>
+    </div>, document.body);
+}
+
+function Thumbnails({ pdf, page, rotation, onSelect, order, onMove, onExportPages, bookmarkedPages, onToggleBookmark, bookmarkedOnly = false }: ThumbnailProps & {
   order?: number[];
   onMove?: (source: number, to: number) => void;
+  onExportPages?: Props["onExportPages"];
   bookmarkedPages?: Props["bookmarkedPages"];
   onToggleBookmark?: Props["onToggleBookmark"];
   bookmarkedOnly?: boolean;
@@ -199,6 +240,49 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove, bookmarkedPa
     return (bookmarkedPages ?? []).filter(n => Number.isInteger(n) && n >= 1 && n <= pdf.numPages);
   }, [order, bookmarkedOnly, bookmarkedPages, pdf.numPages]);
   const count = pages?.length ?? pdf.numPages;
+  const [picked, setPicked] = useState<Set<number> | null>(null);
+  const anchor = useRef<number | null>(null);
+  const [menu, setMenu] = useState<PageMenuTarget | null>(null);
+  useLayoutEffect(() => {
+    setPicked(null);
+    setMenu(null);
+    anchor.current = null;
+  }, [bookmarkedOnly]);
+  const selected = useMemo(() => {
+    const selection = picked ?? new Set([page]);
+    return bookmarkedOnly && pages ? new Set(pages.filter(n => selection.has(n))) : selection;
+  }, [picked, page, pages, bookmarkedOnly]);
+  const select = (n: number, e: ReactMouseEvent) => {
+    if (!onExportPages) { onSelect(n); return; }
+    const toggle = IS_MAC ? e.metaKey : e.ctrlKey;
+    if (e.shiftKey) {
+      const base = anchor.current ?? page;
+      const start = pages && !pages.includes(base) ? n : base;
+      const first = Math.min(start, n), last = Math.max(start, n);
+      const next = toggle ? new Set(selected) : new Set<number>();
+      if (pages) {
+        for (const i of pages) if (i >= first && i <= last) next.add(i);
+      } else {
+        for (let i = first; i <= last; i++) next.add(i);
+      }
+      setPicked(next);
+    } else if (toggle) {
+      const next = new Set(selected);
+      if (next.has(n)) next.delete(n); else next.add(n);
+      setPicked(next);
+      anchor.current = n;
+    } else {
+      setPicked(null);
+      anchor.current = null;
+      onSelect(n);
+    }
+  };
+  const openMenu = (thumbnail: HTMLButtonElement, x: number, y: number) => {
+    const n = Number(thumbnail.dataset.page);
+    if (selected.has(n)) setPicked(selected);
+    else { setPicked(new Set([n])); anchor.current = n; }
+    setMenu({ x, y, thumbnail });
+  };
   const rangeRef = useRef(range);
   rangeRef.current = range;
   const pagesRef = useRef(pages);
@@ -289,6 +373,23 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove, bookmarkedPa
   const end = Math.min(range.end, count);
   return (
     <div className="thumbs" ref={listRef} style={{ gap: 0 }}
+      onContextMenu={e => {
+        if (!onExportPages) return;
+        const target = e.target as Element;
+        if (!target.closest(".thumb, .thumb-num")) return;
+        const thumbnail = target.closest(".thumb-row")?.querySelector<HTMLButtonElement>(".thumb");
+        if (!thumbnail) return;
+        e.preventDefault();
+        openMenu(thumbnail, e.clientX, e.clientY);
+      }}
+      onKeyDown={e => {
+        if (!onExportPages || !(e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))) return;
+        const thumbnail = (e.target as Element).closest<HTMLButtonElement>(".thumb");
+        if (!thumbnail) return;
+        e.preventDefault(); e.stopPropagation();
+        const box = thumbnail.getBoundingClientRect();
+        openMenu(thumbnail, box.left + box.width / 2, box.top + box.height / 2);
+      }}
       onDragStart={e => {
         if (!onMove) return;
         const source = thumbPage(e.target);
@@ -323,10 +424,13 @@ function Thumbnails({ pdf, page, rotation, onSelect, order, onMove, bookmarkedPa
         const index = range.start + i;
         const n = pages?.[index] ?? index + 1;
         return <Thumb key={`${n}-${rotation}`} pdf={pdf} n={n} size={layout.frames[index]} rotation={rotation} active={page === n}
+          selected={onExportPages ? selected.has(n) : undefined} showSelection={picked !== null || !!menu}
           bookmarked={bookmarkedPages?.includes(n)} onToggleBookmark={onToggleBookmark}
-          position={order ? index + 1 : undefined} draggable={!!onMove} dropTarget={dropTarget === n} onSelect={onSelect} />;
+          position={order ? index + 1 : undefined} draggable={!!onMove} dropTarget={dropTarget === n} onSelect={select} />;
       })}
       <div aria-hidden="true" style={{ height: Math.max(0, total - (layout.tops[end] ?? total)), flexShrink: 0 }} />
+      {menu && selected.size > 0 && onExportPages && <PageExportMenu target={menu} count={selected.size}
+        onClose={() => setMenu(null)} onExport={() => void onExportPages([...selected].sort((a, b) => a - b))} />}
     </div>
   );
 }
@@ -337,6 +441,8 @@ const Thumb = memo(function Thumb({
   size,
   rotation,
   active,
+  selected,
+  showSelection,
   position,
   draggable,
   dropTarget,
@@ -349,10 +455,12 @@ const Thumb = memo(function Thumb({
   size: { width: number; height: number };
   rotation: number;
   active: boolean;
+  selected?: boolean;
+  showSelection: boolean;
   position?: number;
   draggable: boolean;
   dropTarget: boolean;
-  onSelect: (n: number) => void;
+  onSelect: (n: number, e: ReactMouseEvent) => void;
   bookmarked?: boolean;
   onToggleBookmark?: Props["onToggleBookmark"];
 }) {
@@ -385,15 +493,21 @@ const Thumb = memo(function Thumb({
 
   return (
     <div className="thumb-row" style={{ height: size.height + THUMB_ROW_EXTRA }}>
-      <button ref={ref} id={id} data-page={n} draggable={draggable} className={`thumb ${active ? "on" : ""} ${dropTarget ? "drop-target" : ""}`}
-        onClick={() => onSelect(n)} aria-label={position ? `Page ${n}, position ${position}` : `Page ${n}`}>
+      <button ref={ref} id={id} data-page={n} draggable={draggable} className={`thumb ${(showSelection ? selected : active) ? "on" : ""} ${dropTarget ? "drop-target" : ""}`}
+        onClick={e => onSelect(n, e)} aria-current={active ? "page" : undefined} aria-pressed={selected} aria-haspopup={selected !== undefined ? "menu" : undefined}
+        aria-label={position ? `Page ${n}, position ${position}` : `Page ${n}`}>
         <span className="thumb-frame" style={{ width: size.width, height: size.height, flexShrink: 0 }}>
           <canvas ref={canvasRef} style={{ opacity: ready ? 1 : 0 }} />
+          {showSelection && selected && <span className="thumb-check"><Icon name="check" size={13} /></span>}
         </span>
         {position && <span className="thumb-num">{position} · Page {n}</span>}
       </button>
       {onToggleBookmark && <div className="thumb-caption">
-        <label className="thumb-num" htmlFor={id}>{n}</label>
+        <label className="thumb-num" htmlFor={id} onClick={e => {
+          if (e.ctrlKey || e.metaKey || e.shiftKey) {
+            e.preventDefault(); ref.current?.focus({ preventScroll: true }); onSelect(n, e);
+          }
+        }}>{n}</label>
         <button type="button" className="thumb-bookmark" disabled={bookmarked === undefined}
           aria-label={`Bookmark page ${n}`} aria-pressed={bookmarked ?? false}
           title={bookmarked ? `Remove bookmark from page ${n}` : `Bookmark page ${n}`} onClick={() => onToggleBookmark(n)}>
