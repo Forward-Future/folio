@@ -571,7 +571,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             throw new Error(`Couldn't download from ${host}. The site may not allow it.`);
           });
           const data = await readPdfResponse(res, transfer);
-          const name = decodeURIComponent(new URL(res.url || url).pathname.split("/").filter(Boolean).pop() || host);
+          const rawName = new URL(res.url || url).pathname.split("/").filter(Boolean).pop() || host;
+          let name = rawName;
+          try { name = decodeURIComponent(rawName); } catch {}
           file = { name: /\.pdf$/i.test(name) ? name : name + ".pdf", data };
         }
         if (signal.aborted) return;

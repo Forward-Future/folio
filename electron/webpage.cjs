@@ -97,6 +97,7 @@ async function captureWebpage(rawUrl, approvedLocal) {
         contextIsolation: true,
         nodeIntegration: false,
         webSecurity: true,
+        disableDialogs: true,
         spellcheck: false,
         backgroundThrottling: false,
       },
@@ -125,7 +126,7 @@ async function captureWebpage(rawUrl, approvedLocal) {
       }
       await contents.insertCSS(FIDELITY_CSS, { cssOrigin: "user" }).catch(() => {});
       await delay(800);
-      await withTimeout(contents.executeJavaScript(PREPARE_PAGE, true), SCROLL_TIMEOUT_MS, "scroll").catch(() => {});
+      await withTimeout(contents.executeJavaScript(PREPARE_PAGE, false), SCROLL_TIMEOUT_MS, "scroll").catch(() => {});
       await delay(600);
       const data = await contents.printToPDF({
         printBackground: true,
