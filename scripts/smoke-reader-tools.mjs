@@ -231,7 +231,7 @@ async function captureDownload(app, file) {
   }, file);
 }
 
-async function checkPenDrawing(app, page, folder) {
+async function checkPenDrawing(app, page, folder, shots) {
   const blank = testPdf(["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 480 320] /Resources << >> >>"]);
   await app.evaluate(({ BrowserWindow }, pdf) => BrowserWindow.getAllWindows()[0].webContents.send(
@@ -242,24 +242,48 @@ async function checkPenDrawing(app, page, folder) {
   const layer = page.locator(".page .annotationEditorLayer.inkEditing");
   await layer.waitFor();
   assert.equal(await width.inputValue(), "1");
-  const box = await layer.boundingBox();
-  const x = box.x + box.width * 0.2;
+  const zoom = page.getByTitle("Zoom", { exact: true });
   for (const [index, name] of ["Thin", "Medium", "Thick"].entries()) {
     await width.selectOption({ label: name });
+    if (name === "Thick") {
+      await zoom.click();
+      await page.getByRole("menuitem", { name: "Fit width" }).click();
+      await layer.waitFor();
+    }
+    const box = await layer.boundingBox();
+    const x = box.x + box.width * 0.2;
     const y = box.y + box.height * (0.3 + index * 0.15);
     await page.mouse.move(x, y);
     await page.mouse.down();
     await page.mouse.move(x + 25, y - 10);
     await page.mouse.move(x + 50, y + 10);
     await page.mouse.move(x + 100, y);
+    const initialZoom = await zoom.innerText();
+    if (name === "Thick") {
+      // Keep the pen down through the sidebar's delayed automatic refit.
+      await page.keyboard.press("ControlOrMeta+\\");
+      await page.waitForTimeout(450);
+    }
+    const heldZoom = await zoom.innerText();
+    const releaseBox = await layer.boundingBox();
     await page.mouse.up();
+    assert.ok(releaseBox, "the ink layer was hidden at pointer release");
     // An older ink fitter showed the tip while drawing, then pulled it halfway back on release.
     const end = await page.locator(".page svg.draw").last().evaluate(svg => {
       const path = svg.querySelector("path");
-      const p = path.getPointAtLength(path.getTotalLength()).matrixTransform(svg.getScreenCTM());
-      return { x: p.x, y: p.y };
+      const tip = path.getPointAtLength(path.getTotalLength());
+      const bounds = svg.viewBox.baseVal;
+      return { x: (tip.x - bounds.x) / bounds.width, y: (tip.y - bounds.y) / bounds.height };
     });
-    assert.ok(Math.hypot(end.x - x - 100, end.y - y) < 4, `${name} pen ended away from the release point`);
+    await page.screenshot({ path: path.join(shots, `pen-release-${name.toLowerCase()}.png`) });
+    const dx = releaseBox.x + end.x * releaseBox.width - (x + 100);
+    const dy = releaseBox.y + end.y * releaseBox.height - y;
+    assert.ok(Math.hypot(dx, dy) < 4, `${name} pen ended away from the release point by (${dx}, ${dy})`);
+    if (name === "Thick") {
+      assert.equal(heldZoom, initialZoom, "automatic fit resized the page during a pen stroke");
+      await page.waitForFunction(previous => document.querySelector(".zoom-value").textContent !== previous, initialZoom);
+      await page.getByRole("button", { name: /Toggle sidebar/ }).click();
+    }
   }
   const tool = page.getByRole("combobox", { name: "Drawing tool" });
   await tool.selectOption("Rectangle");
@@ -793,5 +817,5 @@ export async function checkReaderTools(app, page, folder, shots) {
   await checkContentEditing(app, page, folder, shots);
   await checkLinkHistory(app, page, shots);
   await checkPageExport(app, page, folder, shots);
-  await checkPenDrawing(app, page, folder);
+  await checkPenDrawing(app, page, folder, shots);
 }
