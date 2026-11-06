@@ -799,10 +799,17 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   useEffect(() => setContainer(containerRef.current), []);
   // Panels and focus mode change the space the page has: re-fit "auto"/"fit" zoom once they finish sliding.
   useEffect(() => {
-    const timer = window.setTimeout(() => {
+    const refit = () => {
       const v = viewerRef.current;
-      if (v?.pdfDocument && FIT_SCALES.includes(v.currentScaleValue)) v.currentScaleValue = v.currentScaleValue;
-    }, 280);
+      if (!v?.pdfDocument || !FIT_SCALES.includes(v.currentScaleValue)) return;
+      // PDF.js hides the ink layer during a refit. Its pointer offsets are invalid until it is visible again.
+      if (containerRef.current?.querySelector(".annotationEditorLayer.inkEditing.drawing")) {
+        timer = window.setTimeout(refit, 280);
+        return;
+      }
+      v.currentScaleValue = v.currentScaleValue;
+    };
+    let timer = window.setTimeout(refit, 280);
     return () => window.clearTimeout(timer);
   }, [aiOpen, sidebar, sidebarTab, focus]);
   useEffect(() => {
