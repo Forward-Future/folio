@@ -427,7 +427,7 @@ function pdfNameFromResponse(url, disposition) {
 // Resolves to { name, data } or { error } (error text is shown to the user as-is).
 async function downloadPdf(url, approvedLocal) {
   const ses = session.fromPartition(`folio-download-${crypto.randomUUID()}`); // in-memory only
-  const guard = await guardSession(ses, session.defaultSession, approvedLocal);
+  const guard = await guardSession(ses, session.defaultSession, approvedLocal, app);
   return new Promise((resolve) => {
     let done = false;
     const request = net.request({ url: url.toString(), redirect: "manual", session: ses, cache: "no-store" });
@@ -435,7 +435,7 @@ async function downloadPdf(url, approvedLocal) {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      if (result.error) request.abort();
+      if (result.error || result.webpage) request.abort();
       resolve(result);
     };
     const timer = setTimeout(() => finish({ error: "The download timed out." }), 60_000);
@@ -458,26 +458,38 @@ async function downloadPdf(url, approvedLocal) {
       const header = (key) => [].concat(response.headers[key] ?? [])[0];
       // A webpage: stop downloading and let the caller render it to PDF instead.
       if (/\b(text\/html|application\/xhtml\+xml)\b/i.test(header("content-type") ?? "")) {
-        request.abort();
         return finish({ webpage: url.toString() });
       }
       const tooBig = { error: "That PDF is larger than 300 MB." };
       if (Number(header("content-length")) > MAX_URL_PDF_BYTES) return finish(tooBig);
       const chunks = [];
       let size = 0;
+      let verifiedHeader = false;
+      const checkHeader = (head) => {
+        if (head.subarray(0, 1024).indexOf("%PDF-") >= 0) return true;
+        // Some servers don't label HTML; recognize it by its start.
+        if (/^\s*(<!doctype html|<html|<head|<body)/i.test(head.subarray(0, 512).toString("latin1"))) {
+          finish({ webpage: url.toString() });
+        } else {
+          finish({ error: "That link isn't a PDF or a webpage." });
+        }
+        return false;
+      };
       response.on("data", (chunk) => {
+        if (done) return;
         size += chunk.byteLength;
-        if (size > MAX_URL_PDF_BYTES) finish(tooBig);
-        else chunks.push(chunk);
+        if (size > MAX_URL_PDF_BYTES) return finish(tooBig);
+        chunks.push(chunk);
+        if (!verifiedHeader && size >= 1024) {
+          verifiedHeader = true;
+          checkHeader(Buffer.concat(chunks, 1024));
+        }
       });
       response.on("error", () => finish({ error: "The download was interrupted." }));
       response.on("end", () => {
+        if (done) return;
         const data = Buffer.concat(chunks);
-        if (data.subarray(0, 1024).indexOf("%PDF-") < 0) {
-          // Some servers don't label HTML; recognize it by its start.
-          if (/^\s*(<!doctype html|<html|<head|<body)/i.test(data.subarray(0, 512).toString("latin1"))) return finish({ webpage: url.toString() });
-          return finish({ error: "That link isn't a PDF or a webpage." });
-        }
+        if (!verifiedHeader && !checkHeader(data)) return;
         finish({ name: pdfNameFromResponse(url, header("content-disposition")), data });
       });
     });
@@ -505,7 +517,8 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     protocol.handle("app", async (req) => {
-      const { pathname } = new URL(req.url);
+      const { host, pathname } = new URL(req.url);
+      if (host !== "folio") return new Response("Not found", { status: 404 });
       let file;
       try { file = path.normalize(path.join(DIST, decodeURIComponent(pathname))); } catch { return new Response("Bad request", { status: 400 }); }
       if (!file.startsWith(DIST + path.sep)) return new Response("Forbidden", { status: 403 });

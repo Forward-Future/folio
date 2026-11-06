@@ -1,7 +1,7 @@
 // Turns a webpage into a PDF: load it in a hidden, locked-down window, then print it with Chromium.
 // The page runs in its own throwaway session (no cookies or storage shared with Folio or other
 // captures), sandboxed, with no Node.js, no permissions, no pop-ups, and no downloads.
-const { BrowserWindow, session } = require("electron");
+const { app, BrowserWindow, session } = require("electron");
 const crypto = require("node:crypto");
 const { safePdfName } = require("./filenames.cjs");
 const { guardSession } = require("./network.cjs");
@@ -82,7 +82,7 @@ async function captureWebpage(rawUrl, approvedLocal) {
   ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   ses.setPermissionCheckHandler(() => false);
   ses.on("will-download", (event) => event.preventDefault());
-  const guard = await guardSession(ses, session.defaultSession, approvedLocal);
+  const guard = await guardSession(ses, session.defaultSession, approvedLocal, app);
 
   let win;
   try {
@@ -97,6 +97,7 @@ async function captureWebpage(rawUrl, approvedLocal) {
         contextIsolation: true,
         nodeIntegration: false,
         webSecurity: true,
+        disableDialogs: true,
         spellcheck: false,
         backgroundThrottling: false,
       },
@@ -125,7 +126,7 @@ async function captureWebpage(rawUrl, approvedLocal) {
       }
       await contents.insertCSS(FIDELITY_CSS, { cssOrigin: "user" }).catch(() => {});
       await delay(800);
-      await withTimeout(contents.executeJavaScript(PREPARE_PAGE, true), SCROLL_TIMEOUT_MS, "scroll").catch(() => {});
+      await withTimeout(contents.executeJavaScript(PREPARE_PAGE, false), SCROLL_TIMEOUT_MS, "scroll").catch(() => {});
       await delay(600);
       const data = await contents.printToPDF({
         printBackground: true,

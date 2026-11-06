@@ -29,7 +29,8 @@ Folio opens untrusted PDFs, so it's built to keep a malicious document contained
   approved IP addresses and Chromium verifies HTTPS against the original hostname. This covers redirects and page
   subresources. Access to a local address requires approval for the specific origin and addresses in the dialog.
   The importer supports direct connections and HTTP(S) system proxies that allow tunnels to numeric addresses.
-  If it cannot establish a verified route, the import fails.
+  If it cannot establish a verified route, the import fails. URL imports decline TLS client certificates for PDF downloads,
+  redirects, captured webpages, and their subresources.
 - Webpages opened from a link are loaded in a separate hidden window: sandboxed, no Node.js or preload, a throwaway
   in-memory session per page, every permission denied, pop-ups and downloads blocked, only http(s)/data/blob requests
   allowed, and a 60-second limit. Only the printed PDF reaches Folio.

@@ -710,7 +710,19 @@ try {
     if (req.url === "/redirect") { res.writeHead(302, { location: trap }); return res.end(); }
     if (req.url === "/page") {
       res.writeHead(200, { "content-type": "text/html" });
-      return res.end(`<title>Guarded page</title><img src="/same-origin"><img src="${trap}">`);
+      return res.end(`<title>Guarded page</title><script>
+        alert("dismissed");
+        const origScrollTo = window.scrollTo.bind(window);
+        window.scrollTo = (...args) => {
+          if (navigator.userActivation?.isActive) document.title = "User gesture leaked";
+          return origScrollTo(...args);
+        };
+      </script><img src="/same-origin"><img src="${trap}">`);
+    }
+    if (req.url === "/non-pdf-stream") {
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      res.write(Buffer.alloc(1024, 0x41));
+      return;
     }
     res.writeHead(200, { "content-type": "application/pdf" }); res.end(Buffer.from(sample));
   });
@@ -742,6 +754,7 @@ try {
     assert.equal((await settled(5)).asked.length, 5);
     assert.ok(!served.includes("/rebound.pdf"));
     assert.equal(await fetchPdf(`http://folio-pinned.test:${port}/pinned.pdf`), "pinned.pdf");
+    assert.match(await fetchPdf(`http://folio-pinned.test:${port}/non-pdf-stream`), /isn't a PDF or a webpage/);
     assert.match(await fetchPdf(`http://folio-pinned.test:${port}/redirect`), /local network address/);
     assert.equal(await fetchPdf(`http://folio-pinned.test:${port}/page`), "Guarded page.pdf");
     assert.ok(served.includes("/same-origin"), "allowed page subresource did not load");
