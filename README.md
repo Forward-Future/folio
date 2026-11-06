@@ -74,7 +74,10 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
   leaving your current page. Turn on **Bookmarked** at the top of the sidebar to see just your saved pages,
   then select a thumbnail to jump to it. These bookmarks are included in Markdown and JSON exports. Folio remembers them locally
   when you reopen a PDF, except for password-protected documents.
-- **Reorder pages** from either sidebar tab. Drag thumbnails or enter a new position, then save and open the reordered PDF copy.
+- **Organize pages** from either sidebar tab. Drag thumbnails or enter a new position, and delete pages: Ctrl-click
+  (⌘-click on macOS) or Shift-click to select several, then press **Delete**. Undo and redo with `Ctrl+Z` and
+  `Ctrl+Shift+Z`. Right-click selected thumbnails in **Pages** to start with those pages deleted. Save, then open the
+  organized PDF copy; the original file stays unchanged.
 - **Export selected pages** from the Pages sidebar. Ctrl-click thumbnails (⌘-click on macOS) to select individual pages, or Shift-click for a range. Right-click a selected thumbnail to save those pages in document order as a new PDF.
 - **Search as you type:** match case or whole words, see the current match and total count, browse per-page snippets
   and match counts, and move between matches with `Enter` / `Shift+Enter`.
@@ -241,6 +244,8 @@ On macOS, use `⌘` wherever this table says `Ctrl`. Press `?` with a document o
 | Zoom in / zoom out / reset zoom | `Ctrl++` / `Ctrl+-` / `Ctrl+0` |
 | Toggle sidebar | `Ctrl+\` |
 | Rotate / toggle two-page view | `R` / `2` |
+| In Organize pages: delete the selected pages | `Delete` or `Backspace` |
+| In Organize pages: undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` |
 | First page / last page | `Home` / `End` |
 | Focus mode / leave focus or current tool | `F` / `Esc` |
 | Settings / keyboard help | `Ctrl+,` / `?` |

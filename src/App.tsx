@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   EventBus,
   LinkTarget,
@@ -12,6 +12,7 @@ import { AnnotationEditorParamsType, AnnotationEditorType } from "pdfjs-dist";
 import { loadPdf, copyPdfPages, thumbnailDataUrl, type PDFDocumentProxy } from "./pdf";
 import { contentKey, getRecent, MAX_RECENT_FILE_BYTES, onStoredDataCleared, removeRecent, saveRecent, updateLastPage } from "./recent";
 import { readPdfBlob, readPdfResponse } from "./pdfInput";
+import { draftChanged, type DraftPage, type PageDraft } from "./organize";
 import { FIT_SCALES, readView, writeView, type ReadingView } from "./session";
 import { readSetting, writeSetting } from "./preferences";
 import { DocumentTabBar } from "./DocumentTabBar";
@@ -97,7 +98,7 @@ interface OpenDoc {
   /** The file's size; its bytes live in pdf.js's worker (pdf.getData()) rather than in a second copy here. */
   size: number;
   pdf: PDFDocumentProxy;
-  /** Used only in memory when reopening an annotated snapshot for page reordering. */
+  /** Used only in memory when reopening an annotated snapshot for organizing pages. */
   password?: string;
   /** Original library entry while content edits are held in memory. */
   sourceId?: string;
@@ -105,10 +106,18 @@ interface OpenDoc {
   edits?: { original?: Blob; changes: PdfChange[] };
 }
 
-function changesForCopy(doc: OpenDoc, annotated: boolean, order?: number[]) {
+/** The open document's pages that reach a copy of `pages`, zero-based like pdf.js's pageIndex. */
+const keptIndexes = (pages: DraftPage[]) => new Set(pages.map(p => p.page - 1));
+
+function changesForCopy(doc: OpenDoc, annotated: boolean, pages?: DraftPage[]) {
   const changes = [...(doc.edits?.changes ?? [])];
   if (annotated && !changes.some(change => change.kind === "annotations")) changes.push({ kind: "annotations" });
-  if (order) changes.push({ kind: "pages", order });
+  if (pages) {
+    const order = pages.map(p => p.page);
+    const kept = new Set(order);
+    const deleted = Array.from({ length: doc.pdf.numPages }, (_, i) => i + 1).filter(n => !kept.has(n));
+    changes.push({ kind: "pages", order, ...deleted.length && { deleted } });
+  }
   return changes;
 }
 
@@ -214,9 +223,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const contentRef = useRef<ContentEditorHandle>(null);
   const nextSelection = useRef<NextSelection | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
-  const [pageDraft, setPageDraft] = useState<{ order: number[]; copy?: Uint8Array } | null>(null);
-  const pageOrder = pageDraft?.order.some((n, i) => n !== i + 1) ? pageDraft.order : undefined;
-  const unsaved = !!doc?.sourceId || dirty || editorDirty || (!!pageOrder && !pageDraft?.copy);
+  const [pageDraft, setPageDraft] = useState<PageDraft | null>(null);
+  const organized = pageDraft && doc && draftChanged(pageDraft, doc.pdf.numPages) ? pageDraft.pages : undefined;
+  const keptOrganized = useMemo(() => organized && keptIndexes(organized), [organized]);
+  const unsaved = !!doc?.sourceId || dirty || editorDirty || (!!organized && !pageDraft?.copy);
   const [focus, setFocus] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [printCopy, setPrintCopy] = useState<{ pdf: PDFDocumentProxy; bytes: Uint8Array; page: number; name: string } | null>(null);
@@ -404,7 +414,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
 
   const openBytes = useCallback(
     async (name: string, data: Uint8Array, password?: string, signal = beginOpen(), initialPage?: number,
-      edit?: { doc: OpenDoc; change: PdfChange }, exported?: OpenDoc, exportedOrder?: number[]) => {
+      edit?: { doc: OpenDoc; change: PdfChange }, exported?: OpenDoc, exportedPages?: DraftPage[]) => {
       const revision = edit?.doc;
       const viewer = viewerRef.current!;
       setLoading(true);
@@ -441,9 +451,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         docRef.current = next;
         // Password-protected documents aren't stored by Folio (same rule as Recent).
         const reading = previous ? markupRef.current!.state : undefined;
-        if (reading?.bookmarkedPages && exportedOrder) {
+        if (reading?.bookmarkedPages && exportedPages) {
           const bookmarks = new Set(reading.bookmarkedPages);
-          reading.bookmarkedPages = exportedOrder.flatMap((n, i) => bookmarks.has(n) ? [i + 1] : []);
+          reading.bookmarkedPages = exportedPages.flatMap((p, i) => bookmarks.has(p.page) ? [i + 1] : []);
         }
         persistRef.current = !password && !revision;
         void markupRef.current!.load(id, persistRef.current, reading);
@@ -468,7 +478,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         setDoc(next);
         if (!revision) { nextSelection.current = null; setContentEditing(false); }
         setEditorDirty(false);
-        setPageDraft(draft => revision && draft ? { order: draft.order } : null);
+        setPageDraft(draft => revision && draft ? { ...draft, copy: undefined } : null);
         setNumPages(pdf.numPages);
         setPage(lastPageRef.current);
         setPageInput(String(lastPageRef.current));
@@ -856,7 +866,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     return () => window.removeEventListener("pagehide", flush);
   }, []);
 
-  const currentBytes = async (doc = docRef.current, pages = pageOrder) => {
+  const currentBytes = async (doc = docRef.current, pages = organized) => {
     if (!doc || exporting.current === doc.pdf) return null;
     exporting.current = doc.pdf;
     const signal = opening.current!.signal;
@@ -871,8 +881,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         storage.setValue(key, data);
         keys.push(key);
       }
-      const annotated = storage.size > 0;
-      if (pages?.length) return { bytes: await copyPdfPages(doc.pdf, pages, signal, doc.password), annotated };
+      // Marks on deleted pages don't reach the copy. Form values don't carry their page here, so they always count.
+      const kept = pages && keptIndexes(pages);
+      const annotated = [...storage].some(([, value]) => !kept || typeof value?.pageIndex !== "number" || kept.has(value.pageIndex));
+      if (pages?.length) return { bytes: await copyPdfPages(doc.pdf, pages.map(p => p.page), signal, doc.password), annotated };
       return { bytes: annotated ? await doc.pdf.saveDocument() : await doc.pdf.getData(), annotated };
     } finally {
       for (const key of keys) storage.remove(key);
@@ -880,7 +892,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     }
   };
 
-  const copyName = pageOrder && doc ? doc.name.replace(/\.pdf$/i, "") + " (reordered).pdf" : doc?.name ?? "document.pdf";
+  const copyName = organized && doc ? doc.name.replace(/\.pdf$/i, "") + " (organized).pdf" : doc?.name ?? "document.pdf";
+  // Where the reader's page ended up in the organized copy; the first page if it was deleted.
+  const organizedPage = (n: number) => organized ? Math.max(1, organized.findIndex(p => p.page === n) + 1) : n;
   const saveBytes = (bytes: Uint8Array) => {
     saveBlob(pdfBlob(bytes), copyName.toLowerCase().endsWith(".pdf") ? copyName : `${copyName}.pdf`);
   };
@@ -890,7 +904,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     const source = docRef.current;
     if (!source || (source.sourceId ?? source.id) !== (doc?.sourceId ?? doc?.id)) return;
     try {
-      const copy = await currentBytes(source, pages);
+      const copy = await currentBytes(source, pages.map(page => ({ page })));
       if (docRef.current !== source) return;
       if (!copy) { flash("Another export is in progress. Try again in a moment."); return; }
       saveBlob(pdfBlob(copy.bytes), source.name.replace(/\.pdf$/i, "") + " (selected pages).pdf");
@@ -923,13 +937,13 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     savingCopy.current = true;
     const revision = editRevision.current;
     try {
-      const copy = await currentBytes(doc, pageOrder);
+      const copy = await currentBytes(doc, organized);
       if (!copy || docRef.current !== doc) return;
       const name = doc.sourceId ? copyName.replace(/\.pdf$/i, "") + " (edited).pdf" : copyName;
       const blob = pdfBlob(copy.bytes);
       saveBlob(blob, /\.pdf$/i.test(name) ? name : name + ".pdf");
       if (editRevision.current === revision) setDirty(false);
-      const changes = changesForCopy(doc, copy.annotated, pageOrder);
+      const changes = changesForCopy(doc, copy.annotated, organized);
       let historyMessage = "";
       if (changes.length && doc.historyAllowed && blob.size <= MAX_RECENT_FILE_BYTES) {
         try {
@@ -943,10 +957,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (docRef.current !== doc) return;
       setError(null);
       if (doc.sourceId) {
-        await openBytes(name, copy.bytes, undefined, beginOpen(), pageOrder ? pageOrder.indexOf(pageRef.current) + 1 : pageRef.current, undefined, doc, pageOrder);
-      } else if (pageOrder) {
-        setPageDraft(draft => draft?.order === pageOrder ? { order: pageOrder, copy: copy.bytes } : draft);
-        flash("Downloading reordered copy");
+        await openBytes(name, copy.bytes, undefined, beginOpen(), organizedPage(pageRef.current), undefined, doc, organized);
+      } else if (organized) {
+        setPageDraft(draft => draft?.pages === organized ? { ...draft, copy: copy.bytes } : draft);
+        flash("Downloading organized copy");
       } else {
         flash(copy.annotated ? "Saved a copy with your highlights and notes" : "Download started");
       }
@@ -971,7 +985,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (!window.folioDesktop) { printPdfBytes(copy.bytes); return; }
       const snapshot = await loadPdf(copy.bytes, opening.current!.signal, source.password);
       if (docRef.current !== source) { void snapshot.loadingTask.destroy(); return; }
-      setPrintCopy({ pdf: snapshot, bytes: copy.bytes, page: pageOrder ? pageOrder.indexOf(page) + 1 : page, name: source.name });
+      setPrintCopy({ pdf: snapshot, bytes: copy.bytes, page: organizedPage(page), name: source.name });
     } catch {
       if (docRef.current === doc) setError("Couldn't print this document.");
     } finally {
@@ -1392,9 +1406,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             onSelectPage={goTo}
             bookmarkedPages={markup.bookmarkedPages}
             onToggleBookmark={n => markupRef.current!.toggleBookmark(n)}
-            order={pageDraft?.order ?? null}
-            onOrder={order => setPageDraft(order ? { order } : null)}
-            onSaveOrder={download}
+            draft={pageDraft}
+            onDraft={setPageDraft}
+            onSaveDraft={download}
               onExportPages={exportPages}
             onOpenCopy={pageDraft?.copy ? () => {
               tabs.open([{ kind: "bytes", name: copyName, data: pageDraft.copy!, password: doc.password }]);
@@ -1583,7 +1597,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         </main>
 
         {doc && historyOpen && !focus && <VersionHistoryPanel key={doc.sourceId ?? doc.id} id={doc.sourceId ?? doc.id}
-          allowed={doc.historyAllowed} active={active} pending={changesForCopy(doc, dirty || markup.marks.length > 0, pageOrder)}
+          allowed={doc.historyAllowed} active={active}
+          pending={changesForCopy(doc, dirty || markup.marks.some(mark => !keptOrganized || keptOrganized.has(mark.page)), organized)}
           canOpen={id => !tabs.all.some(t => t.contentId === id && t.dirty)}
           onOpen={(v, blob) => tabs.open([{ kind: "blob", name: v.name, blob }])}
           onDownload={(v, blob) => saveBlob(blob, v.name.replace(/\.pdf$/i, "") + ` (v${v.number}).pdf`)}

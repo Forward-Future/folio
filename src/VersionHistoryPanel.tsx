@@ -2,12 +2,25 @@ import { useEffect, useState } from "react";
 import { Icon } from "./icons";
 import { clearVersions, HISTORY_CHANNEL, listVersions, readVersion, type PdfChange, type PdfVersion } from "./versionHistory";
 
+// Runs of consecutive pages read as ranges (1–4, 7, 9–12), so a long list stays short.
+function pageRanges(pages: number[]) {
+  const parts: string[] = [];
+  for (let i = 0; i < pages.length; i++) {
+    const start = pages[i];
+    while (pages[i + 1] === pages[i] + 1) i++;
+    parts.push(pages[i] === start ? String(start) : `${start}–${pages[i]}`);
+  }
+  return parts.join(", ");
+}
+const pageList = (pages: number[]) => (pages.length === 1 ? "page " : "pages ") + pageRanges(pages);
+const reordered = (order: number[]) => order.some((n, i) => i > 0 && n < order[i - 1]);
+
 function Changes({ changes }: { changes: PdfChange[] }) {
   return <ul className="version-changes">{changes.map((change, i) =>
     <li key={i}>
       <div className="version-change-heading"><Icon size={14} name={change.kind === "text" ? "text" : change.kind === "image" ? "camera" : change.kind === "pages" ? "grid" : "pen"} />
         {change.kind === "text" ? change.after ? "Edited text" : "Removed text" : change.kind === "image" ? "Replaced image" :
-          change.kind === "pages" ? "Reordered pages" : "Updated annotations or fields"}
+          change.kind === "pages" ? "Organized pages" : "Updated annotations or fields"}
         {"page" in change && <span>Page {change.page}</span>}
       </div>
       {change.kind === "text" && <div className="version-words">
@@ -15,7 +28,8 @@ function Changes({ changes }: { changes: PdfChange[] }) {
         {change.after && <ins aria-label="New text">{change.after}</ins>}
       </div>}
       {change.kind === "image" && <p>{change.fileName}</p>}
-      {change.kind === "pages" && <p>{change.order.join(" → ")}</p>}
+      {change.kind === "pages" && reordered(change.order) && <p>New order: {pageRanges(change.order)}</p>}
+      {change.kind === "pages" && change.deleted && <p>Deleted {pageList(change.deleted)}</p>}
     </li>)}</ul>;
 }
 

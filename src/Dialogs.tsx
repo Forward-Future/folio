@@ -139,6 +139,8 @@ const SHORTCUTS: [string, string][] = [
   ["Draw", "D"],
   ["Add text", "T"],
   ["Rotate pages", "R"],
+  ["In Organize pages: delete the selected pages", "Delete / Backspace"],
+  ["In Organize pages: undo / redo", "Ctrl Z / Ctrl Shift Z"],
   ["Two-page view", "2"],
   ["Focus mode", "F"],
   ["First / last page", "Home / End"],
