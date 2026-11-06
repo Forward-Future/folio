@@ -67,7 +67,7 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
   Each tab remembers its own positions, zoom, and rotation until the document closes. Use **Alt+← / Alt+→**
   (**⌥← / ⌥→** on macOS) while reading. Text fields and dialogs keep their normal editing controls.
 - **Continuous scrolling** with selectable text, previous/next controls, and a page-number field for jumping directly
-  to a page. Enable **Settings → Reading → Scroll one page at a time** to turn pages with the mouse wheel.
+  to a page. Enable **Settings → General → Reading → Scroll one page at a time** to turn pages with the mouse wheel.
 - **Pages and Outline tabs:** browse page thumbnails or the PDF's existing outline/bookmarks; hide the sidebar when
   you want more reading space.
 - **Personal bookmarks:** click the ribbon beside a page number in **Pages** to save or remove a bookmark without
@@ -84,6 +84,8 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
 - **Light and dark themes**, plus an independent **⋯ → PDF dark mode** setting that dims bright pages while keeping
   photos and figures in their original colors, including in thumbnails. Both settings survive restarts.
 
+[![The Back to page 1 hint above the reading controls after following a link to page 4](docs/screenshots/back-to-page.png)](docs/screenshots/pdf-link-history.png)
+
 ### Edit existing text and images
 
 Choose **Edit mode**, then click the text you want to change and type on the page. Press **Enter** or click outside the line to apply it. **Esc** cancels typing. Clear a line to delete it.
@@ -99,7 +101,7 @@ The editor works with unsigned, unencrypted PDFs.
 
 ### Highlight, draw, and take notes
 
-- **Select text in scans.** Folio recognizes English by default. In **Settings → Reading → Scan languages**, search
+- **Select text in scans.** Folio recognizes English by default. In **Settings → General → Reading → Scan languages**, search
   for a language by its English or local name. Select the languages in your document. The dropdown shows the total
   size of any packs to download. Folio keeps them on this device for offline use and re-reads open scans.
   The page you jump to gets priority. A message above the page controls shows when text is still being prepared.
@@ -125,6 +127,11 @@ The editor works with unsigned, unencrypted PDFs.
 - **Automatic local saving:** highlights, notes, drawings, and text boxes return when you reopen an
   ordinary, non-password-protected PDF. Use **Save a copy** to share page annotations with other readers.
 
+<p>
+  <a href="docs/screenshots/pen-widths.png"><img src="docs/screenshots/pen-widths.png" width="485" alt="Thin, Medium, and Thick pen strokes on the same page"></a>
+  <a href="docs/screenshots/scan-languages.png"><img src="docs/screenshots/scan-languages.png" width="250" alt="English and Arabic selected in the scan language picker, with the download size shown"></a>
+</p>
+
 ### Add handwritten signatures
 
 Choose **Sign** in the toolbar to add a signature.
@@ -140,7 +147,7 @@ Choose **Sign** in the toolbar to add a signature.
   not certificate-based digital signatures. Use **Save a copy** to keep a signed PDF; placed signatures are not part
   of Folio's automatic annotation restoration.
 - **Optional reuse:** choose to remember a signature on this computer; remove the saved image in
-  **Settings → Signature → Forget**.
+  **Settings → Storage → Signature → Forget**.
 
 ### Ask AI about a document
 
@@ -188,11 +195,21 @@ Ask AI is optional and desktop-only. See [Using Ask AI](#using-ask-ai) for setup
 - **Document info** shows available metadata: filename, title, author, subject, page count and size, file size,
   creation/modification dates, generating application, producer, and PDF version.
 
+<p>
+  <a href="docs/screenshots/print-preview.png"><img src="docs/screenshots/print-preview.png" width="344" alt="The current PDF page in the Basic print preview"></a>
+  <a href="docs/screenshots/booklet-printing.png"><img src="docs/screenshots/booklet-printing.png" width="462" alt="Two PDF pages paired on a landscape sheet for booklet printing"></a>
+</p>
+
 ### Settings and updates
 
-Open **⋯ → Settings** or press `Ctrl+,` for appearance, night reading, AI accounts and defaults, remembered signatures,
-and updates. **About Folio** shows the version, installed/portable edition, and installation location, with a shortcut
-to open that folder.
+Open **⋯ → Settings** or press `Ctrl+,`. **General** contains appearance, reading, and update preferences.
+Use **Ask AI** to connect providers and **Storage** to manage saved annotations, conversations, and signatures.
+**About Folio** shows the version, installed/portable edition, and installation location, with a shortcut to open that folder.
+
+<p>
+  <a href="docs/screenshots/openrouter-setup.png"><img src="docs/screenshots/openrouter-setup.png" width="395" alt="Ask AI settings with OpenRouter selected and a field for an API key"></a>
+  <a href="docs/screenshots/stored-data.png"><img src="docs/screenshots/stored-data.png" width="380" alt="Storage settings with separate controls for clearing saved annotations and Ask AI conversations"></a>
+</p>
 
 - **Automatic updates on or off:** the preference survives restarts. Turning it off stops background checks/downloads
   and automatic installation; manual **Check for updates** remains available for self-updating editions.
@@ -319,7 +336,7 @@ terminal has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
   sign-in and requests, OpenRouter keys and requests, and Claude Code). Stored credentials stay in the main process.
 - `scripts/release.mjs` and `.github/workflows/release-build.yml`: the release pipeline (see
   [CONTRIBUTING.md](CONTRIBUTING.md#releasing)). `scripts/smoke-test.mjs` is the cross-platform smoke test CI runs.
-  `scripts/screenshots.mjs` retakes the screenshots in this README (`npm run build`, then `node scripts/screenshots.mjs`).
+  `scripts/screenshots.mjs` retakes the Ask AI, highlights, and search screenshots at the top of this README (`npm run build`, then `node scripts/screenshots.mjs`).
 
 ## Contributing
 
