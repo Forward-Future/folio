@@ -33,8 +33,8 @@ Folio opens untrusted PDFs, so it's built to keep a malicious document contained
 - Webpages opened from a link are loaded in a separate hidden window: sandboxed, no Node.js or preload, a throwaway
   in-memory session per page, every permission denied, pop-ups and downloads blocked, only http(s)/data/blob requests
   allowed, and a 60-second limit. Only the printed PDF reaches Folio.
-- Word documents are converted by Microsoft Word (macros disabled) or LibreOffice (a temporary profile with macros and
-  linked content disabled) when installed. Otherwise Folio's own converter reads the `.docx` in a separate utility
+- Word documents are converted by Microsoft Word (macros and automatic link updates disabled) or LibreOffice (a temporary
+  profile with macros and linked content disabled) when installed. Otherwise Folio's own converter reads the `.docx` in a separate utility
   process with a two-minute timeout and a 768 MiB working-set limit. It counts the bytes expanded from each archive
   part (32 MiB), the total (96 MiB), and the generated HTML (48 MiB). A sandboxed window prints the result with
   JavaScript and the network off. File imports and converted PDFs have a 300 MiB limit. A saved conversion grants
