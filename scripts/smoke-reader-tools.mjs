@@ -712,6 +712,93 @@ export async function checkReaderTools(app, page, folder, shots) {
   await copyResponse.click();
   await page.getByRole("button", { name: "Copy failed" }).waitFor();
   await page.evaluate(() => { delete navigator.clipboard.writeText; });
+  const newConversation = page.getByRole("button", { name: "New conversation", exact: true });
+  const composer = page.locator(".composer textarea");
+  const confirmation = page.getByRole("dialog", { name: "Start a new conversation?" });
+  const savedAnswer = () => page.evaluate(answer => new Promise((resolve, reject) => {
+    const request = indexedDB.open("folio");
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result, rows = db.transaction("ai").objectStore("ai").getAll();
+      rows.onsuccess = () => { db.close(); resolve(rows.result.some(row => row.messages.some(m => m.content === answer))); };
+      rows.onerror = () => { db.close(); reject(rows.error); };
+    };
+  }), answer);
+  assert.equal(await savedAnswer(), true);
+  await composer.fill("Keep this draft");
+  await page.screenshot({ path: path.join(shots, "before-new-conversation.png") });
+  await newConversation.click();
+  await confirmation.getByText("The current conversation for this document will be deleted. This cannot be undone.").waitFor();
+  await page.locator(".modal-backdrop").evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished)));
+  await page.screenshot({ path: path.join(shots, "after-new-conversation.png") });
+  assert.equal(await confirmation.getByRole("button", { name: "Cancel", exact: true }).evaluate(el => el === document.activeElement), true);
+  // The modal keeps keyboard focus inside it and never uses Enter to choose deletion by default.
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await confirmation.getByRole("button", { name: "Delete conversation" }).evaluate(el => el === document.activeElement), true);
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Enter");
+  await confirmation.waitFor({ state: "detached" });
+  assert.equal(await newConversation.evaluate(el => el === document.activeElement), true);
+  assert.equal(await savedAnswer(), true);
+  for (const dismiss of ["Escape", "Close", "Backdrop"]) {
+    await newConversation.click();
+    await confirmation.waitFor();
+    if (dismiss === "Escape") await page.keyboard.press("Escape");
+    else if (dismiss === "Close") await confirmation.getByRole("button", { name: "Close", exact: true }).click();
+    else await page.locator(".modal-backdrop").click({ position: { x: 3, y: 3 } });
+    await confirmation.waitFor({ state: "detached" });
+    await copyResponse.waitFor();
+    assert.equal(await savedAnswer(), true);
+    assert.equal(await composer.inputValue(), "Keep this draft");
+  }
+  await page.getByRole("button", { name: "Close Ask AI" }).click();
+  await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+  await copyResponse.waitFor();
+  const viewport = await page.window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  await page.window.setViewportSize({ width: 420, height: 800 });
+  await page.window.waitForFunction(() => innerWidth <= 420);
+  const theme = await page.evaluate(() => {
+    const theme = document.documentElement.dataset.theme;
+    document.documentElement.dataset.theme = "light";
+    return theme;
+  });
+  await newConversation.click();
+  await confirmation.waitFor();
+  await page.locator(".modal-backdrop").evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished)));
+  const box = await confirmation.boundingBox();
+  const width = await page.window.evaluate(() => innerWidth);
+  assert.ok(box && box.x >= 0 && box.x + box.width <= width, `the confirmation fits a narrow window: ${JSON.stringify({ width, box })}`);
+  for (const name of [/^Search \(/, /^Ask AI$/]) {
+    const covered = await page.locator(".topbar").getByRole("button", { name }).evaluate(button => {
+      const box = button.getBoundingClientRect();
+      return !!document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest(".modal-backdrop");
+    });
+    assert.equal(covered, true, `the confirmation backdrop covers the narrow-window toolbar: ${name}`);
+  }
+  await page.screenshot({ path: path.join(shots, "new-conversation-narrow-light.png") });
+  const search = page.locator(".topbar").getByRole("button", { name: /^Search \(/ });
+  const searchBox = await search.boundingBox();
+  await page.mouse.click(searchBox.x + searchBox.width / 2, searchBox.y + searchBox.height / 2);
+  await confirmation.waitFor({ state: "detached" });
+  assert.equal(await search.getAttribute("aria-pressed"), "false");
+  assert.equal(await newConversation.evaluate(el => el === document.activeElement), true);
+  assert.equal(await savedAnswer(), true);
+  await newConversation.click();
+  await confirmation.waitFor();
+  await confirmation.getByRole("button", { name: "Delete conversation" }).click();
+  await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+  await page.window.setViewportSize(viewport);
+  await copyResponse.waitFor({ state: "detached" });
+  for (let i = 0; i < 100 && await savedAnswer(); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(await savedAnswer(), false);
+  assert.equal(await newConversation.isDisabled(), true);
+  await page.getByRole("button", { name: "Close Ask AI" }).click();
+  await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+  await page.getByRole("button", { name: "Summarize this document" }).waitFor();
+  assert.equal(await copyResponse.count(), 0);
+  console.log("ok  cancel, Escape, close and backdrop preserve chat; confirmed deletion clears saved history");
   await page.getByRole("button", { name: "Close Ask AI" }).click();
   console.log("ok  Copy response copies the original Markdown and reports a refused write");
 

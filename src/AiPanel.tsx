@@ -1,9 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./icons";
 import { copyText } from "./clipboard";
 import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
 import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, subscribeAiPreferences, USAGE_URL } from "./ai";
+import { Modal } from "./Dialogs";
 
 const AiMarkdown = lazy(() => import("./AiMarkdown").then((module) => ({ default: module.AiMarkdown })));
 
@@ -88,6 +90,31 @@ function CopyResponse({ text }: { text: string }) {
 const storedMessages = (messages: Message[]) =>
   messages.filter((m) => !m.error && m.content).map(({ role, content, context }) => ({ role, content, ...(context ? { context } : {}) }));
 
+function NewConversationDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  return <div onMouseDownCapture={event => {
+    // The backdrop closes on mousedown; its default action must not blur the restored button.
+    if (event.target === event.currentTarget.querySelector(".modal-backdrop")) event.preventDefault();
+  }} onKeyDown={event => {
+    event.stopPropagation();
+    if (event.key === "Escape") { event.preventDefault(); onCancel(); }
+    if (event.key !== "Tab") return;
+    const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>("button");
+    const first = buttons[0], last = buttons[buttons.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }}>
+    <Modal title="Start a new conversation?" onClose={onCancel}>
+      <div className="password-form">
+        <p>The current conversation for this document will be deleted. This cannot be undone.</p>
+        <div className="form-actions">
+          <button className="btn ghost" autoFocus onClick={onCancel}>Cancel</button>
+          <button className="btn primary" onClick={onConfirm}>Delete conversation</button>
+        </div>
+      </div>
+    </Modal>
+  </div>;
+}
+
 interface Props {
   pdf: PDFDocumentProxy;
   docId: string;
@@ -115,10 +142,13 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const [busy, setBusy] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [confirmNew, setConfirmNew] = useState(false);
   const busyRef = useRef<string | null>(null);
   const preparing = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const newConversationRef = useRef<HTMLButtonElement>(null);
+  const cancelNew = () => { setConfirmNew(false); newConversationRef.current?.focus(); };
 
   // The panel is mounted per document (keyed by docId in App), so this conversation always belongs to docId.
   const [generation, setGeneration] = useState<number | null>(() => conversations.get(docId)?.generation ?? (persist ? null : 0));
@@ -273,7 +303,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
           {Object.entries(PROVIDERS).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
         </select>}
         <div className="ai-head-actions">
-          <button className="pill-btn" title="New conversation" aria-label="New conversation" disabled={!messages.length || !!busy} onClick={() => setMessages([])}>
+          <button ref={newConversationRef} className="pill-btn" title="New conversation" aria-label="New conversation" disabled={!messages.length || !!busy} onClick={() => setConfirmNew(true)}>
             <Icon name="plus" size={15} />
           </button>
           <button className="pill-btn" title="Close" aria-label="Close Ask AI" onClick={onClose}>
@@ -427,6 +457,11 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
           </div>
         )}
       </footer>
+      {confirmNew && createPortal(<NewConversationDialog onCancel={cancelNew} onConfirm={() => {
+        setConfirmNew(false);
+        setMessages([]);
+        inputRef.current?.focus();
+      }} />, document.body)}
     </aside>
   );
 }
