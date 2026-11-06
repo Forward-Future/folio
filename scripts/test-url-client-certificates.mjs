@@ -20,9 +20,7 @@ const password = randomUUID();
 // Only disposable hosted Windows runners install the generated leaf identity. Local runs never modify an OS store.
 const installIdentity = process.platform === "win32" && process.env.FOLIO_TEST_CLIENT_IDENTITY === "1"
   && process.env.RUNNER_ENVIRONMENT === "github-hosted";
-const powershell = command => execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-  "$ErrorActionPreference = 'Stop'; " + command], { cwd: dir, windowsHide: true, encoding: "utf8",
-  env: { ...process.env, FOLIO_TEST_PFX_PASSWORD: password } }).trim();
+const certutil = (...args) => execFileSync("certutil.exe", ["-user", ...args], { cwd: dir, stdio: "pipe", windowsHide: true });
 
 let app, server, thumbprint;
 try {
@@ -40,9 +38,8 @@ try {
   const cert = read("server.pem");
   if (installIdentity) {
     openssl("pkcs12", "-export", "-in", "client.pem", "-inkey", "client.key", "-out", "client.p12", "-passout", "pass:" + password);
-    thumbprint = powershell("(Import-PfxCertificate -FilePath (Resolve-Path client.p12) -CertStoreLocation Cert:\\CurrentUser\\My "
-      + "-Password (ConvertTo-SecureString $env:FOLIO_TEST_PFX_PASSWORD -AsPlainText -Force)).Thumbprint");
-    assert.equal(thumbprint, new X509Certificate(read("client.pem")).fingerprint.replaceAll(":", ""));
+    certutil("-f", "-p", password, "-importPFX", "My", "client.p12", "NoRoot");
+    thumbprint = new X509Certificate(read("client.pem")).fingerprint.replaceAll(":", "");
   }
 
   const requests = [];
@@ -82,24 +79,24 @@ try {
   }, new URL(origin).host);
   const fetchName = route => page.evaluate(url => window.folioDesktop.fetchPdf(url).then(file => file.name), origin + route);
   assert.equal(await fetchName("/redirect"), "paper.pdf");
-  assert.deepEqual(requests.splice(0), ["/redirect", "/paper.pdf"].map(path => ({ path, peer: null })));
+  const downloads = requests.splice(0);
   assert.equal(await fetchName("/webpage"), "Anonymous capture.pdf");
-  assert.deepEqual(requests.filter(req => req.path === "/webpage").length, 2, "both the probe and the capture loaded the page");
-  assert.ok(requests.some(req => req.path === "/image"), "the captured page loaded its subresource");
-  assert.ok(requests.every(req => req.peer === null), "webpage import presented a client identity");
+  const captures = requests.splice(0);
+  assert.deepEqual(downloads.map(req => req.path), ["/redirect", "/paper.pdf"]);
+  assert.equal(captures.filter(req => req.path === "/webpage").length, 2, "both the probe and the capture loaded the page");
+  assert.ok(captures.some(req => req.path === "/image"), "the captured page loaded its subresource");
+  const identified = [...downloads, ...captures].filter(req => req.peer !== null).map(req => req.path);
+  assert.deepEqual(identified, [], "URLs that received the generated client identity");
   if (installIdentity) {
     const challenges = await app.evaluate(() => globalThis.importChallenges);
     assert.ok(challenges.includes("download") && challenges.includes("capture"), JSON.stringify(challenges));
+    // A new, unrelated Electron session still negotiates the runner's test identity by default.
+    await app.evaluate(async ({ session }, url) => {
+      const response = await session.fromPartition("folio-cert-control").fetch(url, { credentials: "include" });
+      await response.arrayBuffer();
+    }, origin + "/electron-control");
+    assert.equal(requests.find(req => req.path === "/electron-control")?.peer, new X509Certificate(read("client.pem")).fingerprint256);
   }
-  // Electron skips the event on hosts without a matching identity. Also check explicit, one-shot refusal there.
-  const decisions = await app.evaluate(({ app, BrowserWindow }) => [null, BrowserWindow.getAllWindows()[0].webContents].map(contents => {
-    let prevented = false;
-    const replies = [];
-    app.emit("select-client-certificate", { preventDefault() { prevented = true; } }, contents, "synthetic.invalid:443",
-      [{}], (...args) => replies.push(args));
-    return { prevented, replies };
-  }));
-  for (const decision of decisions) assert.deepEqual(decision, { prevented: true, replies: [[]] });
   console.log("ok  PDF redirects and webpage capture complete without sharing a TLS client certificate"
     + (installIdentity ? " with a matching OS identity available in both paths" : ""));
 } finally {
@@ -107,7 +104,7 @@ try {
   finally {
     server?.closeAllConnections();
     if (server?.listening) await new Promise(resolve => server.close(resolve));
-    if (thumbprint && /^[0-9A-F]{40}$/i.test(thumbprint)) powershell("Remove-Item -DeleteKey -LiteralPath Cert:\\CurrentUser\\My\\" + thumbprint);
+    if (thumbprint) certutil("-delstore", "My", thumbprint);
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }

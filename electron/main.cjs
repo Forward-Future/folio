@@ -15,12 +15,6 @@ const { WORD_FILE, openWord } = require("./convert.cjs");
 const { registerPrinting } = require("./printing.cjs");
 const { MAX_DOCUMENT_BYTES, checkDiskPath, readRegular } = require("./document-files.cjs");
 
-// Electron otherwise picks an OS identity, including for net.request and workers with no WebContents.
-app.on("select-client-certificate", (event, _contents, _host, _certificates, choose) => {
-  event.preventDefault();
-  choose();
-});
-
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 // Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
 const TEST_HIDDEN = !app.isPackaged && process.env.FOLIO_TEST_HIDDEN === "1";
@@ -433,7 +427,7 @@ function pdfNameFromResponse(url, disposition) {
 // Resolves to { name, data } or { error } (error text is shown to the user as-is).
 async function downloadPdf(url, approvedLocal) {
   const ses = session.fromPartition(`folio-download-${crypto.randomUUID()}`); // in-memory only
-  const guard = await guardSession(ses, session.defaultSession, approvedLocal);
+  const guard = await guardSession(ses, session.defaultSession, approvedLocal, app);
   return new Promise((resolve) => {
     let done = false;
     const request = net.request({ url: url.toString(), redirect: "manual", session: ses, cache: "no-store" });
