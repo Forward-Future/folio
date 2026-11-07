@@ -18,6 +18,9 @@ const { MAX_DOCUMENT_BYTES, checkDiskPath, readRegular } = require("./document-f
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 // Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
 const TEST_HIDDEN = !app.isPackaged && process.env.FOLIO_TEST_HIDDEN === "1";
+// macOS gives every ordinary app a Dock icon, whatever its windows do. An accessory app has none and can't come
+// forward by itself. Set right away: the Dock starts making room for the icon as soon as the app starts.
+if (TEST_HIDDEN && process.platform === "darwin") app.setActivationPolicy("accessory");
 
 const DIST = path.join(__dirname, "..", "dist");
 // Development only (e.g. http://localhost:5173); ignored by installed builds.
@@ -297,9 +300,12 @@ function createWindow() {
   });
 
   win.once("ready-to-show", () => {
-    // A never-shown window doesn't paint, so tests couldn't screenshot it. Show it off-screen instead,
-    // without taking focus or adding a taskbar button.
     if (TEST_HIDDEN) {
+      // macOS moves a window back onto the screen as it is shown, wherever it was put. A window that is never
+      // shown still paints there (Electron starts it in Chromium's headless mode), so tests can leave it unshown.
+      if (IS_MAC) return;
+      // Elsewhere a never-shown window doesn't paint, so tests couldn't screenshot it. Show it off-screen instead,
+      // without taking focus or adding a taskbar button.
       win.setSkipTaskbar(true);
       win.setPosition(-32000, -32000);
       win.showInactive();

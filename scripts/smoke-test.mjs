@@ -45,6 +45,17 @@ async function wordDocument(text) {
 
 const app = await electron.launch({ executablePath, args, env, timeout: 60_000 });
 const failures = [];
+// A hidden run has to stay out of the way on macOS too: no Dock icon, never the app in front, no window on a display.
+async function checkStaysHidden() {
+  if (process.platform !== "darwin" || env.FOLIO_TEST_HIDDEN !== "1") return;
+  const seen = await app.evaluate(({ app, BrowserWindow, screen }) => {
+    const displays = screen.getAllDisplays().map((display) => display.bounds);
+    const onDisplay = ({ x, y, width, height }) => displays.some((d) => x < d.x + d.width && x + width > d.x && y < d.y + d.height && y + height > d.y);
+    return { dockIcon: app.dock.isVisible(), inFront: app.isActive(),
+      onScreen: BrowserWindow.getAllWindows().filter((w) => w.isVisible() && onDisplay(w.getBounds())).length };
+  });
+  assert.deepEqual(seen, { dockIcon: false, inFront: false, onScreen: 0 }, "the hidden test run showed up on macOS");
+}
 try {
   const page = readerPage(await app.firstWindow());
   assert.ok(await app.evaluate(({ app }) => app.commandLine.hasSwitch("mute-audio")));
@@ -57,6 +68,7 @@ try {
   const platformClass = await page.evaluate(() => [...document.documentElement.classList].find((c) => c.startsWith("platform-")));
   assert.equal(platformClass, `platform-${process.platform}`);
   console.log("ok  platform:", platformClass);
+  await checkStaysHidden();
 
   const whatsNew = page.getByRole("dialog", { name: "What's new" });
   const installed = await app.evaluate(({ app }) => app.getVersion());
@@ -926,6 +938,8 @@ try {
   assert.deepEqual(await quoted.allTextContents(), ["zebra"]);
   console.log("ok  search results mark the right words in text with ligatures");
 
+  // Asked again at the end: the windows that convert a webpage or a Word document didn't bring it forward either.
+  await checkStaysHidden();
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {
