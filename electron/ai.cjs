@@ -424,6 +424,9 @@ async function askClaude({ model, document, messages }, emit, signal) {
     const timer = setTimeout(() => { timedOut = true; child.kill(); }, CLAUDE_TIMEOUT_MS);
     const abort = () => child.kill();
     signal.addEventListener("abort", abort, { once: true });
+    // Decode each stream as a whole: a character of several bytes can arrive split across two chunks.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let buffer = "";
     let streamed = false;
     let result = null;
