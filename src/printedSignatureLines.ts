@@ -4,6 +4,9 @@ import type { SignatureTarget } from "./signatures";
 
 interface Rule { left: number; right: number; y: number }
 const caption = /^(?:(?:your|applicant(?:['’]s)?|signer(?:['’]s)?|approver(?:['’]s)?|approval|authorized|witness(?:['’]s)?)\s+)?(signature|initials)$/i;
+// Without a matching rule, only a text run that is nothing but a signing caption is offered.
+// A sentence that mentions signing ("a writing signed by both parties") is not a place to sign.
+const standalone = /^(?:(?:(?:your|applicant(?:['’]s)?|signer(?:['’]s)?|approver(?:['’]s)?|approval|authorized|witness(?:['’]s)?|client(?:['’]s)?|customer(?:['’]s)?)\s+)?signature|sign here|signed by|approved by)$/i;
 const painted = new Set<number>([OPS.stroke, OPS.closeStroke, OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
 
 async function drawnRules(page: PDFPageProxy): Promise<Rule[]> {
@@ -53,7 +56,7 @@ export async function printedSignatureTargets(page: PDFPageProxy): Promise<Signa
   const labels = text.flatMap((item, index) => {
     const label = item.str.replace(/^[_\s]+|[:_\s]+$/g, "").trim();
     const exact = caption.exec(label);
-    if (!exact && !/\b(signature|sign here|signed by)\b/i.test(label) && !/^approved by$/i.test(label)) return [];
+    if (!exact && !standalone.test(label)) return [];
     if (/digital|electronic|verified|invalid/i.test(label)) return [];
     return [{ item, index, label, exact }];
   });

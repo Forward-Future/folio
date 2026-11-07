@@ -239,9 +239,14 @@ async function checkSignatureFields(app, page, folder) {
     "30 65 m 170 65 l S BT /F 12 Tf 30 50 Td (Witness signature) Tj ET",
     "BT /F 10 Tf 30 20 Td (Your signature confirms approval.) Tj ET",
   ].join("\n");
+  // Page 4 has no PDF signature field: a sentence that mentions signing, then a captioned rule.
+  const prose = [
+    "BT /F 10 Tf 30 250 Td (This agreement may be amended only by a) Tj 0 -14 Td (writing signed by both parties.) Tj ET",
+    "30 65 m 170 65 l S BT /F 12 Tf 30 50 Td (Witness signature) Tj ET",
+  ].join("\n");
   const form = testPdf([
     "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 8 0 R 11 0 R] >> >>",
-    "<< /Type /Pages /Count 3 /Kids [3 0 R 4 0 R 9 0 R] >>",
+    "<< /Type /Pages /Count 4 /Kids [3 0 R 4 0 R 9 0 R 12 0 R] >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [20 30 320 330] /Rotate 90 /Annots [5 0 R 8 0 R] >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F 6 0 R >> >> /Contents 7 0 R >>",
     "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Applicant signature) /Rect [30 110 230 155] /P 3 0 R /F 4 >>",
@@ -251,6 +256,8 @@ async function checkSignatureFields(app, page, folder) {
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [11 0 R] /Resources << /Font << /F 6 0 R >> >> /Contents 10 0 R >>",
     `<< /Length ${lines.length} >>\nstream\n${lines}\nendstream`,
     "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Witness signature) /Rect [30 65 170 105] /P 9 0 R /F 4 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F 6 0 R >> >> /Contents 13 0 R >>",
+    `<< /Length ${prose.length} >>\nstream\n${prose}\nendstream`,
   ]);
   await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
     "folio:open-file", { name: "Signature fields.pdf", data: Buffer.from(data) }), form);
@@ -302,17 +309,27 @@ async function checkSignatureFields(app, page, folder) {
   await page.getByRole("dialog", { name: "Sign Approval initials" }).getByRole("button", { name: "Signature 1", exact: true }).click();
   await initials.waitFor({ state: "hidden" });
   assert.equal(await page.getByRole("dialog", { name: "Sign page 1" }).count(), 0);
+  // Two saved marks can share a name, so the shortcut shows each mark's image.
+  const other = saved.map(([key, value]) => ({ key, ...JSON.parse(value) }))
+    .find(mark => mark.key === "folio:signature" || mark.name !== "Full name");
+  await page.evaluate(mark => localStorage.setItem("folio:signature:same-name-check", JSON.stringify(mark)),
+    { url: other.url, width: other.width, height: other.height, name: "Full name" });
   await page.keyboard.press("ControlOrMeta+z");
   await initials.waitFor();
-  const quick = hint.getByRole("button", { name: "Sign field" });
-  await quick.waitFor();
-  assert.ok(await quick.isDisabled());
-  await hint.getByRole("combobox").selectOption({ label: "Full name" });
-  await quick.click();
-  await page.locator(".stampEditor canvas").first().waitFor();
+  const sameName = hint.getByRole("button", { name: "Sign with Full name", exact: true });
+  await sameName.first().waitFor();
+  const shown = await sameName.locator("img").evaluateAll(images => images.map(image => image.src));
+  assert.equal(shown.length, 2);
+  assert.notEqual(shown[0], shown[1], "marks that share a name show different images");
+  assert.ok(shown.includes(other.url));
+  await hint.getByRole("button", { name: "Sign with Signature 1", exact: true }).waitFor();
+  await sameName.nth(shown.indexOf(other.url)).click();
+  await initials.waitFor({ state: "hidden" });
   await hint.waitFor({ state: "hidden" });
+  await page.evaluate(() => localStorage.removeItem("folio:signature:same-name-check"));
   await page.keyboard.press("ControlOrMeta+z");
-  await quick.waitFor();
+  await initials.waitFor();
+  await hint.getByRole("button", { name: "Sign with Signature 1", exact: true }).waitFor();
   await page.keyboard.press("ControlOrMeta+Comma");
   await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Storage", exact: true }).click();
   await page.getByRole("button", { name: "Forget Full name", exact: true }).click();
@@ -354,6 +371,22 @@ async function checkSignatureFields(app, page, folder) {
   await page.keyboard.press("ControlOrMeta+Shift+z");
   await thirdPage.locator(".stampEditor canvas").nth(1).waitFor();
   await printedInitials.waitFor({ state: "hidden" });
+  // A sentence that mentions signing is not a place to sign; the captioned rule on the same page is.
+  await page.getByTitle("Next page").click();
+  const fourthPage = page.locator('.page[data-page-number="4"]');
+  await fourthPage.getByRole("button", { name: "Sign Witness signature", exact: true }).waitFor();
+  assert.equal(await fourthPage.locator(".signature-hit").count(), 1);
+  await page.getByRole("button", { name: "Sign", exact: true }).click();
+  const fourthDialog = page.getByRole("dialog", { name: "Sign page 4", exact: true });
+  // With two saved marks nothing is preselected, and the placement list appears once a mark is chosen.
+  await fourthDialog.getByRole("combobox", { name: "Saved signature" }).selectOption({ label: "Signature 1" });
+  // The page's places to sign reach the dialog shortly after the page turn.
+  const placements = fourthDialog.getByRole("combobox", { name: "Signature placement" }).locator("option");
+  await placements.filter({ hasText: "Witness signature" }).waitFor({ state: "attached" });
+  assert.deepEqual(await placements.allTextContents(), ["Witness signature", "Choose a position on this page"]);
+  await fourthDialog.getByRole("button", { name: "Cancel" }).click();
+  await fourthDialog.waitFor({ state: "hidden" });
+  assert.equal(await hint.count(), 0, "contract prose is not suggested as a signing area");
   const file = path.join(folder, "signed-fields.pdf");
   await captureDownload(app, file);
   await page.keyboard.press("ControlOrMeta+s");
@@ -378,7 +411,7 @@ async function checkSignatureFields(app, page, folder) {
   assert.equal(printedCenters.length, 2);
   assert.ok(printedCenters.some(([x, y]) => Math.abs(x - 130) < 2 && Math.abs(y - 245) < 2), JSON.stringify(printedCenters));
   assert.ok(printedCenters.some(([x, y]) => x > 98 && x < 113 && Math.abs(y - 154) < 2), JSON.stringify(printedCenters));
-  console.log("ok  on-page signing finds native fields, printed rules, underscores and standalone captions and exports marks at the chosen positions");
+  console.log("ok  on-page signing finds native fields, printed rules, underscores and standalone captions, ignores sentences that mention signing, and exports marks at the chosen positions");
 }
 
 async function checkPenDrawing(app, page, folder, shots) {
