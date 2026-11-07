@@ -444,7 +444,16 @@ async function downloadPdf(url, approvedLocal, signal) {
       if (result.error || result.webpage) request.abort();
       resolve(result);
     };
-    const timer = setTimeout(() => finish({ error: "The download timed out." }), 60_000);
+    // The minute is for a silent connection, not for the whole file: a large PDF on a slow connection keeps
+    // going for as long as data arrives.
+    let timer;
+    const alive = () => {
+      clearTimeout(timer);
+      if (!done) timer = setTimeout(() => finish({ error: "The download timed out." }), 60_000);
+    };
+    alive();
+    request.on("redirect", alive);
+    request.on("response", (response) => { alive(); response.on("data", alive); });
     signal.addEventListener("abort", () => { finish({ cancelled: true }); request.abort(); }, { once: true });
     let hops = 0;
     request.setHeader("Accept", "application/pdf,*/*;q=0.8");

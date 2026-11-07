@@ -573,11 +573,13 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
           finally { signal.removeEventListener("abort", stop); }
         } else {
           // The browser edition can only read links whose server allows cross-origin requests.
-          const transfer = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
-          const res = await fetch(url, { signal: transfer }).catch(() => {
+          // A minute to answer, and a minute for any pause after that: not a limit on the whole download.
+          const slow = new AbortController();
+          const answering = window.setTimeout(() => slow.abort(), 60_000);
+          const res = await fetch(url, { signal: AbortSignal.any([signal, slow.signal]) }).catch(() => {
             throw new Error(`Couldn't download from ${host}. The site may not allow it.`);
-          });
-          const data = await readPdfResponse(res, transfer);
+          }).finally(() => window.clearTimeout(answering));
+          const data = await readPdfResponse(res, signal, undefined, 60_000);
           const rawName = new URL(res.url || url).pathname.split("/").filter(Boolean).pop() || host;
           let name = rawName;
           try { name = decodeURIComponent(rawName); } catch {}
