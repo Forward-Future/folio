@@ -13,6 +13,7 @@ import { loadPdf, copyPdfPages, thumbnailDataUrl, type PDFDocumentProxy } from "
 import { contentKey, getRecent, MAX_RECENT_FILE_BYTES, onStoredDataCleared, removeRecent, saveRecent, updateLastPage } from "./recent";
 import { readPdfBlob, readPdfResponse } from "./pdfInput";
 import { FIT_SCALES, readView, writeView, type ReadingView } from "./session";
+import { readSetting, writeSetting } from "./preferences";
 import { DocumentTabBar } from "./DocumentTabBar";
 import { trackTitlebar } from "./titlebar";
 import type { DocumentTabs, OpenSource } from "./documentTabs";
@@ -180,25 +181,22 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [textStatus, setTextStatus] = useState<string | null>(null);
-  const [scanLanguages, setScanLanguages] = useState(() => scanLanguagesFrom(localStorage.getItem("folio:scan-language")));
+  const [scanLanguages, setScanLanguages] = useState(() => scanLanguagesFrom(readSetting("folio:scan-language")));
   const [pageInput, setPageInput] = useState("1");
   const [numPages, setNumPages] = useState(0);
   const [scale, setScale] = useState(1);
-  const [wheelPaging, setWheelPaging] = useState(() => localStorage.getItem("folio:wheel-paging") === "1");
+  const [wheelPaging, setWheelPaging] = useState(() => readSetting("folio:wheel-paging") === "1");
   const wheelPagingRef = useRef(wheelPaging);
   wheelPagingRef.current = wheelPaging;
   const [rotation, setRotation] = useState(0);
-  const [sidebar, setSidebar] = useState(() => localStorage.getItem("folio:sidebar") !== "0" && window.innerWidth > 760);
+  const [sidebar, setSidebar] = useState(() => readSetting("folio:sidebar") !== "0" && window.innerWidth > 760);
   const [searchOpen, setSearchOpen] = useState(false);
   const [find, setFind] = useState<FindResult>({ current: 0, total: 0, state: null });
   const [theme, setTheme] = useState(document.documentElement.dataset.theme || "light");
-  const [spread, setSpread] = useState(() => localStorage.getItem("folio:spread") === "1");
+  const [spread, setSpread] = useState(() => readSetting("folio:spread") === "1");
   const spreadRef = useRef(spread);
   spreadRef.current = spread;
-  const [night, setNight] = useState(() => {
-    try { return localStorage.getItem("folio:night") === "1"; }
-    catch { return false; }
-  });
+  const [night, setNight] = useState(() => readSetting("folio:night") === "1");
   const [tool, setTool] = useState<Tool>("select");
   const [drawTool, setDrawTool] = useState<"Pen" | Shape>("Pen");
   const [colors, setColors] = useState<Partial<Record<Tool, string>>>({
@@ -641,7 +639,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     const v = viewerRef.current!;
     const next = !spread;
     setSpread(next);
-    localStorage.setItem("folio:spread", next ? "1" : "0");
+    writeSetting("folio:spread", next ? "1" : "0");
     if (!v.pdfDocument) return;
     const value = v.currentScaleValue;
     v.spreadMode = next ? SpreadMode.ODD : SpreadMode.NONE;
@@ -1064,7 +1062,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
 
   const setThemeTo = (next: "light" | "dark") => {
     document.documentElement.dataset.theme = next;
-    localStorage.setItem("folio:theme", next);
+    writeSetting("folio:theme", next);
     setTheme(next);
   };
 
@@ -1086,10 +1084,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
-  useEffect(() => localStorage.setItem("folio:sidebar", sidebar ? "1" : "0"), [sidebar]);
+  useEffect(() => { writeSetting("folio:sidebar", sidebar ? "1" : "0"); }, [sidebar]);
   const setNightTo = (next: boolean) => {
-    try { localStorage.setItem("folio:night", next ? "1" : "0"); }
-    catch { flash("PDF dark mode changed, but couldn't save the preference."); }
+    if (!writeSetting("folio:night", next ? "1" : "0")) flash("PDF dark mode changed, but couldn't save the preference.");
     setNight(next);
   };
 

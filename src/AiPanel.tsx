@@ -6,6 +6,7 @@ import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
 import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, subscribeAiPreferences, USAGE_URL } from "./ai";
 import { Modal } from "./Dialogs";
+import { readSetting } from "./preferences";
 
 const AiMarkdown = lazy(() => import("./AiMarkdown").then((module) => ({ default: module.AiMarkdown })));
 
@@ -132,10 +133,10 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const ai = window.folioDesktop?.ai;
   const [status, setStatus] = useState<AiStatus | null>(null);
   const provider = useSyncExternalStore(subscribeAiPreferences, savedProvider);
-  const keyRevision = useSyncExternalStore(subscribeAiPreferences, () => localStorage.getItem("folio:ai-key-revision"));
+  const keyRevision = useSyncExternalStore(subscribeAiPreferences, () => readSetting("folio:ai-key-revision"));
   const [models, setModels] = useState<{ id: string; name: string }[]>([]);
   const modelKey = `folio:ai-model:${provider}`;
-  const savedModel = useSyncExternalStore(subscribeAiPreferences, () => localStorage.getItem(modelKey) ?? "");
+  const savedModel = useSyncExternalStore(subscribeAiPreferences, () => readSetting(modelKey) ?? "");
   const model = provider === "chatgpt" && models.length && !models.some(m => m.id === savedModel) ? models[0].id : savedModel;
   const [messages, setMessages] = useState<Message[]>(() => conversations.get(docId)?.messages ?? []);
   const [input, setInput] = useState("");

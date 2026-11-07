@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { saveAiPreference } from "./ai";
+import { readSetting } from "./preferences";
 
 const MODEL_KEY = "folio:ai-model:openrouter";
 
 function ModelPicker({ ai }: { ai: FolioAi }) {
-  const [model, setModel] = useState(() => localStorage.getItem(MODEL_KEY) ?? "");
+  const [model, setModel] = useState(() => readSetting(MODEL_KEY) ?? "");
   const [editing, setEditing] = useState(!model);
   const [query, setQuery] = useState("");
   const [models, setModels] = useState<OpenRouterModel[]>([]);
