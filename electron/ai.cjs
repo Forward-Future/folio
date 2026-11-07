@@ -32,7 +32,7 @@ const openRouter = createOpenRouter({ net, safeStorage, file, writeAtomic });
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
 function writeAtomic(name, contents) {
-  fs.mkdirSync(dir(), { recursive: true });
+  fs.mkdirSync(dir(), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file(name) + ".tmp", contents, { mode: 0o600 });
   fs.renameSync(file(name) + ".tmp", file(name));
 }
@@ -84,6 +84,7 @@ async function saveSession(next) {
 async function postForm(url, params) {
   const response = await net.fetch(url, {
     method: "POST",
+    redirect: "error",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
     body: new URLSearchParams(params).toString(),
   });
@@ -96,19 +97,30 @@ async function postForm(url, params) {
 let openIdConfig = null;
 async function getOpenIdConfig() {
   if (openIdConfig) return openIdConfig;
-  const response = await net.fetch(`${AUTH_ISSUER}/.well-known/openid-configuration`);
+  const response = await net.fetch(`${AUTH_ISSUER}/.well-known/openid-configuration`, { redirect: "error" });
   if (!response.ok) throw new Error("Couldn't reach OpenAI's sign-in service.");
-  openIdConfig = await response.json();
+  const config = await response.json();
+  const endpoints = [config.jwks_uri];
+  if (config.revocation_endpoint != null) endpoints.push(config.revocation_endpoint);
+  for (const value of endpoints) {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.origin !== AUTH_ISSUER || url.username || url.password) {
+      throw new Error("Unexpected sign-in configuration.");
+    }
+  }
+  openIdConfig = config;
   return openIdConfig;
 }
 
 /** Verifies the ID token's RS256 signature and claims; returns its payload. */
 async function verifyIdToken(idToken, clientId, nonce) {
-  const [h, p, sig] = String(idToken).split(".");
+  const parts = String(idToken).split(".");
+  if (parts.length !== 3) throw new Error("Unexpected sign-in token.");
+  const [h, p, sig] = parts;
   const header = JSON.parse(Buffer.from(h, "base64url").toString());
   const payload = JSON.parse(Buffer.from(p, "base64url").toString());
   const config = await getOpenIdConfig();
-  const jwks = await (await net.fetch(config.jwks_uri)).json();
+  const jwks = await (await net.fetch(config.jwks_uri, { redirect: "error" })).json();
   const jwk = jwks.keys?.find((k) => k.kid === header.kid);
   if (!jwk || header.alg !== "RS256") throw new Error("Unexpected sign-in token.");
   const valid = crypto.verify("RSA-SHA256", Buffer.from(`${h}.${p}`), crypto.createPublicKey({ key: jwk, format: "jwk" }), Buffer.from(sig, "base64url"));
@@ -199,10 +211,10 @@ async function signInChatGPT() {
 
       const query = await Promise.race([callback, timeout]);
       signInPage = null; // answered: the page has done its job
-      const clientId = query.get("client_id") || host.clientId;
+      const clientId = host.clientId || query.get("client_id");
       if (!clientId) throw new Error("ChatGPT didn't finish registering Folio. Please try again.");
       // Keep the issued client ID for every later sign-in on this computer, even if the rest fails.
-      if (host.clientId !== clientId) saveHost({ ...host, clientId });
+      if (!host.clientId) saveHost({ ...host, clientId });
       const exchange = await postForm(TOKEN_URL, {
         grant_type: "authorization_code", client_id: clientId, code: query.get("code"), code_verifier: verifier, redirect_uri: redirectUri, resource: API,
       });
@@ -346,9 +358,19 @@ function usageError(code, status) {
 }
 
 // ── Claude Code ────────────────────────────────────────────────────────────────────────────
+function makeClaudeDir() {
+  fs.mkdirSync(dir(), { recursive: true, mode: 0o700 });
+  return fs.mkdtempSync(path.join(dir(), "claude-"));
+}
+
 function run(cmd, args, timeout = 10_000) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout, windowsHide: true, env: claudeEnv() }, (error, stdout) => resolve(error ? null : String(stdout)));
+    let cwd;
+    try { cwd = makeClaudeDir(); } catch { return resolve(null); }
+    execFile(cmd, args, { cwd, timeout, windowsHide: true, env: claudeEnv() }, (error, stdout) => {
+      try { fs.rmSync(cwd, { recursive: true, force: true }); } catch {}
+      resolve(error ? null : String(stdout));
+    });
   });
 }
 
@@ -388,8 +410,22 @@ const CLAUDE_TIMEOUT_MS = 5 * 60_000;
 /** Removes prompt folders left behind if Folio or Claude Code exited mid-answer. */
 function cleanStaleClaudeFolders() {
   try {
-    for (const entry of fs.readdirSync(os.tmpdir())) {
-      if (entry.startsWith("folio-claude-")) fs.rmSync(path.join(os.tmpdir(), entry), { recursive: true, force: true });
+    for (const entry of fs.readdirSync(dir(), { withFileTypes: true })) {
+      if (entry.isDirectory() && /^claude-[a-z0-9]{6}$/i.test(entry.name)) {
+        fs.rmSync(path.join(dir(), entry.name), { recursive: true, force: true });
+      }
+    }
+  } catch {}
+  // Older versions left only system.txt in a per-run folder in the system temp directory.
+  try {
+    for (const entry of fs.readdirSync(os.tmpdir(), { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^folio-claude-[a-z0-9]{6}$/i.test(entry.name)) continue;
+      const legacy = path.join(os.tmpdir(), entry.name);
+      try {
+        if (process.getuid && fs.lstatSync(legacy).uid !== process.getuid()) continue;
+        fs.rmSync(path.join(legacy, "system.txt"), { force: true });
+        fs.rmdirSync(legacy);
+      } catch {}
     }
   } catch {}
 }
@@ -399,8 +435,8 @@ async function askClaude({ model, document, messages }, emit, signal) {
   if (!exe) throw new Error("Claude Code isn't installed.");
   if (signal.aborted) return;
   const prompt = claudePrompt(document, messages);
-  // An empty working folder, no settings, MCP servers, slash commands, or tools: Claude only reads and answers.
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "folio-claude-"));
+  // Claude reads and answers from a private working folder with settings, MCP servers, slash commands and tools disabled.
+  const cwd = makeClaudeDir();
   const cleanup = () => { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch {} };
   const promptFile = path.join(cwd, "system.txt");
   try {
