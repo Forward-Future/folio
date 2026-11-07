@@ -2,10 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import { saveAiPreference } from "./ai";
 import { readSetting } from "./preferences";
 
-const MODEL_KEY = "folio:ai-model:openrouter";
+const ROUTER_ID = /^[a-z\d_~@.-]+\/[a-z\d_:./~@-]+$/i;
 
-function ModelPicker({ ai }: { ai: FolioAi }) {
-  const [model, setModel] = useState(() => readSetting(MODEL_KEY) ?? "");
+interface PickerProps {
+  /** Where the chosen model is saved; the Ask AI panel reads the same key. */
+  storageKey: string;
+  load: () => Promise<{ models?: OpenRouterModel[]; error?: string }>;
+  validId: (id: string) => boolean;
+  idExample: string;
+}
+
+/** Searches the provider's models, or takes a typed model ID. Shared by OpenRouter and custom endpoints. */
+export function ModelPicker({ storageKey, load, validId, idExample }: PickerProps) {
+  const [model, setModel] = useState(() => readSetting(storageKey) ?? "");
   const [editing, setEditing] = useState(!model);
   const [query, setQuery] = useState("");
   const [models, setModels] = useState<OpenRouterModel[]>([]);
@@ -16,21 +25,21 @@ function ModelPicker({ ai }: { ai: FolioAi }) {
     let current = true;
     setLoading(true);
     setError("");
-    ai.openRouterModels().then(result => {
+    load().then(result => {
       if (!current) return;
       setModels(result.models ?? []);
       setError(result.error ?? "");
     }).catch(() => { if (current) setError("Couldn't load models. You can enter a model ID."); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [ai, editing]);
+  }, [load, editing]);
   const select = (id: string) => {
-    saveAiPreference(MODEL_KEY, id);
+    saveAiPreference(storageKey, id);
     setModel(id); setEditing(false); setQuery("");
   };
   const typed = query.trim();
   const matches = models.filter(m => (m.name + " " + m.id).toLowerCase().includes(typed.toLowerCase()));
-  const custom = /^[a-z\d_~@.-]+\/[a-z\d_:./~@-]+$/i.test(typed) && !models.some(m => m.id === typed);
+  const custom = validId(typed) && !models.some(m => m.id === typed);
   if (!editing) return <div className="settings-row"><div className="settings-label"><span>Model</span><small>{model}</small></div>
     <button className="btn ghost" onClick={() => setEditing(true)}>Change model</button></div>;
   return <div className="router-model-picker">
@@ -45,7 +54,7 @@ function ModelPicker({ ai }: { ai: FolioAi }) {
       {custom && <button onClick={() => select(typed)}>Use {typed}</button>}
     </div>
     {loading && <small role="status">Loading models…</small>}
-    {!loading && !error && !matches.length && !custom && <small>No matching models. You can enter an ID such as provider/model.</small>}
+    {!loading && !error && !matches.length && !custom && <small>No matching models. You can enter an ID such as {idExample}.</small>}
     {error && <small role="status">{error}</small>}
     {model && <button className="link small" onClick={() => { setEditing(false); setQuery(""); }}>Cancel</button>}
   </div>;
@@ -89,6 +98,6 @@ export function OpenRouterSettings({ ai, configured, onConfigured }: { ai: Folio
     </form>}
     {notice && <p role="status" className="settings-hint">{notice}</p>}
     {error && <p role="alert" className="form-error">{error}</p>}
-    {configured && <ModelPicker ai={ai} />}
+    {configured && <ModelPicker storageKey="folio:ai-model:openrouter" load={ai.openRouterModels} validId={id => ROUTER_ID.test(id)} idExample="provider/model" />}
   </div>;
 }

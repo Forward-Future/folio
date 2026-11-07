@@ -14,6 +14,7 @@ import { electronPath } from "./electron-path.mjs";
 import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
 import { checkOpenRouter } from "./smoke-openrouter.mjs";
+import { checkCustomEndpoint } from "./smoke-custom-endpoint.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -135,6 +136,7 @@ try {
   assert.equal(await page.getByRole("dialog").count(), 0);
   console.log("ok  shortcuts wait while a dialog is open");
   await checkOpenRouter(app, page);
+  await checkCustomEndpoint(app, page);
 
   const toolbar = page.getByRole("toolbar", { name: "Tools" });
   for (const name of ["Select", "Highlight", "Draw", "Text", "Sign", "Edit mode"]) await toolbar.getByRole("button", { name, exact: true }).waitFor();
