@@ -5,10 +5,10 @@ import { createHash, randomUUID, X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import https from "node:https";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { _electron } from "playwright-core";
+import { electronPath } from "./electron-path.mjs";
 import { readerPage } from "./reader-page.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -65,7 +65,7 @@ try {
   const spki = createHash("sha256").update(new X509Certificate(cert).publicKey.export({ type: "spki", format: "der" })).digest("base64");
   const env = { ...process.env, FOLIO_TEST_HIDDEN: "1", FOLIO_TEST_USER_DATA: path.join(dir, "profile") };
   delete env.ELECTRON_RUN_AS_NODE;
-  app = await _electron.launch({ executablePath: createRequire(import.meta.url)("electron"), env,
+  app = await _electron.launch({ executablePath: electronPath(env), env,
     args: [root, "--mute-audio", "--ignore-certificate-errors-spki-list=" + spki,
       ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])] });
   const page = readerPage(await app.firstWindow());
