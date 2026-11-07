@@ -30,18 +30,25 @@ $word = New-Object -ComObject Word.Application
 $own = -not $word.Visible
 $security = $word.AutomationSecurity
 $alerts = $word.DisplayAlerts
+$linksOpen = $word.Options.UpdateLinksAtOpen
+$linksPrint = $word.Options.UpdateLinksAtPrint
 try {
   $word.AutomationSecurity = 3
   $word.DisplayAlerts = 0
-  $doc = $word.Documents.Open($env:FOLIO_SOURCE, $false, $true, $false, 'folio-no-password', 'folio-no-password')
+  $word.Options.UpdateLinksAtOpen = $false
+  $word.Options.UpdateLinksAtPrint = $false
+  $missing = [Type]::Missing
+  # Keep Word's format, encoding and text-direction defaults. Open invisibly and suppress the encoding dialog.
+  $doc = $word.Documents.Open($env:FOLIO_SOURCE, $false, $true, $false, 'folio-no-password', 'folio-no-password',
+    $false, 'folio-no-password', 'folio-no-password', $missing, $missing, $false, $false, $missing, $true)
   try { $doc.ExportAsFixedFormat($env:FOLIO_TARGET, 17, $false, 0, 0, 1, 1, 0, $true, $true, 1, $true, $true, $false) }
   finally { $doc.Close(0) }
 } finally {
-  try {
-    $word.AutomationSecurity = $security
-    $word.DisplayAlerts = $alerts
-    if ($own -and $word.Documents.Count -eq 0) { $word.Quit() }
-  } catch {}
+  try { $word.Options.UpdateLinksAtOpen = $linksOpen } catch {}
+  try { $word.Options.UpdateLinksAtPrint = $linksPrint } catch {}
+  try { $word.AutomationSecurity = $security } catch {}
+  try { $word.DisplayAlerts = $alerts } catch {}
+  try { if ($own -and $word.Documents.Count -eq 0) { $word.Quit() } } catch {}
   [void][Runtime.InteropServices.Marshal]::ReleaseComObject($word)
 }`;
 
@@ -149,11 +156,13 @@ async function printHtml(htmlFile) {
 }
 
 async function builtIn(source, dir, title) {
-  const htmlFile = path.join(dir, "document.html");
+  const htmlDir = path.join(dir, "html");
+  await fs.promises.mkdir(htmlDir);
+  const htmlFile = path.join(htmlDir, "document.html");
   if (/\.docx$/i.test(source)) {
     await runWorker("docx-worker.cjs", "Folio Word converter", { source, output: htmlFile, title });
   } else if (process.platform === "darwin") {
-    await run("/usr/bin/textutil", ["-convert", "html", "-output", htmlFile, source]);
+    await run("/usr/bin/textutil", ["-format", "doc", "-convert", "html", "-output", htmlFile, source]);
     const text = (await readRegular(htmlFile, MAX_HTML_BYTES)).toString("utf8");
     const html = text.replace(/<head[^>]*>/i, (head) => `${head}<style>@page { margin: 1in; }</style>`);
     if (Buffer.byteLength(html) > MAX_HTML_BYTES) throw tooLarge(MAX_HTML_BYTES);
