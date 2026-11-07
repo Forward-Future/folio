@@ -18,11 +18,11 @@ describe("withRecognized", () => {
   it("passes the page's own chunks through, then adds one chunk of recognized items", async () => {
     const own = [{ items: [1], styles: {} }, { items: [2], styles: {} }];
     const styles = { ocr: {} };
-    expect(await readAll(withRecognized(streamOf(own), ["r"], styles))).toEqual([...own, { items: ["r"], styles, lang: "en" }]);
+    expect(await readAll(withRecognized(streamOf(own), ["r"], styles))).toEqual([...own, { items: ["r"], styles, lang: null }]);
   });
 
   it("still yields the recognized chunk when the page has no text of its own", async () => {
-    expect(await readAll(withRecognized(streamOf([]), ["r"], {}))).toEqual([{ items: ["r"], styles: {}, lang: "en" }]);
+    expect(await readAll(withRecognized(streamOf([]), ["r"], {}))).toEqual([{ items: ["r"], styles: {}, lang: null }]);
   });
 
   it("cancels the page's own stream when the reader gives up", async () => {

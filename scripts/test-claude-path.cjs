@@ -83,6 +83,33 @@ test("Windows only runs claude.exe, never a .cmd shim", (t) => {
   assert.equal(findClaude({ platform: "win32", home, envPath: npm }), exe);
 });
 
+test("Windows finds the claude.exe behind an npm install's claude.cmd shim", (t) => {
+  const root = folder(t), home = path.join(root, "home"), npm = path.join(root, "npm");
+  const packaged = path.join(npm, "node_modules", "@anthropic-ai", "claude-code", "bin");
+  const exe = fakeClaude(packaged, "claude.exe");
+  // The package alone isn't enough: npm's shim on PATH shows it's a global install.
+  assert.equal(findClaude({ platform: "win32", home, envPath: npm }), null);
+  fakeClaude(npm, "claude.cmd", `@"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*\r\n`);
+  assert.equal(findClaude({ platform: "win32", home, envPath: npm }), exe);
+  // Claude Code's own installer and earlier PATH entries still come first.
+  const earlier = fakeClaude(path.join(root, "earlier"), "claude.exe");
+  assert.equal(findClaude({ platform: "win32", home, envPath: [path.join(root, "earlier"), npm].join(path.delimiter) }), earlier);
+  const own = fakeClaude(path.join(home, ".local", "bin"), "claude.exe");
+  assert.equal(findClaude({ platform: "win32", home, envPath: npm }), own);
+  // Other platforms don't use this layout.
+  assert.equal(findClaude({ platform: "darwin", home: path.join(root, "nobody"), envPath: npm, extraFolders: [] }), null);
+});
+
+test("an npm shim in a relative PATH entry is still ignored", (t) => {
+  const root = folder(t), home = path.join(root, "home");
+  fakeClaude(path.join(root, "npm"), "claude.cmd");
+  fakeClaude(path.join(root, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin"), "claude.exe");
+  const cwd = process.cwd();
+  process.chdir(root);
+  try { assert.equal(findClaude({ platform: "win32", home, envPath: "npm", extraFolders: [] }), null); }
+  finally { process.chdir(cwd); }
+});
+
 test("Claude Code's folder is added to its PATH once", () => {
   const dir = path.join(path.sep, "opt", "homebrew", "bin");
   const exe = path.join(dir, "claude");

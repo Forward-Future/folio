@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ createWorker: vi.fn() }));
+const mocks = vi.hoisted(() => ({ createWorker: vi.fn(), installed: vi.fn() }));
 vi.mock("tesseract.js", () => ({ createWorker: mocks.createWorker, OEM: { LSTM_ONLY: 1 }, PSM: { AUTO: 3 } }));
+vi.mock("./scanLanguagePacks", () => ({ installedScanLanguages: mocks.installed, OCR_CACHE_PATH: "local-ocr" }));
 import { startOcrWorker } from "./ocrWorker";
 
 class FakeWorker {
@@ -9,10 +10,24 @@ class FakeWorker {
   constructor(_url: string | URL, _options?: WorkerOptions) {}
 }
 let browserWorker: FakeWorker;
-beforeEach(() => { vi.stubGlobal("Worker", FakeWorker); mocks.createWorker.mockReset(); });
+beforeEach(() => { vi.stubGlobal("Worker", FakeWorker); mocks.createWorker.mockReset(); mocks.installed.mockResolvedValue(new Set(["eng", "deu"])); });
 afterEach(() => vi.unstubAllGlobals());
 
 describe("OCR worker startup", () => {
+  it("uses selected languages and the installed language cache", async () => {
+    const worker = { setParameters: vi.fn().mockResolvedValue(undefined), terminate: vi.fn() };
+    mocks.createWorker.mockResolvedValue(worker);
+    await startOcrWorker(new AbortController().signal, ["deu", "eng"]);
+    expect(mocks.createWorker).toHaveBeenCalledWith(["deu", "eng"], 1,
+      expect.objectContaining({ cachePath: "local-ocr", cacheMethod: "readOnly" }));
+  });
+
+  it("explains a missing language pack without starting a worker", async () => {
+    mocks.installed.mockResolvedValue(new Set(["eng"]));
+    await expect(startOcrWorker(new AbortController().signal, ["deu"])).rejects.toThrow("Download the German pack");
+    expect(mocks.createWorker).not.toHaveBeenCalled();
+  });
+
   it("terminates the native worker and rejects when language initialization reports an error", async () => {
     mocks.createWorker.mockImplementation((_language, _mode, options) => {
       browserWorker = new Worker("worker.js") as unknown as FakeWorker;

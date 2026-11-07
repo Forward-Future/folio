@@ -80,10 +80,10 @@ describe("recognized text storage", () => {
   it("clears recognized text independently without clearing notes", async () => {
     const { saveOcrPage, getOcrPages, clearRecognizedText, saveNotes, getNotes } = await freshStore();
     await saveOcrPage("doc", 1, [{ str: "private" }]);
-    await saveNotes({ id: "doc", note: "keep", marks: [], updatedAt: 1 });
+    await saveNotes({ id: "doc", note: "keep", marks: [], updatedAt: 1 }, 0);
     await clearRecognizedText();
     expect((await getOcrPages("doc")).size).toBe(0);
-    expect((await getNotes("doc"))?.note).toBe("keep");
+    expect((await getNotes("doc")).value?.note).toBe("keep");
   });
 
   it("does not persist OCR when storage invalidation cannot be checked", async () => {
@@ -115,9 +115,9 @@ describe("recognized text storage", () => {
 
   it("is stored with the other per-document data, not instead of it", async () => {
     const { saveOcrPage, saveNotes, getNotes } = await freshStore();
-    await saveNotes({ id: "doc", note: "keep me", marks: [], updatedAt: 1 });
+    await saveNotes({ id: "doc", note: "keep me", marks: [], updatedAt: 1 }, 0);
     await saveOcrPage("doc", 1, [{ str: "a" }]);
-    expect((await getNotes("doc"))?.note).toBe("keep me");
+    expect((await getNotes("doc")).value?.note).toBe("keep me");
   });
 });
 
@@ -150,7 +150,7 @@ describe("upgrading an existing library", () => {
     });
     const { getNotes, openFolioDatabase } = await import("../../../recent");
     const { saveOcrPage, getOcrPages } = await import("./ocrStore");
-    expect((await getNotes("doc"))?.note).toBe("keep");
+    expect((await getNotes("doc")).value?.note).toBe("keep");
     const db = await openFolioDatabase();
     expect(["ocr", "versions", "versionPdfs"].every(name => db.objectStoreNames.contains(name))).toBe(true);
     expect(db.transaction("versions").objectStore("versions").indexNames.contains("byFamily")).toBe(true);
@@ -185,7 +185,7 @@ describe("upgrading an existing library", () => {
     vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) });
     const { getNotes, getRecent } = await import("../../../recent");
     const { saveOcrPage, getOcrPages } = await import("./ocrStore");
-    expect((await getNotes("old-doc"))?.note).toBe("from before");
+    expect((await getNotes("old-doc")).value?.note).toBe("from before");
     if (version === 4) expect((await getRecent("recent-doc"))?.name).toBe("saved.pdf");
     await saveOcrPage("old-doc", 1, [{ str: "new" }]);
     expect((await getOcrPages("old-doc")).get(1)).toEqual([{ str: "new" }]);
@@ -200,5 +200,76 @@ describe("when storage isn't available", () => {
     const { saveOcrPage, getOcrPages } = await import("./ocrStore");
     await expect(saveOcrPage("doc", 1, [])).resolves.toBeUndefined();
     expect((await getOcrPages("doc")).size).toBe(0);
+  });
+});
+
+
+describe("language-aware recognized text", () => {
+  it("keeps English legacy keys separate from other language selections", async () => {
+    const { saveOcrPage, getOcrPages, tx, OCR } = await freshStore();
+    await tx("readwrite", s => s.put({ id: "doc#1", items: [{ str: "legacy English" }] }), OCR);
+    await saveOcrPage("doc", 1, [{ str: "Deutsch" }], undefined, ["deu"]);
+    await saveOcrPage("doc", 1, [{ str: "mixed" }], undefined, ["eng", "deu"]);
+    expect((await getOcrPages("doc")).get(1)).toEqual([{ str: "legacy English" }]);
+    expect((await getOcrPages("doc", ["deu"])).get(1)).toEqual([{ str: "Deutsch" }]);
+    expect((await getOcrPages("doc", ["eng", "deu"])).get(1)).toEqual([{ str: "mixed" }]);
+    expect((await getOcrPages("doc", ["spa"])).size).toBe(0);
+  });
+
+  it("removes every language when a recent document is removed", async () => {
+    const { saveOcrPage, getOcrPages, removeRecent } = await freshStore();
+    await saveOcrPage("doc", 1, [{ str: "English" }]);
+    await saveOcrPage("doc", 1, [{ str: "Deutsch" }], undefined, ["deu"]);
+    await removeRecent("doc");
+    expect((await getOcrPages("doc")).size).toBe(0);
+    expect((await getOcrPages("doc", ["deu"])).size).toBe(0);
+  });
+
+  it.each(["main", "ocr"])("upgrades version 6 %s without losing notes, chats or generations", async schema => {
+    vi.resetModules();
+    const factory = new IDBFactory();
+    vi.stubGlobal("indexedDB", factory);
+    vi.stubGlobal("IDBKeyRange", IDBKeyRange);
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) });
+    await new Promise<void>((resolve, reject) => {
+      const request = factory.open("folio", 6);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        for (const name of ["recent", "notes", "ai"]) db.createObjectStore(name, { keyPath: "id" });
+        db.createObjectStore("versions", { keyPath: "id" }).createIndex("byFamily", ["family", "number"], { unique: true });
+        db.createObjectStore("versionPdfs");
+        if (schema === "main") db.createObjectStore("clearGenerations");
+        else db.createObjectStore("ocr", { keyPath: "id" });
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        const transaction = db.transaction(schema === "main" ? ["notes", "ai", "clearGenerations"] : ["notes", "ai"], "readwrite");
+        transaction.objectStore("notes").put({ id: "doc", note: "keep", marks: [], updatedAt: 1 });
+        transaction.objectStore("ai").put({ id: "doc", messages: [{ role: "user", content: "keep chat" }] });
+        if (schema === "main") transaction.objectStore("clearGenerations").put(3, "notes");
+        transaction.oncomplete = () => { db.close(); resolve(); };
+        transaction.onabort = () => reject(transaction.error);
+      };
+      request.onerror = () => reject(request.error);
+    });
+    const { openFolioDatabase, getNotes, getAiHistory, saveAiHistory, saveNotes, clearStoredData } = await import("../../../recent");
+    const { saveOcrPage, getOcrPages } = await import("./ocrStore");
+    const db = await openFolioDatabase();
+    expect(db.version).toBe(7);
+    expect([...db.objectStoreNames]).toEqual(expect.arrayContaining(["ocr", "clearGenerations", "versions", "versionPdfs"]));
+    const before = await getNotes("doc");
+    expect(before.value?.note).toBe("keep");
+    expect(before.generation).toBe(schema === "main" ? 3 : 0);
+    const chat = await getAiHistory("doc");
+    expect(chat.messages[0].content).toBe("keep chat");
+    await clearStoredData("ai");
+    await saveAiHistory("doc", chat.messages, chat.generation);
+    expect((await getAiHistory("doc")).messages).toEqual([]);
+    await clearStoredData("notes");
+    await saveNotes(before.value!, before.generation);
+    expect((await getNotes("doc")).value).toBeUndefined();
+    await saveOcrPage("doc", 1, [{ str: "Deutsch" }], undefined, ["deu"]);
+    expect((await getOcrPages("doc", ["deu"])).size).toBe(1);
   });
 });

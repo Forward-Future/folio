@@ -29,12 +29,13 @@ Folio opens untrusted PDFs, so it's built to keep a malicious document contained
   approved IP addresses and Chromium verifies HTTPS against the original hostname. This covers redirects and page
   subresources. Access to a local address requires approval for the specific origin and addresses in the dialog.
   The importer supports direct connections and HTTP(S) system proxies that allow tunnels to numeric addresses.
-  If it cannot establish a verified route, the import fails.
+  If it cannot establish a verified route, the import fails. URL imports decline TLS client certificates for PDF downloads,
+  redirects, captured webpages, and their subresources.
 - Webpages opened from a link are loaded in a separate hidden window: sandboxed, no Node.js or preload, a throwaway
   in-memory session per page, every permission denied, pop-ups and downloads blocked, only http(s)/data/blob requests
   allowed, and a 60-second limit. Only the printed PDF reaches Folio.
-- Word documents are converted by Microsoft Word (macros disabled) or LibreOffice (a temporary profile with macros and
-  linked content disabled) when installed. Otherwise Folio's own converter reads the `.docx` in a separate utility
+- Word documents are converted by Microsoft Word (macros and automatic link updates disabled) or LibreOffice (a temporary
+  profile with macros and linked content disabled) when installed. Otherwise Folio's own converter reads the `.docx` in a separate utility
   process with a two-minute timeout and a 768 MiB working-set limit. It counts the bytes expanded from each archive
   part (32 MiB), the total (96 MiB), and the generated HTML (48 MiB). A sandboxed window prints the result with
   JavaScript and the network off. File imports and converted PDFs have a 300 MiB limit. A saved conversion grants
@@ -47,8 +48,10 @@ Folio opens untrusted PDFs, so it's built to keep a malicious document contained
   loopback redirect on `127.0.0.1`, state and nonce checks, and ID-token signature verification). Tokens are encrypted
   with Electron `safeStorage` (Windows DPAPI, the macOS Keychain, or the Linux secret store; kept in memory only when
   no secret store is available) and never reach the page. Claude runs the user's own, unmodified Claude
-  Code CLI with all tools, MCP servers, settings, and slash commands disabled, in an empty temporary folder; Folio never
-  handles Claude credentials. Document text goes to the chosen provider only when the user asks a question.
+  Code CLI with all tools, MCP servers, settings, and slash commands disabled, in a private temporary folder under
+  Folio's user data. Folio never handles Claude credentials. An OpenRouter API key is verified and stored with OS credential protection by the main
+  process; the key is never returned to the reader. Key checks and model lookups send no document content.
+  Document text goes to the chosen provider only when the user asks a question. OpenRouter forwards the request to the model's serving provider.
 
 Known limitations:
 

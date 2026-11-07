@@ -1,7 +1,16 @@
+import { SCAN_LANGUAGES, type ScanLanguage } from "./scanLanguage";
+import { installedScanLanguages, OCR_CACHE_PATH } from "./scanLanguagePacks";
+export class MissingScanPack extends Error {}
 import type { Worker as OcrWorker } from "tesseract.js";
 
 /** Start Tesseract and own the browser worker even if initialization never resolves. */
-export async function startOcrWorker(signal: AbortSignal): Promise<OcrWorker> {
+export async function startOcrWorker(signal: AbortSignal, languages: ScanLanguage[] = ["eng"]): Promise<OcrWorker> {
+  if (languages.some(code => code !== "eng")) {
+    const installed = await installedScanLanguages();
+    signal.throwIfAborted();
+    const missing = SCAN_LANGUAGES.find(({ id }) => languages.includes(id) && !installed.has(id));
+    if (missing) throw new MissingScanPack(`Download the ${missing.name} pack in Settings to read this scan.`);
+  }
   const { createWorker, OEM, PSM } = await import("tesseract.js");
   signal.throwIfAborted();
   const base = `${import.meta.env.BASE_URL}ocr`;
@@ -30,9 +39,9 @@ export async function startOcrWorker(signal: AbortSignal): Promise<OcrWorker> {
       abort = () => fail(signal.reason);
       signal.addEventListener("abort", abort, { once: true });
       try {
-        createWorker("eng", OEM.LSTM_ONLY, {
+        createWorker(languages, OEM.LSTM_ONLY, {
           workerPath: `${base}/worker.min.js`, workerBlobURL: false, corePath: base, langPath: base,
-          cacheMethod: "none", errorHandler: fail,
+          cachePath: OCR_CACHE_PATH, cacheMethod: "readOnly", errorHandler: fail,
         }).then(worker => {
           if (rejected) void worker.terminate();
           else resolve(worker);

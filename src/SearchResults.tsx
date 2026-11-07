@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy } from "./pdf";
 import type { EventBus, PDFFindController } from "./viewer";
 import { pageText, snippetAt, type PageText, type TextPiece } from "./lib/search";
+import { keys } from "./platform";
 
 interface PageResult {
   page: number;
@@ -79,7 +80,7 @@ export function SearchResults({ pdf, controller, bus, onSelect }: {
 
   return <aside className="search-results" aria-label="Search results">
     <h3>Matching pages <span>{pageCount}</span></h3>
-    {results.length === 0 && <p className="search-hint">Search above to see matching pages. Enter and Shift+Enter navigate individual matches.</p>}
+    {results.length === 0 && <p className="search-hint">{keys("Search above to see matching pages. Enter and Shift+Enter navigate individual matches.")}</p>}
     <div className="search-result-list">
       {results.map(result => <button key={result.page} aria-label={"Go to page " + result.page + ", " + result.count + " matches"} onClick={() => onSelect(result.page)}>
         <strong>Page {result.page} <span>{result.count} {result.count === 1 ? "match" : "matches"}</span></strong>

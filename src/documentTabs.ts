@@ -35,9 +35,21 @@ export class DocumentTabs {
   private sequence = 0;
   private listeners = new Set<() => void>();
   private revision = 0;
+  private linkHintSeen = false;
   active = 0;
   keyboardFocus?: number;
   constructor(private root: HTMLElement) {}
+
+  /** Reader frames share the hint, even if this window cannot use persistent storage. */
+  takeLinkHint() {
+    if (this.linkHintSeen) return false;
+    this.linkHintSeen = true;
+    try {
+      if (localStorage.getItem("folio:link-return-hint")) return false;
+      localStorage.setItem("folio:link-return-hint", "1");
+    } catch { /* Once per window when storage is unavailable. */ }
+    return true;
+  }
 
   get all(): readonly Tab[] { return this.entries; }
   snapshot = () => this.revision;

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./icons";
+import { keys } from "./platform";
 
 /** pdf.js FindState: FOUND 0, NOT_FOUND 1, WRAPPED 2, PENDING 3 */
 export interface FindResult {
@@ -67,7 +68,7 @@ export function SearchBar({
         <u>ab</u>
       </button>
       <span className="divider" />
-      <button className="pill-btn" onClick={() => step(true)} disabled={!result.total} title="Previous (Shift+Enter)">
+      <button className="pill-btn" onClick={() => step(true)} disabled={!result.total} title={keys("Previous (Shift+Enter)")}>
         <Icon name="chevronUp" size={16} />
       </button>
       <button className="pill-btn" onClick={() => step(false)} disabled={!result.total} title="Next (Enter)">

@@ -125,6 +125,7 @@ const SHORTCUTS: [string, string][] = [
   ["Next tab", "Control Tab"],
   ["Previous tab", "Control Shift Tab"],
   ["Open from URL", "Ctrl Shift O"],
+  ["Back / forward through links", "Alt ← / Alt →"],
   ["Highlight selection or enter Highlight mode", "H"],
   ["Write a note on the selection", "N"],
   ["Remove a clicked highlight", "Delete"],

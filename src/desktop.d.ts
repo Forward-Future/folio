@@ -18,8 +18,10 @@ interface FolioDesktop {
   onTabCommand(callback: (command: "new" | "close" | "next" | "previous") => void): () => void;
   openDocument(file: File): Promise<{ name: string; data: Uint8Array; note?: string }>;
   ready(): Promise<boolean>;
-  /** Null when the user declines to open an address on their computer or local network. */
-  fetchPdf(url: string): Promise<{ name: string; data: Uint8Array } | null>;
+  /** Null when the user declines to open an address on their computer or local network, or the request is stopped. */
+  fetchPdf(url: string, id: string): Promise<{ name: string; data: Uint8Array } | null>;
+  /** Stops the fetchPdf request that was started with this id (it then resolves to null). */
+  cancelFetchPdf(id: string): Promise<boolean>;
   getAppInfo(): Promise<{ version: string; mode: "development" | "portable" | "installed" | "appimage" | "package"; location: string; platform: string;
     /** True when updates are announced with a download link instead of installed (unsigned macOS builds). */
     notifyOnly: boolean }>;
@@ -27,6 +29,7 @@ interface FolioDesktop {
   platform: string;
   /** Opens the releases page (macOS, where updates are downloaded manually). */
   openDownload(): Promise<void>;
+  downloadOcrModel(code: string): Promise<Uint8Array<ArrayBuffer>>;
   openInstallation(): Promise<string>;
   setTheme(theme: string): void;
   installUpdate(): void;
@@ -38,6 +41,7 @@ interface FolioDesktop {
 }
 
 interface AiStatus {
+  openrouter: { configured: boolean };
   chatgpt: { connected: boolean; email: string; name: string; welcomeSeen: boolean; encrypted: boolean };
   claude: { installed: boolean; loggedIn: boolean; version?: string; subscription?: boolean; authMethod?: string };
 }
@@ -64,11 +68,15 @@ interface FolioAi {
   chatgptWelcomeSeen(): Promise<boolean>;
   chatgptModels(): Promise<{ ok: boolean; models?: { id: string; name: string }[]; error?: string; code?: string }>;
   recheckClaude(): Promise<AiStatus["claude"]>;
-  ask(request: { id: string; provider: "chatgpt" | "claude"; model: string; document: { name: string; text: string; truncated: boolean; recognized: boolean };
+  openRouterKey(action: "save" | "check" | "remove", key?: string): Promise<{ ok: boolean; configured?: boolean; error?: string }>;
+  openRouterModels(): Promise<{ ok: boolean; models?: OpenRouterModel[]; error?: string }>;
+  ask(request: { id: string; provider: "chatgpt" | "claude" | "openrouter"; model: string; document: { name: string; text: string; truncated: boolean; recognized: boolean };
     messages: AiMessage[] }): Promise<boolean>;
   cancel(id: string): Promise<boolean>;
   onEvent(callback: (event: AiEvent) => void): () => void;
 }
+
+interface OpenRouterModel { id: string; name: string; contextLength: number | null }
 
 interface Window {
   folioDesktop?: FolioDesktop;

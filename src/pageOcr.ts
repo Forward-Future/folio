@@ -1,6 +1,7 @@
+import type { ScanLanguage } from "./scanLanguage";
 import { AnnotationMode, OPS, type PDFPageProxy } from "pdfjs-dist";
 import type { Worker as OcrWorker } from "tesseract.js";
-import { startOcrWorker } from "./ocrWorker";
+import { startOcrWorker, MissingScanPack } from "./ocrWorker";
 import { ocrSession } from "./lib/ocr/session/OcrSession";
 import { toItems } from "./lib/ocr/text/words";
 import { area, boxOf, dropDuplicates } from "./lib/ocr/text/geometry";
@@ -35,7 +36,16 @@ async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSig
   try {
     await render.promise;
     signal.throwIfAborted();
-    const { data } = await worker.recognize(canvas, {}, { blocks: true, text: false });
+    // A language switch or document close can terminate the worker during image encoding.
+    // Encode here so we can check ownership before Tesseract posts its recognition job.
+    const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => {
+      if (blob) resolve(blob);
+      else reject(new Error("Couldn't prepare the scan image."));
+    }));
+    signal.throwIfAborted();
+    const bytes = new Uint8Array(await png.arrayBuffer());
+    signal.throwIfAborted();
+    const { data } = await worker.recognize(bytes, {}, { blocks: true, text: false });
     signal.throwIfAborted();
     const lines = (data.blocks ?? []).flatMap(block => block.paragraphs.flatMap(p => p.lines));
     return toItems(lines, viewport);
@@ -76,7 +86,7 @@ async function sparseNativeText(page: PDFPageProxy, signal: AbortSignal): Promis
 }
 
 /** Prepare the document sequentially, giving the reader's current page and its successor the next turns. */
-export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus: (text: string | null) => void, onPhase: (phase: "running" | "done") => void) {
+export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, languages: ScanLanguage[], onStatus: (text: string | null) => void, onPhase: (phase: "running" | "done") => void) {
   const pdf = viewer.pdfDocument!;
   const controller = new AbortController();
   const { signal } = controller;
@@ -88,15 +98,16 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
   let timer: number | undefined;
   let worker: Promise<OcrWorker> | undefined;
   let workerStartFailed = false;
+  let missingPackMessage: string | undefined;
 
   function updateStatus() {
     const n = viewer.currentPageNumber;
     const view: PDFPageView = viewer.getPageView(n - 1);
     const layer = view.textLayer?.div;
-    if (notices.get(n) === "ocrError") onStatus(`Text unavailable on page ${n}.`);
+    if (notices.get(n) === "ocrError") onStatus(missingPackMessage ?? `Text unavailable on page ${n}.`);
     else if (layer?.isConnected && !layer.hidden && layer.textContent.trim()) onStatus(null);
     else if (notices.get(n) === "noWords") onStatus(`No readable text found on page ${n}.`);
-    else if (notices.has(n)) onStatus(`Text unavailable on page ${n}.`);
+    else if (notices.has(n)) onStatus(missingPackMessage ?? `Text unavailable on page ${n}.`);
     else if (active === n && recognizing) onStatus(`Recognizing text on page ${n}…`);
     else if (pending.has(n) || active === n || !layer?.isConnected || layer.hidden || !layer.querySelector(".endOfContent")) {
       onStatus(`Preparing text on page ${n}…`);
@@ -141,7 +152,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
       }
       recognizing = true;
       if (n === viewer.currentPageNumber) updateStatus();
-      worker ??= startOcrWorker(signal).catch(error => { workerStartFailed = true; throw error; });
+      worker ??= startOcrWorker(signal, languages).catch(error => { workerStartFailed = true; missingPackMessage = error instanceof MissingScanPack ? error.message : undefined; throw error; });
       const items = await readWords(page, await worker, signal);
       const newItems = dropDuplicates(items, native.map(boxOf));
       signal.throwIfAborted();
@@ -195,17 +206,18 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
     schedule();
   }, { signal });
   window.addEventListener("folio:tab-visibility", schedule, { signal });
-  bus.on("pagesdestroy", () => {
+  const stop = () => {
     controller.abort();
     window.clearTimeout(timer);
     pending.clear();
     onStatus(null);
     void worker?.then(w => w.terminate()).catch(() => {});
-  }, { once: true });
+  };
   onPhase("running");
   updateStatus();
   schedule();
   return {
+    stop,
     retry() {
       if (signal.aborted) return;
       if (workerStartFailed) { worker = undefined; workerStartFailed = false; }

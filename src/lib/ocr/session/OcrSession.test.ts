@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  getOcrPages: vi.fn(async (_id: string) => new Map<number, unknown[]>()),
+  getOcrPages: vi.fn(async (_id: string, _languages: string[]) => new Map<number, unknown[]>()),
   saveOcrPage: vi.fn(async (_id: string, _page: number, _items: unknown[]) => {}),
   createWorker: vi.fn(),
 }));
-vi.mock("../storage/ocrStore", () => ({ getOcrPages: mocks.getOcrPages, saveOcrPage: mocks.saveOcrPage }));
+vi.mock("../storage/ocrStore", () => ({ getOcrPages: mocks.getOcrPages, saveOcrPage: mocks.saveOcrPage, ocrLanguageKey: (languages: string[]) => [...new Set(languages)].join("+") || "eng" }));
 vi.mock("../../../pdf", () => ({
   pdfjs: { OPS: { save: 10, restore: 11, transform: 12, paintImageXObject: 85, paintInlineImageXObject: 86, paintImageMaskXObject: 83 } },
 }));
@@ -106,7 +106,7 @@ describe("the page text override", () => {
     session.pages.set(1, [{ str: "recognized" }]);
     const chunks = await readAll((await pdf.getPage(1)).streamTextContent());
     expect(chunks.map((c) => c.items.map((i) => i.str))).toEqual([["text"], ["recognized"]]);
-    expect(chunks[1].lang).toBe("en");
+    expect(chunks[1].lang).toBeNull();
   });
 
   it("serves a page with no text of its own from the recognized words alone", async () => {
@@ -143,7 +143,7 @@ describe("restore", () => {
     mocks.getOcrPages.mockResolvedValue(new Map([[1, [{ str: "a" }]], [3, []]]));
     const session = new OcrSession(makePdf([makePage(), makePage(), makePage()]), "doc-key");
     await session.restore();
-    expect(mocks.getOcrPages).toHaveBeenCalledWith("doc-key");
+    expect(mocks.getOcrPages).toHaveBeenCalledWith("doc-key", ["eng"]);
     expect([...session.pages.keys()]).toEqual([1]);
     expect(session.version).toBe(1);
   });
@@ -222,5 +222,56 @@ describe("recording the reader OCR result", () => {
     session.record(1, [{ str: "late" }]);
     expect(session.pages.size).toBe(0);
     expect(mocks.saveOcrPage).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("changing recognition languages", () => {
+  it("clears the old text immediately, restores only the selected language, and notifies readers", async () => {
+    const session = new OcrSession(makePdf([makePage()]), "key");
+    session.record(1, [{ str: "English" }]);
+    const listener = vi.fn();
+    session.onPage(listener);
+    mocks.getOcrPages.mockResolvedValue(new Map([[1, [{ str: "Deutsch" }]]]));
+    const changing = session.setLanguages(["deu"]);
+    expect(session.pages.size).toBe(0);
+    expect(listener).toHaveBeenCalledWith(1);
+    await changing;
+    expect(mocks.getOcrPages).toHaveBeenLastCalledWith("key", ["deu"]);
+    expect(session.pages.get(1)).toEqual([{ str: "Deutsch" }]);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let an older restore overwrite a newer language selection", async () => {
+    const session = new OcrSession(makePdf([makePage()]), "key");
+    let finish!: (pages: Map<number, unknown[]>) => void;
+    mocks.getOcrPages.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const old = session.setLanguages(["deu"]);
+    mocks.getOcrPages.mockResolvedValueOnce(new Map([[1, [{ str: "Spanish" }]]]));
+    await session.setLanguages(["spa"]);
+    finish(new Map([[1, [{ str: "German" }]]]));
+    await old;
+    expect(session.pages.get(1)).toEqual([{ str: "Spanish" }]);
+  });
+
+  it("does not restore into a closed session", async () => {
+    const session = new OcrSession(makePdf([makePage()]), "key");
+    let finish!: (pages: Map<number, unknown[]>) => void;
+    mocks.getOcrPages.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const restoring = session.setLanguages(["deu"]);
+    session.destroy();
+    finish(new Map([[1, [{ str: "late" }]]]));
+    await restoring;
+    expect(session.pages.size).toBe(0);
+  });
+
+  it("keeps embedded PDF text and does not read storage for private documents", async () => {
+    const session = new OcrSession(makePdf([makePage()], savedCopyInfo("1")), null);
+    await session.restore();
+    session.pages.set(2, [{ str: "old" }]);
+    await session.setLanguages(["deu"]);
+    expect(session.pages.size).toBe(0);
+    expect([...session.embedded]).toEqual([1]);
+    expect(mocks.getOcrPages).not.toHaveBeenCalled();
   });
 });

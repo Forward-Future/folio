@@ -1,7 +1,7 @@
 {
   "name": "folio-pdf-reader",
   "private": true,
-  "version": "1.15.2",
+  "version": "1.16.1",
   "type": "module",
   "scripts": {
     "assets": "node scripts/copy-pdfjs-assets.mjs && node scripts/copy-ocr-assets.mjs",
@@ -17,6 +17,7 @@
     "dist:linux": "npm run build && electron-builder --linux --publish never",
     "smoke": "node scripts/smoke-test.mjs && node scripts/test-print.mjs && node scripts/smoke-print.mjs && node scripts/smoke-print-resolution.mjs",
     "test": "vitest run",
+    "test:reader-security": "node scripts/test-reader-security.mjs && node scripts/test-url-client-certificates.mjs",
     "test:chat-math": "node scripts/test-chat-math.mjs",
     "test:thumbnails": "node scripts/test-thumbnails.mjs"
   },
@@ -27,7 +28,9 @@
   },
   "devDependencies": {
     "@embedpdf/pdfium": "2.15.1",
+    "@tesseract.js-data/deu": "^1.0.0",
     "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/spa": "^1.0.0",
     "@types/emscripten": "^1.41.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -36,10 +39,11 @@
     "electron-builder": "^26.18.0",
     "fake-indexeddb": "^6.2.7",
     "jsdom": "^29.1.1",
+    "idb-keyval": "^6.3.0",
     "katex": "^0.19.1",
     "mdast-util-from-markdown": "^2.1.0",
     "pdf-lib": "1.17.1",
-    "pdfjs-dist": "^6.4.299",
+    "pdfjs-dist": "^6.5.438",
     "playwright-core": "^1.64.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

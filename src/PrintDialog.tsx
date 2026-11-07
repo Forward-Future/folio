@@ -168,7 +168,7 @@ export function PrintDialog({ pdf, currentPage, name, onPrint, onClose }: {
         <button key={tab} role="tab" id={`print-tab-${tab}`} aria-controls="print-panel" aria-selected={advanced === (tab === "Advanced")}
           tabIndex={advanced === (tab === "Advanced") ? 0 : -1} disabled={busy} onClick={() => setAdvanced(tab === "Advanced")}
           onKeyDown={event => {
-            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+            if (event.altKey || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
             const next = event.key === "Home" ? false : event.key === "End" ? true : !advanced;
             setAdvanced(next); root.current?.querySelector<HTMLElement>(`#print-tab-${next ? "Advanced" : "Basic"}`)?.focus();

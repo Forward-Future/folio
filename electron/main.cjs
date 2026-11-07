@@ -18,6 +18,11 @@ const { MAX_DOCUMENT_BYTES, checkDiskPath, readRegular } = require("./document-f
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 // Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
 const TEST_HIDDEN = !app.isPackaged && process.env.FOLIO_TEST_HIDDEN === "1";
+// macOS gives every ordinary app a Dock icon, whatever its windows do. An accessory app has none and can't come
+// forward by itself. The test scripts start a copy of Electron that is one from its first moment
+// (scripts/electron-path.mjs); this covers a hidden launch of the ordinary Electron, set right away because the Dock
+// starts making room for the icon as soon as the app starts.
+if (TEST_HIDDEN && process.platform === "darwin") app.setActivationPolicy("accessory");
 
 const DIST = path.join(__dirname, "..", "dist");
 // Development only (e.g. http://localhost:5173); ignored by installed builds.
@@ -297,9 +302,12 @@ function createWindow() {
   });
 
   win.once("ready-to-show", () => {
-    // A never-shown window doesn't paint, so tests couldn't screenshot it. Show it off-screen instead,
-    // without taking focus or adding a taskbar button.
     if (TEST_HIDDEN) {
+      // macOS moves a window back onto the screen as it is shown, wherever it was put. A window that is never
+      // shown still paints there (Electron starts it in Chromium's headless mode), so tests can leave it unshown.
+      if (IS_MAC) return;
+      // Elsewhere a never-shown window doesn't paint, so tests couldn't screenshot it. Show it off-screen instead,
+      // without taking focus or adding a taskbar button.
       win.setSkipTaskbar(true);
       win.setPosition(-32000, -32000);
       win.showInactive();
@@ -402,8 +410,9 @@ async function openLink(rawUrl) {
 
 // Asked before Folio opens an address on this computer or the local network, here rather than in the page: a document
 // that managed to run code in the page could otherwise use Folio to reach them.
-async function confirmLocalAddress(url, addresses) {
+async function confirmLocalAddress(url, addresses, signal) {
   const { response } = await dialog.showMessageBox(win, {
+    signal, // closing the tab that asked dismisses the question, as if Cancel was chosen
     type: "warning",
     title: "Open a local address?",
     message: `Open ${url.host}?`,
@@ -424,10 +433,15 @@ function pdfNameFromResponse(url, disposition) {
 }
 
 // Desktop PDF downloads use the same pinned network policy as webpage capture.
-// Resolves to { name, data } or { error } (error text is shown to the user as-is).
-async function downloadPdf(url, approvedLocal) {
+// Resolves to { name, data } or { error } (error text is shown to the user as-is), or to { cancelled: true }
+// once `signal` aborts.
+async function downloadPdf(url, approvedLocal, signal) {
   const ses = session.fromPartition(`folio-download-${crypto.randomUUID()}`); // in-memory only
-  const guard = await guardSession(ses, session.defaultSession, approvedLocal);
+  const guard = await guardSession(ses, session.defaultSession, approvedLocal, app);
+  if (signal.aborted) {
+    guard.close();
+    return { cancelled: true };
+  }
   return new Promise((resolve) => {
     let done = false;
     const request = net.request({ url: url.toString(), redirect: "manual", session: ses, cache: "no-store" });
@@ -435,10 +449,20 @@ async function downloadPdf(url, approvedLocal) {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      if (result.error) request.abort();
+      if (result.error || result.webpage) request.abort();
       resolve(result);
     };
-    const timer = setTimeout(() => finish({ error: "The download timed out." }), 60_000);
+    // The minute is for a silent connection, not for the whole file: a large PDF on a slow connection keeps
+    // going for as long as data arrives.
+    let timer;
+    const alive = () => {
+      clearTimeout(timer);
+      if (!done) timer = setTimeout(() => finish({ error: "The download timed out." }), 60_000);
+    };
+    alive();
+    request.on("redirect", alive);
+    request.on("response", (response) => { alive(); response.on("data", alive); });
+    signal.addEventListener("abort", () => { finish({ cancelled: true }); request.abort(); }, { once: true });
     let hops = 0;
     request.setHeader("Accept", "application/pdf,*/*;q=0.8");
     // Track redirects ourselves: the final address usually carries the real file name.
@@ -458,26 +482,38 @@ async function downloadPdf(url, approvedLocal) {
       const header = (key) => [].concat(response.headers[key] ?? [])[0];
       // A webpage: stop downloading and let the caller render it to PDF instead.
       if (/\b(text\/html|application\/xhtml\+xml)\b/i.test(header("content-type") ?? "")) {
-        request.abort();
         return finish({ webpage: url.toString() });
       }
       const tooBig = { error: "That PDF is larger than 300 MB." };
       if (Number(header("content-length")) > MAX_URL_PDF_BYTES) return finish(tooBig);
       const chunks = [];
       let size = 0;
+      let verifiedHeader = false;
+      const checkHeader = (head) => {
+        if (head.subarray(0, 1024).indexOf("%PDF-") >= 0) return true;
+        // Some servers don't label HTML; recognize it by its start.
+        if (/^\s*(<!doctype html|<html|<head|<body)/i.test(head.subarray(0, 512).toString("latin1"))) {
+          finish({ webpage: url.toString() });
+        } else {
+          finish({ error: "That link isn't a PDF or a webpage." });
+        }
+        return false;
+      };
       response.on("data", (chunk) => {
+        if (done) return;
         size += chunk.byteLength;
-        if (size > MAX_URL_PDF_BYTES) finish(tooBig);
-        else chunks.push(chunk);
+        if (size > MAX_URL_PDF_BYTES) return finish(tooBig);
+        chunks.push(chunk);
+        if (!verifiedHeader && size >= 1024) {
+          verifiedHeader = true;
+          checkHeader(Buffer.concat(chunks, 1024));
+        }
       });
       response.on("error", () => finish({ error: "The download was interrupted." }));
       response.on("end", () => {
+        if (done) return;
         const data = Buffer.concat(chunks);
-        if (data.subarray(0, 1024).indexOf("%PDF-") < 0) {
-          // Some servers don't label HTML; recognize it by its start.
-          if (/^\s*(<!doctype html|<html|<head|<body)/i.test(data.subarray(0, 512).toString("latin1"))) return finish({ webpage: url.toString() });
-          return finish({ error: "That link isn't a PDF or a webpage." });
-        }
+        if (!verifiedHeader && !checkHeader(data)) return;
         finish({ name: pdfNameFromResponse(url, header("content-disposition")), data });
       });
     });
@@ -505,7 +541,8 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     protocol.handle("app", async (req) => {
-      const { pathname } = new URL(req.url);
+      const { host, pathname } = new URL(req.url);
+      if (host !== "folio") return new Response("Not found", { status: 404 });
       let file;
       try { file = path.normalize(path.join(DIST, decodeURIComponent(pathname))); } catch { return new Response("Bad request", { status: 400 }); }
       if (!file.startsWith(DIST + path.sep)) return new Response("Forbidden", { status: 403 });
@@ -540,29 +577,42 @@ if (!app.requestSingleInstanceLock()) {
     });
     // PDF links open directly; webpages are converted to a PDF first. An address on this computer or the local
     // network opens only once the user agrees (cancelling resolves to { cancelled: true }).
-    let importing = false;
-    handle("folio:fetch-pdf", async (_event, rawUrl) => {
+    // One link opens at a time. The page names its request so it can stop it (a closed tab, another document
+    // opened instead): an abandoned link would otherwise keep every other one waiting until it timed out.
+    let importing = null;
+    handle("folio:fetch-pdf", async (_event, rawUrl, id) => {
       let url;
       try { url = new URL(typeof rawUrl === "string" && rawUrl.length <= 8192 ? rawUrl.trim() : ""); }
       catch { return { error: "That isn't a valid web address." }; }
       if (url.protocol !== "http:" && url.protocol !== "https:") return { error: "Only http:// and https:// links can be opened." };
       if (importing) return { error: "Another link is still opening." };
-      importing = true;
+      const controller = new AbortController();
+      const { signal } = controller;
+      importing = { id: typeof id === "string" ? id : "", controller };
       try {
         const destination = await resolveDestination(url, session.defaultSession);
-        if (destination.local && !(await confirmLocalAddress(url, destination.addresses))) return { cancelled: true };
+        if (signal.aborted) return { cancelled: true };
+        if (destination.local && !(await confirmLocalAddress(url, destination.addresses, signal))) return { cancelled: true };
         const approved = destination.local ? destination : null;
-        const result = await downloadPdf(url, approved);
+        const result = await downloadPdf(url, approved, signal);
         if (!result.webpage) return result;
-        return await captureWebpage(result.webpage, approved?.origin === new URL(result.webpage).origin ? approved : null);
+        return await captureWebpage(result.webpage, approved?.origin === new URL(result.webpage).origin ? approved : null, signal);
       } catch {
-        return { error: `Couldn't open a verified connection to ${url.hostname}.` };
-      } finally { importing = false; }
+        return signal.aborted ? { cancelled: true } : { error: `Couldn't open a verified connection to ${url.hostname}.` };
+      } finally { importing = null; }
+    });
+    handle("folio:cancel-fetch-pdf", (_event, id) => {
+      if (importing?.id && importing.id === id) importing.controller.abort();
+      return true;
     });
     handle("folio:app-info", () => ({ version: app.getVersion(), mode: installKind(), location: installLocation(), platform: process.platform,
       notifyOnly: NOTIFY_ONLY }));
     handle("folio:open-installation", () => shell.openPath(installLocation()));
     handle("folio:open-download", () => shell.openExternal(RELEASES_PAGE));
+    handle("folio:download-ocr-model", async (_event, code) => {
+      const { downloadOcrModel } = await import("./ocr-download.mjs");
+      return downloadOcrModel(code, (url, options) => net.fetch(url, options));
+    });
     handle("folio:update-state", () => updateStatus);
     handle("folio:auto-update-setting", () => automaticUpdates);
     handle("folio:set-auto-update-setting", (_event, enabled) => saveUpdatePreference(enabled));

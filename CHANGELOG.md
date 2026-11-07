@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.16.1
+
+- In **Pages**, Ctrl-click thumbnails (⌘-click on macOS) to select pages, or Shift-click for a range. Right-click a selected thumbnail to save those pages as a new PDF.
+- In Ask AI, **New conversation** asks before it deletes the current conversation.
+- Pen strokes stay under the pointer when the page refits while you draw.
+- If you close the ChatGPT sign-in tab by mistake, choose **Open the sign-in page again** to carry on.
+- Closing a tab while its link is still opening stops it, so the next link opens right away. Large PDFs from a link now finish downloading on slower connections.
+- Keyboard shortcuts no longer act on the document behind an open dialog.
+- The list of matching pages in search marks the right words in documents that use ligatures such as “ﬁ”.
+- Accented letters, Chinese, Japanese and Korean text, and emoji stay intact in Claude's answers.
+- Opening a link never shares a client certificate from your computer with the site. On Linux without a keyring, your ChatGPT sign-in lasts until you close Folio instead of being saved unprotected.
+
+## 1.16.0
+
+- In **Draw → Pen**, choose **Thin**, **Medium**, or **Thick**. Quick freehand strokes follow the pointer more smoothly through the end of the stroke.
+- In **Settings → Ask AI**, connect your OpenRouter key and choose a model to ask about a PDF or a selected passage. Usage is billed to your OpenRouter account.
+- Settings now groups **General**, **Ask AI**, and **Storage** separately. In Storage, you can clear saved annotations and saved conversations independently.
+- In **Settings → General → Scan languages**, choose from 123 language and script options. Download the ones you need once and use them offline.
+- After following a link inside a PDF, use **More → Back** to return to the spot you were reading. **Forward** takes you to the link destination again.
+- **Print** previews each page at its own proportions. **Advanced** adds poster tiling, booklet printing, and multiple pages per sheet.
+- On macOS, Folio can find Claude Code installed in standard Homebrew or npm locations when you open Folio from the Dock.
+
 ## 1.15.2
 
 - The Pages sidebar shows each page’s shape and relative size, including when you filter to bookmarks or reorder pages.

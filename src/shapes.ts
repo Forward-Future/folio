@@ -20,8 +20,7 @@ function strokes(shape: Shape, start: Point, end: Point, scale: number): Point[]
     const angle = i * Math.PI / 32;
     return [(a + x + (a - x) * Math.cos(angle)) / 2, (b + y + (b - y) * Math.sin(angle)) / 2];
   });
-  // The ink fitter ends midway between its final two samples.
-  return [[...oval, oval[0], oval[0]]];
+  return [[...oval, oval[0]]];
 }
 
 export function drawShapes(container: HTMLElement, viewer: PDFViewer, shape: Shape, color: string,

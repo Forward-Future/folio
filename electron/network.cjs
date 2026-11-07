@@ -107,7 +107,7 @@ async function connectPinned({ addresses, route, port }, signal) {
   });
 }
 
-async function guardSession(ses, system, approvedLocal) {
+async function guardSession(ses, system, approvedLocal, app) {
   const grants = new Map();
   const sockets = new Set();
   let denied = false;
@@ -132,14 +132,28 @@ async function guardSession(ses, system, approvedLocal) {
       client.pipe(upstream).pipe(client);
     } catch { client.destroy(); }
   });
+  const declineCertificate = (event, contents, authority, _certificates, choose) => {
+    if (contents) {
+      if (contents.session !== ses) return;
+    } else {
+      // Electron supplies no Session for net.request or worker challenges. Only destinations
+      // granted by this guard can reach TLS through its SOCKS proxy.
+      const peer = new URL("https://" + authority);
+      if (!grants.has(bare(peer.hostname) + ":" + (peer.port || 443))) return;
+    }
+    event.preventDefault();
+    choose();
+  };
   const close = () => {
     closed = true;
     ses.webRequest.onBeforeRequest((_request, callback) => callback({ cancel: true }));
     server.close();
     for (const socket of sockets) socket.destroy();
     grants.clear();
+    app.removeListener("select-client-certificate", declineCertificate);
   };
   try {
+    app.on("select-client-certificate", declineCertificate);
     server.maxConnections = 128;
     server.listen(0, "127.0.0.1");
     await once(server, "listening");

@@ -2,7 +2,8 @@
 import type { PDFDocumentProxy } from "../../../pdf";
 import { PAGES_KEY, parsePages } from "../export/pageList";
 import { ocrEpoch } from "../../../recent";
-import { getOcrPages, saveOcrPage } from "../storage/ocrStore";
+import type { ScanLanguage } from "../../../scanLanguage";
+import { getOcrPages, saveOcrPage, ocrLanguageKey } from "../storage/ocrStore";
 import { withRecognized } from "../text/pages";
 import { STYLES } from "../text/words";
 
@@ -21,9 +22,12 @@ export class OcrSession {
   #epoch: string | null;
   #pageListeners = new Set<(page: number) => void>();
   #destroyed = false;
+  #languages: ScanLanguage[];
+  #generation = 0;
   /** `key` is the document's content id; without one (password-protected files) results stay in memory only. */
-  constructor(pdf: PDFDocumentProxy, key: string | null) {
+  constructor(pdf: PDFDocumentProxy, key: string | null, languages: ScanLanguage[] = ["eng"]) {
     this.pdf = pdf;
+    this.#languages = [...languages];
     this.#key = key;
     this.#epoch = key ? ocrEpoch(key) : "";
     sessions.set(pdf, this);
@@ -55,17 +59,46 @@ export class OcrSession {
   record(page: number, items: unknown[]) {
     if (this.#destroyed || !items.length || this.pages.has(page) || this.embedded.has(page)) return;
     this.pages.set(page, items);
-    if (this.#key) void saveOcrPage(this.#key, page, items, this.#epoch);
+    if (this.#key) void saveOcrPage(this.#key, page, items, this.#epoch, this.#languages);
     this.version++;
     for (const listener of this.#pageListeners) listener(page);
   }
 
   /** Brings back pages recognized in an earlier session. Call before the document is shown. */
   async restore() {
+    const generation = this.#generation;
     await this.#readEmbedded();
+    if (this.#destroyed || generation !== this.#generation) return;
+    await this.#restorePages(generation);
+  }
+
+  /** Stop the old recognizer before changing languages; it must not record into the new selection. */
+  async setLanguages(languages: ScanLanguage[]) {
+    if (this.#destroyed || ocrLanguageKey(languages) === ocrLanguageKey(this.#languages)) return;
+    this.#languages = [...languages];
+    const generation = ++this.#generation;
+    const removed = [...this.pages.keys()];
+    this.pages.clear();
+    this.version++;
+    for (const page of removed) for (const listener of this.#pageListeners) listener(page);
+    await this.#restorePages(generation);
+  }
+
+  async #restorePages(generation: number) {
     if (!this.#key) return;
-    for (const [page, items] of await getOcrPages(this.#key)) if (items.length) this.pages.set(page, items);
-    if (this.pages.size) this.version++;
+    const pages = await getOcrPages(this.#key, this.#languages);
+    if (this.#destroyed || generation !== this.#generation || this.#epoch !== ocrEpoch(this.#key)) return;
+    const restored: number[] = [];
+    for (const [page, items] of pages) {
+      if (items.length && page >= 1 && page <= this.pdf.numPages && !this.embedded.has(page) && !this.pages.has(page)) {
+        this.pages.set(page, items);
+        restored.push(page);
+      }
+    }
+    if (restored.length) {
+      this.version++;
+      for (const page of restored) for (const listener of this.#pageListeners) listener(page);
+    }
   }
 
   /** A copy saved by Folio lists, in its document info, the pages it carries recognized text for. */

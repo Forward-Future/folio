@@ -7,7 +7,7 @@ export function withRecognized(source: ReadableStream, items: unknown[], styles:
     async pull(controller) {
       const { value, done } = await reader.read();
       if (!done) return controller.enqueue(value);
-      controller.enqueue({ items, styles, lang: "en" });
+      controller.enqueue({ items, styles, lang: null });
       controller.close();
     },
     cancel: (reason) => reader.cancel(reason),

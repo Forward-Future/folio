@@ -1,7 +1,7 @@
 // Turns a webpage into a PDF: load it in a hidden, locked-down window, then print it with Chromium.
 // The page runs in its own throwaway session (no cookies or storage shared with Folio or other
 // captures), sandboxed, with no Node.js, no permissions, no pop-ups, and no downloads.
-const { BrowserWindow, session } = require("electron");
+const { app, BrowserWindow, session } = require("electron");
 const crypto = require("node:crypto");
 const { safePdfName } = require("./filenames.cjs");
 const { guardSession } = require("./network.cjs");
@@ -74,18 +74,23 @@ const PREPARE_PAGE = `(async () => {
 
 /**
  * Loads `rawUrl` and prints it to PDF. Local access is limited to the origin and addresses the user approved.
- * Resolves to { name, data } or { error }.
+ * Resolves to { name, data } or { error }, or to { cancelled: true } once `signal` (optional) aborts.
  */
-async function captureWebpage(rawUrl, approvedLocal) {
+async function captureWebpage(rawUrl, approvedLocal, signal) {
+  if (signal?.aborted) return { cancelled: true };
   const url = new URL(rawUrl);
   const ses = session.fromPartition(`folio-webpage-${crypto.randomUUID()}`); // in-memory only
   ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   ses.setPermissionCheckHandler(() => false);
   ses.on("will-download", (event) => event.preventDefault());
-  const guard = await guardSession(ses, session.defaultSession, approvedLocal);
+  const guard = await guardSession(ses, session.defaultSession, approvedLocal, app);
 
   let win;
+  // Rejects when the capture is called off; the window is closed below, whatever it was in the middle of.
+  const cancelled = new Promise((_, reject) => signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+  cancelled.catch(() => {}); // only matters while it is being raced
   try {
+    if (signal?.aborted) return { cancelled: true };
     win = new BrowserWindow({
       show: false,
       width: PAGE_WIDTH_PX,
@@ -97,6 +102,7 @@ async function captureWebpage(rawUrl, approvedLocal) {
         contextIsolation: true,
         nodeIntegration: false,
         webSecurity: true,
+        disableDialogs: true,
         spellcheck: false,
         backgroundThrottling: false,
       },
@@ -116,7 +122,8 @@ async function captureWebpage(rawUrl, approvedLocal) {
     } catch {
       /* falls back to print styles */
     }
-    return await withTimeout((async () => {
+    if (signal?.aborted) return { cancelled: true };
+    return await Promise.race([cancelled, withTimeout((async () => {
       try {
         await contents.loadURL(url.toString());
       } catch (error) {
@@ -125,7 +132,7 @@ async function captureWebpage(rawUrl, approvedLocal) {
       }
       await contents.insertCSS(FIDELITY_CSS, { cssOrigin: "user" }).catch(() => {});
       await delay(800);
-      await withTimeout(contents.executeJavaScript(PREPARE_PAGE, true), SCROLL_TIMEOUT_MS, "scroll").catch(() => {});
+      await withTimeout(contents.executeJavaScript(PREPARE_PAGE, false), SCROLL_TIMEOUT_MS, "scroll").catch(() => {});
       await delay(600);
       const data = await contents.printToPDF({
         printBackground: true,
@@ -137,8 +144,9 @@ async function captureWebpage(rawUrl, approvedLocal) {
       });
       if (data.length > MAX_DOCUMENT_BYTES) return { error: "The converted webpage is larger than 300 MB." };
       return { name: safePdfName(contents.getTitle(), new URL(contents.getURL() || url.toString()).hostname), data };
-    })(), TOTAL_TIMEOUT_MS, "timeout");
+    })(), TOTAL_TIMEOUT_MS, "timeout")]);
   } catch (error) {
+    if (signal?.aborted) return { cancelled: true };
     if (error?.message === "timeout") return { error: "The webpage took too long to load." };
     return { error: `Couldn't load that webpage${error?.code ? ` (${error.code})` : ""}.` };
   } finally {
