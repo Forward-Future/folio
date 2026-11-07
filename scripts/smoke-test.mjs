@@ -88,6 +88,16 @@ try {
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
   assert.match(await page.locator(".textLayer").first().innerText(), /A short tour of Folio/);
   console.log("ok  sample rendered with a text layer");
+
+  // The list of matching pages quotes each page's first match. The words it marks are the ones searched for,
+  // also when the match sits many lines down the page. (Text with ligatures is checked at the end.)
+  await page.getByRole("button", { name: /^Search/ }).click();
+  await page.getByLabel("Find in document").fill("highlight");
+  const quoted = page.locator(".search-result-list mark");
+  await quoted.nth(2).waitFor();
+  assert.deepEqual((await quoted.allTextContents()).map((text) => text.toLowerCase()), ["highlight", "highlight", "highlight"]);
+  await page.getByLabel("Find in document").press("Escape");
+  console.log("ok  search results mark the words that were searched for");
   await checkOpenRouter(app, page);
 
   const toolbar = page.getByRole("toolbar", { name: "Tools" });
@@ -876,6 +886,18 @@ try {
   await page.evaluate(() => window.restorePrintFrame());
   console.log("ok  ordinary PDF printing remains available beyond the advanced sheet limit");
 
+  // Find positions count a ligature ("ﬁ") as the one character it is in the PDF. The quoted text has to count
+  // the same way, or the words it marks drift to the left of the match.
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Ligatures.pdf", data: Buffer.from(data) }), [...pdfWithLigatures()]);
+  await page.window.waitForFunction(() => document.title.startsWith("Ligatures.pdf"));
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
+  await page.getByRole("button", { name: /^Search/ }).click();
+  await page.getByLabel("Find in document").fill("zebra");
+  await quoted.first().waitFor();
+  assert.deepEqual(await quoted.allTextContents(), ["zebra"]);
+  console.log("ok  search results mark the right words in text with ligatures");
+
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {
@@ -916,6 +938,23 @@ function pdfWithPageSizes(sizes) {
       return `<< /Length ${lines.length} >>\nstream\n${lines}\nendstream`;
     }),
   ];
+  return pdfFromObjects(objects);
+}
+
+// One page whose first line is written with the "fi" ligature glyph, so its text holds the single character "ﬁ"
+// eight times before the words on the second line.
+function pdfWithLigatures() {
+  const text = "BT /F1 14 Tf 72 720 Td (\\001rst \\001ne \\001ve \\001x \\001sh \\001g \\001t \\001ll) Tj 0 -24 Td (target word zebra here) Tj ET";
+  return pdfFromObjects([
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [1 /fi] >> >>",
+    `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
+  ]);
+}
+
+function pdfFromObjects(objects) {
   let body = "%PDF-1.4\n";
   const offsets = objects.map((object, i) => {
     const offset = body.length;

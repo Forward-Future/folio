@@ -34,7 +34,9 @@ export function SearchResults({ pdf, controller, bus, onSelect }: {
         if (request !== generation) return;
         let text = textCache.current.get(entry.page);
         if (!text) {
-          text = pdf.getPage(entry.page).then(page => page.getTextContent()).then(content =>
+          // Match offsets count characters in the text as pdf.js's find controller reads it: not normalized.
+          // Normalized text can be longer (a ligature becomes two letters), which moves the marked words.
+          text = pdf.getPage(entry.page).then(page => page.getTextContent({ disableNormalization: true })).then(content =>
             content.items.map(item => "str" in item ? item.str : "").join(""));
           textCache.current.set(entry.page, text);
         }
