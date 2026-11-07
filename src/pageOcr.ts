@@ -1,5 +1,7 @@
 import { AnnotationMode, OPS, type PDFPageProxy } from "pdfjs-dist";
 import type { Worker as OcrWorker } from "tesseract.js";
+import { SCAN_LANGUAGES, type ScanLanguage } from "./scanLanguage";
+import { installedScanLanguages, OCR_CACHE_PATH } from "./scanLanguagePacks";
 import type { EventBus, PDFPageView, PDFViewer } from "./viewer";
 
 interface Word {
@@ -23,19 +25,26 @@ async function hasPageImage(page: PDFPageProxy) {
   return fnArray.some(op => IMAGE_OPS.has(op));
 }
 
-async function startWorker() {
+async function startWorker(languages: ScanLanguage[]) {
+  if (languages.some(code => code !== "eng")) {
+    const installed = await installedScanLanguages();
+    const missing = SCAN_LANGUAGES.find(({ id }) => languages.includes(id) && !installed.has(id));
+    if (missing) throw new MissingScanPack(`Download the ${missing.name} pack in Settings to read this scan.`);
+  }
   const { createWorker, OEM, PSM } = await import("tesseract.js");
   const base = `${import.meta.env.BASE_URL}ocr`;
   // Language initialization errors in Tesseract are delivered to errorHandler.
   const worker = await new Promise<OcrWorker>((resolve, reject) => {
-    createWorker("eng", OEM.LSTM_ONLY, {
+    createWorker(languages, OEM.LSTM_ONLY, {
       workerPath: `${base}/worker.min.js`, workerBlobURL: false, corePath: base, langPath: base,
-      cacheMethod: "none", errorHandler: reject,
+      cachePath: OCR_CACHE_PATH, cacheMethod: "readOnly", errorHandler: reject,
     }).then(resolve, reject);
   });
   await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
   return worker;
 }
+
+class MissingScanPack extends Error {}
 
 async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSignal): Promise<Word[]> {
   signal.throwIfAborted();
@@ -52,7 +61,16 @@ async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSig
   try {
     await render.promise;
     signal.throwIfAborted();
-    const { data } = await worker.recognize(canvas, {}, { blocks: true, text: false });
+    // A language switch or document close can terminate the worker during image encoding.
+    // Encode here so we can check ownership before Tesseract posts its recognition job.
+    const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => {
+      if (blob) resolve(blob);
+      else reject(new Error("Couldn't prepare the scan image."));
+    }));
+    signal.throwIfAborted();
+    const bytes = new Uint8Array(await png.arrayBuffer());
+    signal.throwIfAborted();
+    const { data } = await worker.recognize(bytes, {}, { blocks: true, text: false });
     signal.throwIfAborted();
     const ctx = canvas.getContext("2d")!;
     ctx.font = "100px sans-serif";
@@ -97,7 +115,11 @@ function addWords(view: PDFPageView, words: Word[]) {
     span.style.setProperty("--scale-x", String(word.scaleX));
     span.style.setProperty("--rotate", `${-view.pdfPage.rotate}deg`);
     fragment.append(span);
-    if (word.endOfLine) fragment.append(document.createElement("br"));
+    if (word.endOfLine) {
+      const br = document.createElement("br");
+      br.className = "ocr-break";
+      fragment.append(br);
+    }
     lineStart = word.endOfLine;
   }
   end.before(fragment);
@@ -120,7 +142,7 @@ async function hasEmbeddedText(page: PDFPageProxy, signal: AbortSignal) {
 }
 
 /** Prepare the document sequentially, giving the reader's current page and its successor the next turns. */
-export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus: (text: string | null) => void) {
+export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, languages: ScanLanguage[], onStatus: (text: string | null) => void) {
   const pdf = viewer.pdfDocument!;
   const controller = new AbortController();
   const { signal } = controller;
@@ -136,6 +158,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
   let timer: number | undefined;
   let worker: Promise<OcrWorker> | undefined;
   let workerStartFailed = false;
+  let missingPackMessage: string | undefined;
 
   function updateStatus() {
     const n = viewer.currentPageNumber;
@@ -143,7 +166,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
     const layer = view.textLayer?.div;
     if (layer?.isConnected && !layer.hidden && layer.textContent.trim()) onStatus(null);
     else if (notices.get(n) === "noWords") onStatus(`No readable text found on page ${n}.`);
-    else if (notices.has(n)) onStatus(`Text unavailable on page ${n}.`);
+    else if (notices.has(n)) onStatus(missingPackMessage ?? `Text unavailable on page ${n}.`);
     else if (active === n && recognizing) onStatus(`Recognizing text on page ${n}…`);
     else if (pending.has(n) || active === n || !layer?.isConnected || layer.hidden || !layer.querySelector(".endOfContent")) {
       onStatus(`Preparing text on page ${n}…`);
@@ -192,7 +215,11 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
       }
       recognizing = true;
       if (n === viewer.currentPageNumber) updateStatus();
-      worker ??= startWorker().catch(error => { workerStartFailed = true; throw error; });
+      worker ??= startWorker(languages).catch(error => {
+        workerStartFailed = true;
+        missingPackMessage = error instanceof MissingScanPack ? error.message : undefined;
+        throw error;
+      });
       const words = await readWords(page, await worker, signal);
       signal.throwIfAborted();
       if (words.length) {
@@ -245,14 +272,19 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, onStatus
     schedule();
   }, { signal });
   window.addEventListener("folio:tab-visibility", schedule, { signal });
-  bus.on("pagesdestroy", () => {
+  updateStatus();
+  schedule();
+  return () => {
     controller.abort();
     window.clearTimeout(timer);
     cache.clear();
     pending.clear();
+    // A language change replaces only the text Folio added to the open document.
+    // In one-page scrolling mode some rendered layers are detached from the viewer.
+    for (const view of viewer.getCachedPageViews() as Set<PDFPageView>) {
+      view.textLayer?.div.querySelectorAll(".ocr-word, .ocr-break").forEach(node => node.remove());
+    }
     onStatus(null);
     void worker?.then(w => w.terminate()).catch(() => {});
-  }, { once: true });
-  updateStatus();
-  schedule();
+  };
 }

@@ -15,8 +15,8 @@ smaller one, or build the idea differently ourselves.
   scope, before you build them. Link that comment in your pull request. Unrequested features, rewrites, and unrelated
   cleanup are usually closed.
 
-Folio aims to stay simple, fast, and private: no telemetry, no accounts, and no network access beyond updates and
-links you open. Changes that work against that won't be merged.
+Folio aims to stay simple, fast, and private: no telemetry or Folio accounts. Network access is limited to updates,
+links you open, language packs you request, and AI providers you choose to connect or ask.
 
 ## Reporting bugs
 

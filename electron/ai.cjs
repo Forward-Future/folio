@@ -14,6 +14,8 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const { chatRequest, claudePrompt } = require("./ai-prompt.cjs");
+const { createOpenRouter } = require("./openrouter.cjs");
+const { claudeChildPath, findClaude: lookUpClaude } = require("./claude-path.cjs");
 
 const AUTH_ISSUER = "https://auth.openai.com";
 const AUTHORIZE_URL = "https://auth.openai.com/api/accounts/authorize";
@@ -26,10 +28,11 @@ const REFRESH_FAILURES = new Set(["invalid_grant", "invalid_refresh_token", "tok
 
 const dir = () => path.join(app.getPath("userData"), "ai");
 const file = (name) => path.join(dir(), name);
+const openRouter = createOpenRouter({ net, safeStorage, file, writeAtomic });
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
 function writeAtomic(name, contents) {
-  fs.mkdirSync(dir(), { recursive: true });
+  fs.mkdirSync(dir(), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file(name) + ".tmp", contents, { mode: 0o600 });
   fs.renameSync(file(name) + ".tmp", file(name));
 }
@@ -48,11 +51,21 @@ function saveHost(host) {
   writeAtomic("chatgpt-host.json", JSON.stringify(host));
 }
 
+// Linux without a keyring "encrypts" with a key that is the same on every computer. That protects nothing.
+// (The OpenRouter key is refused in that case too: see openrouter.cjs.)
+const hardcodedKey = () => process.platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text";
+const canProtectSession = async () => (await safeStorage.isAsyncEncryptionAvailable()) && !hardcodedKey();
+
 let session = null; // { accessToken, refreshToken, idToken, expiresAt, scopes, email, name }
 async function loadSession() {
   if (session) return session;
   try {
     if (!fs.existsSync(file("chatgpt-session.bin")) || !(await safeStorage.isAsyncEncryptionAvailable())) return null;
+    if (hardcodedKey()) {
+      // Saved under the shared key by an earlier version, or unreadable without the keyring: don't leave it on disk.
+      fs.rmSync(file("chatgpt-session.bin"), { force: true });
+      return null;
+    }
     const { result } = await safeStorage.decryptStringAsync(fs.readFileSync(file("chatgpt-session.bin")));
     session = JSON.parse(result);
   } catch { session = null; }
@@ -65,12 +78,13 @@ async function saveSession(next) {
     return;
   }
   // Without OS encryption, keep the session in memory only (sign in again next launch).
-  if (await safeStorage.isAsyncEncryptionAvailable()) writeAtomic("chatgpt-session.bin", await safeStorage.encryptStringAsync(JSON.stringify(next)));
+  if (await canProtectSession()) writeAtomic("chatgpt-session.bin", await safeStorage.encryptStringAsync(JSON.stringify(next)));
 }
 
 async function postForm(url, params) {
   const response = await net.fetch(url, {
     method: "POST",
+    redirect: "error",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
     body: new URLSearchParams(params).toString(),
   });
@@ -83,19 +97,30 @@ async function postForm(url, params) {
 let openIdConfig = null;
 async function getOpenIdConfig() {
   if (openIdConfig) return openIdConfig;
-  const response = await net.fetch(`${AUTH_ISSUER}/.well-known/openid-configuration`);
+  const response = await net.fetch(`${AUTH_ISSUER}/.well-known/openid-configuration`, { redirect: "error" });
   if (!response.ok) throw new Error("Couldn't reach OpenAI's sign-in service.");
-  openIdConfig = await response.json();
+  const config = await response.json();
+  const endpoints = [config.jwks_uri];
+  if (config.revocation_endpoint != null) endpoints.push(config.revocation_endpoint);
+  for (const value of endpoints) {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.origin !== AUTH_ISSUER || url.username || url.password) {
+      throw new Error("Unexpected sign-in configuration.");
+    }
+  }
+  openIdConfig = config;
   return openIdConfig;
 }
 
 /** Verifies the ID token's RS256 signature and claims; returns its payload. */
 async function verifyIdToken(idToken, clientId, nonce) {
-  const [h, p, sig] = String(idToken).split(".");
+  const parts = String(idToken).split(".");
+  if (parts.length !== 3) throw new Error("Unexpected sign-in token.");
+  const [h, p, sig] = parts;
   const header = JSON.parse(Buffer.from(h, "base64url").toString());
   const payload = JSON.parse(Buffer.from(p, "base64url").toString());
   const config = await getOpenIdConfig();
-  const jwks = await (await net.fetch(config.jwks_uri)).json();
+  const jwks = await (await net.fetch(config.jwks_uri, { redirect: "error" })).json();
   const jwk = jwks.keys?.find((k) => k.kid === header.kid);
   if (!jwk || header.alg !== "RS256") throw new Error("Unexpected sign-in token.");
   const valid = crypto.verify("RSA-SHA256", Buffer.from(`${h}.${p}`), crypto.createPublicKey({ key: jwk, format: "jwk" }), Buffer.from(sig, "base64url"));
@@ -113,9 +138,16 @@ const CALLBACK_PAGE = `<!doctype html><meta charset="utf-8"><title>Folio</title>
 <p>You can close this tab and return to Folio.</p></body>`;
 
 let signInInProgress = null;
+// The page of the sign-in that is waiting for the browser, kept so it can be opened again.
+let signInPage = null;
 
 async function signInChatGPT() {
-  if (signInInProgress) return signInInProgress;
+  if (signInInProgress) {
+    // Asked again while waiting: the browser tab was probably closed. Without this, nothing could reopen it
+    // until the wait timed out.
+    if (signInPage) void shell.openExternal(signInPage).catch(() => {});
+    return signInInProgress;
+  }
   signInInProgress = (async () => {
     const host = loadHost();
     const verifier = b64url(crypto.randomBytes(32));
@@ -174,13 +206,15 @@ async function signInChatGPT() {
         ext_agent_host_id: host.hostId,
       };
       if (!host.clientId) params.agent_name_hint = "Folio";
-      await shell.openExternal(`${AUTHORIZE_URL}?${new URLSearchParams(params)}`);
+      signInPage = `${AUTHORIZE_URL}?${new URLSearchParams(params)}`;
+      await shell.openExternal(signInPage);
 
       const query = await Promise.race([callback, timeout]);
-      const clientId = query.get("client_id") || host.clientId;
+      signInPage = null; // answered: the page has done its job
+      const clientId = host.clientId || query.get("client_id");
       if (!clientId) throw new Error("ChatGPT didn't finish registering Folio. Please try again.");
       // Keep the issued client ID for every later sign-in on this computer, even if the rest fails.
-      if (host.clientId !== clientId) saveHost({ ...host, clientId });
+      if (!host.clientId) saveHost({ ...host, clientId });
       const exchange = await postForm(TOKEN_URL, {
         grant_type: "authorization_code", client_id: clientId, code: query.get("code"), code_verifier: verifier, redirect_uri: redirectUri, resource: API,
       });
@@ -201,7 +235,7 @@ async function signInChatGPT() {
       server.close();
     }
   })();
-  try { return await signInInProgress; } finally { signInInProgress = null; }
+  try { return await signInInProgress; } finally { signInInProgress = null; signInPage = null; }
 }
 
 let refreshing = null;
@@ -254,7 +288,7 @@ async function chatgptStatus() {
   const current = await loadSession();
   const host = loadHost();
   return { connected: !!current, email: current?.email ?? "", name: current?.name ?? "", welcomeSeen: !!host.welcomeSeen,
-    encrypted: await safeStorage.isAsyncEncryptionAvailable() };
+    encrypted: await canProtectSession() };
 }
 
 async function chatgptModels() {
@@ -324,28 +358,33 @@ function usageError(code, status) {
 }
 
 // ── Claude Code ────────────────────────────────────────────────────────────────────────────
+function makeClaudeDir() {
+  fs.mkdirSync(dir(), { recursive: true, mode: 0o700 });
+  return fs.mkdtempSync(path.join(dir(), "claude-"));
+}
+
 function run(cmd, args, timeout = 10_000) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout, windowsHide: true, env: claudeEnv() }, (error, stdout) => resolve(error ? null : String(stdout)));
+    let cwd;
+    try { cwd = makeClaudeDir(); } catch { return resolve(null); }
+    execFile(cmd, args, { cwd, timeout, windowsHide: true, env: claudeEnv() }, (error, stdout) => {
+      try { fs.rmSync(cwd, { recursive: true, force: true }); } catch {}
+      resolve(error ? null : String(stdout));
+    });
   });
 }
 
 function claudeEnv() {
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
+  if (claudePath && process.platform !== "win32") env.PATH = claudeChildPath(env.PATH, claudePath);
   return env;
 }
 
 let claudePath;
 async function findClaude() {
   if (claudePath) return claudePath;
-  const name = process.platform === "win32" ? "claude.exe" : "claude";
-  // Search absolute PATH entries ourselves (never the current folder, which `where.exe` checks first),
-  // with Claude Code's default install location first. Only native executables: .cmd/.bat shims would need a shell.
-  const dirs = [path.join(os.homedir(), ".local", "bin"), ...String(process.env.PATH ?? "").split(path.delimiter)]
-    .map((d) => d.trim().replace(/^"|"$/g, ""))
-    .filter((d) => d && path.isAbsolute(d));
-  claudePath = dirs.map((d) => path.join(d, name)).find((c) => { try { return fs.statSync(c).isFile(); } catch { return false; } }) ?? null;
+  claudePath = lookUpClaude({ platform: process.platform, home: os.homedir(), envPath: process.env.PATH });
   return claudePath;
 }
 
@@ -371,8 +410,22 @@ const CLAUDE_TIMEOUT_MS = 5 * 60_000;
 /** Removes prompt folders left behind if Folio or Claude Code exited mid-answer. */
 function cleanStaleClaudeFolders() {
   try {
-    for (const entry of fs.readdirSync(os.tmpdir())) {
-      if (entry.startsWith("folio-claude-")) fs.rmSync(path.join(os.tmpdir(), entry), { recursive: true, force: true });
+    for (const entry of fs.readdirSync(dir(), { withFileTypes: true })) {
+      if (entry.isDirectory() && /^claude-[a-z0-9]{6}$/i.test(entry.name)) {
+        fs.rmSync(path.join(dir(), entry.name), { recursive: true, force: true });
+      }
+    }
+  } catch {}
+  // Older versions left only system.txt in a per-run folder in the system temp directory.
+  try {
+    for (const entry of fs.readdirSync(os.tmpdir(), { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^folio-claude-[a-z0-9]{6}$/i.test(entry.name)) continue;
+      const legacy = path.join(os.tmpdir(), entry.name);
+      try {
+        if (process.getuid && fs.lstatSync(legacy).uid !== process.getuid()) continue;
+        fs.rmSync(path.join(legacy, "system.txt"), { force: true });
+        fs.rmdirSync(legacy);
+      } catch {}
     }
   } catch {}
 }
@@ -382,8 +435,8 @@ async function askClaude({ model, document, messages }, emit, signal) {
   if (!exe) throw new Error("Claude Code isn't installed.");
   if (signal.aborted) return;
   const prompt = claudePrompt(document, messages);
-  // An empty working folder, no settings, MCP servers, slash commands, or tools: Claude only reads and answers.
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "folio-claude-"));
+  // Claude reads and answers from a private working folder with settings, MCP servers, slash commands and tools disabled.
+  const cwd = makeClaudeDir();
   const cleanup = () => { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch {} };
   const promptFile = path.join(cwd, "system.txt");
   try {
@@ -407,6 +460,9 @@ async function askClaude({ model, document, messages }, emit, signal) {
     const timer = setTimeout(() => { timedOut = true; child.kill(); }, CLAUDE_TIMEOUT_MS);
     const abort = () => child.kill();
     signal.addEventListener("abort", abort, { once: true });
+    // Decode each stream as a whole: a character of several bytes can arrive split across two chunks.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let buffer = "";
     let streamed = false;
     let result = null;
@@ -453,8 +509,8 @@ const active = new Map();
 const MAX_CHARS = 1_500_000;
 
 function validRequest(req) {
-  return req && typeof req.id === "string" && req.id.length < 100 && (req.provider === "chatgpt" || req.provider === "claude")
-    && typeof req.model === "string" && req.model.length < 100
+  return req && typeof req.id === "string" && req.id.length < 100 && ["chatgpt", "claude", "openrouter"].includes(req.provider)
+    && typeof req.model === "string" && req.model.length <= (req.provider === "openrouter" ? 256 : 99)
     && typeof req.document?.name === "string" && typeof req.document.text === "string" && typeof req.document.truncated === "boolean"
     && Array.isArray(req.messages) && req.messages.length > 0 && req.messages.length < 200
     && req.messages.every((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
@@ -466,7 +522,20 @@ const MAX_ACTIVE = 2;
 
 function register(handle, send) {
   cleanStaleClaudeFolders();
-  handle("folio:ai-status", async () => ({ chatgpt: await chatgptStatus(), claude: await claudeStatus() }));
+  handle("folio:ai-status", async () => ({ chatgpt: await chatgptStatus(), claude: await claudeStatus(), openrouter: openRouter.status() }));
+  handle("folio:ai-router-key", async (_event, action, key) => {
+    try {
+      if (action === "save") await openRouter.save(key);
+      else if (action === "remove") await openRouter.remove();
+      else if (action === "check") await openRouter.check();
+      else throw new Error("Unknown key action.");
+      return { ok: true, configured: openRouter.status().configured };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+  handle("folio:ai-router-models", async () => {
+    try { return { ok: true, models: await openRouter.models() }; }
+    catch { return { ok: false, error: "Couldn't load OpenRouter models. Check your key and connection, or enter a model ID." }; }
+  });
   handle("folio:ai-chatgpt-signin", async () => {
     try { return { ok: true, status: await signInChatGPT() }; } catch (e) { return { ok: false, error: e.message }; }
   });
@@ -488,7 +557,7 @@ function register(handle, send) {
     const controller = new AbortController();
     active.set(req.id, controller);
     const emit = (text) => send("folio:ai-event", { id: req.id, type: "delta", text });
-    const ask = req.provider === "chatgpt" ? askChatGPT : askClaude;
+    const ask = { chatgpt: askChatGPT, claude: askClaude, openrouter: openRouter.ask }[req.provider];
     const { name, text, truncated } = req.document;
     const messages = req.messages.map(({ role, content, context }) => context
       ? { role, content, context: { text: context.text, page: context.page } } : { role, content });

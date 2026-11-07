@@ -1,17 +1,25 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Modal } from "./Dialogs";
-import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
+import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
+import { OpenRouterSettings } from "./OpenRouterSettings";
 import { updateSummary } from "./updates";
 import { readSignatures } from "./signatures";
+import { ScanLanguagePicker } from "./ScanLanguagePicker";
+import type { ScanLanguage } from "./scanLanguage";
+import { Icon } from "./icons";
+import { clearStoredData, countStoredData, onStoredDataCleared, type StoredCategory } from "./recent";
 
 /** One place for every Folio preference. */
 interface Props {
+  initialSection?: "General" | "Ask AI";
   theme: string;
   onTheme: (theme: "light" | "dark") => void;
   night: boolean;
   onNight: (on: boolean) => void;
   wheelPaging: boolean;
   onWheelPaging: (on: boolean) => void;
+  scanLanguages: ScanLanguage[];
+  onScanLanguages: (languages: ScanLanguage[]) => void;
   onOpenChangelog: () => void;
   onClose: () => void;
 }
@@ -53,7 +61,7 @@ function Switch({ checked, onChange, label, disabled }: { checked: boolean; onCh
   );
 }
 
-function Choice<T extends string>({ value, options, onChange, label }: { value: T; options: { id: T; name: string }[]; onChange: (v: T) => void; label: string }) {
+function Choice<T extends string>({ value, options, onChange, label }: { value: T; options: readonly { id: T; name: string }[]; onChange: (v: T) => void; label: string }) {
   return (
     <div className="segmented small" role="radiogroup" aria-label={label}>
       {options.map((o) => (
@@ -65,10 +73,86 @@ function Choice<T extends string>({ value, options, onChange, label }: { value: 
   );
 }
 
-export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, onWheelPaging, onOpenChangelog, onClose }: Props) {
+const storedCategories = {
+  notes: { label: "Saved annotations", action: "Clear annotations", question: "Clear all saved annotations?",
+    detail: "This permanently removes the highlights, drawings, text boxes, notes, and bookmarks Folio saved on this device. Your PDF files are kept." },
+  ai: { label: "Ask AI conversations", action: "Clear chats", question: "Clear all saved chats?",
+    detail: "This permanently removes the Ask AI conversations Folio saved on this device." },
+} as const;
+
+function StoredData() {
+  const [open, setOpen] = useState(false);
+  const [counts, setCounts] = useState<Awaited<ReturnType<typeof countStoredData>> | null>(null);
+  const [confirm, setConfirm] = useState<StoredCategory | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  const summary = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const next = await countStoredData();
+        if (active) setCounts(next);
+      } catch {
+        if (active) setError("Couldn't count stored documents. Close and reopen this section to try again.");
+      }
+    };
+    void refresh();
+    const stop = onStoredDataCleared(() => void refresh());
+    return () => { active = false; stop(); };
+  }, [open]);
+
+  const cancel = () => { setConfirm(null); trigger.current?.focus(); };
+  const clear = async (kind: StoredCategory) => {
+    setBusy(true);
+    setError("");
+    try {
+      await clearStoredData(kind);
+      setCounts(current => current && { ...current, [kind]: 0 });
+      setConfirm(null);
+      summary.current?.focus();
+    } catch { setError("Couldn't clear the saved data. Try again."); }
+    finally { setBusy(false); }
+  };
+
+  return <details className="settings-section stored-data" onToggle={event => {
+    setOpen(event.currentTarget.open);
+    if (!event.currentTarget.open) { setConfirm(null); setError(""); setCounts(null); }
+  }}>
+    <summary ref={summary}><Icon name="chevronRight" size={15} />Stored data</summary>
+    {open && <div className="stored-body">
+      <p className="stored-hint">Includes documents no longer in Recent.</p>
+      {(["notes", "ai"] as const).map(kind => {
+        const { label, action } = storedCategories[kind];
+        const count = counts?.[kind];
+        return <Row key={kind} label={label} hint={count === undefined ? "…" : `${count} document${count === 1 ? "" : "s"}`}>
+          <button className="btn ghost" disabled={!count || busy} onClick={event => {
+            trigger.current = event.currentTarget;
+            setError("");
+            setConfirm(kind);
+          }}>{action}…</button>
+        </Row>;
+      })}
+      {confirm && <div key={confirm} className="stored-confirm" role="alertdialog" aria-labelledby="stored-question" aria-describedby="stored-detail"
+        onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); if (!busy) cancel(); } }}>
+        <strong id="stored-question">{storedCategories[confirm].question}</strong>
+        <p id="stored-detail">{storedCategories[confirm].detail}</p>
+        <button className="btn ghost" autoFocus disabled={busy} onClick={cancel}>Cancel</button>
+        <button className="btn primary" disabled={busy} onClick={() => void clear(confirm)}>{storedCategories[confirm].action}</button>
+      </div>}
+      {error && <p className="form-error" role="alert">{error}</p>}
+    </div>}
+  </details>;
+}
+
+export function SettingsDialog({ initialSection = "General", theme, onTheme, night, onNight, wheelPaging, onWheelPaging, scanLanguages, onScanLanguages, onOpenChangelog, onClose }: Props) {
   const desktop = window.folioDesktop;
   const ai = desktop?.ai;
   const [error, setError] = useState<string | null>(null);
+  const [section, setSection] = useState<"General" | "Ask AI" | "Storage">(initialSection);
 
   // Updates
   const [info, setInfo] = useState<Awaited<ReturnType<FolioDesktop["getAppInfo"]>> | null>(null);
@@ -90,17 +174,27 @@ export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, on
 
   // Ask AI
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
-  const [provider, setProvider] = useState(() => localStorage.getItem("folio:ai-provider") || "chatgpt");
+  const [provider, setProvider] = useState(savedProvider);
   const [signingIn, setSigningIn] = useState(false);
-  useEffect(() => { void ai?.status().then(setAiStatus).catch(() => {}); }, [ai]);
+  useEffect(() => {
+    if (section !== "Ask AI") return;
+    let current = true;
+    void ai?.status().then(value => { if (current) setAiStatus(value); })
+      .catch(() => { if (current) setError("Couldn't check the provider connections."); });
+    return () => { current = false; };
+  }, [ai, section]);
 
   const [signatures, setSignatures] = useState(readSignatures);
 
   return (
     <Modal title="Settings" onClose={onClose}>
       <div className="settings">
-        {desktop && <p className="search-hint">Manage updates, appearance, and Ask AI accounts.</p>}
-        <Section title="Appearance">
+        <nav className="settings-nav" aria-label="Settings sections">
+          {(["General", "Ask AI", "Storage"] as const).filter(name => name !== "Ask AI" || ai).map(name =>
+            <button key={name} type="button" aria-current={section === name ? "page" : undefined}
+              onClick={() => { setSection(name); setError(null); }}>{name}</button>)}
+        </nav>
+        {section === "General" && <><Section title="Appearance">
           <Row label="Theme">
             <Choice label="Theme" value={theme === "dark" ? "dark" : "light"} onChange={onTheme}
               options={[{ id: "light", name: "Light" }, { id: "dark", name: "Dark" }]} />
@@ -114,16 +208,22 @@ export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, on
           <Row label="Scroll one page at a time" hint="Turn a page with each mouse wheel click or trackpad swipe.">
             <Switch label="Scroll one page at a time" checked={wheelPaging} onChange={onWheelPaging} />
           </Row>
+          <Row label="Scan languages" hint="Download languages once to recognize scans offline.">
+            <ScanLanguagePicker value={scanLanguages} onChange={onScanLanguages} />
+          </Row>
         </Section>
 
-        {desktop && (
-          <Section title="Ask AI">
-            <Row label="Default provider" hint="Which assistant Ask AI opens with.">
-              <Choice label="Default provider" value={provider as AiProvider}
-                onChange={(p) => { setProvider(p); localStorage.setItem("folio:ai-provider", p); }}
-                options={[{ id: "chatgpt", name: "ChatGPT" }, { id: "claude", name: "Claude" }]} />
+        </>}
+
+        {ai && section === "Ask AI" && (
+          <section className="settings-section">
+            <Row label="Provider">
+              <select aria-label="Ask AI provider" className="ai-provider" value={provider} onChange={event => {
+                const next = event.target.value as AiProvider;
+                setProvider(next); setError(null); saveAiPreference("folio:ai-provider", next);
+              }}>{Object.entries(PROVIDERS).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select>
             </Row>
-            <Row
+            {provider === "chatgpt" && <Row
               label="ChatGPT"
               hint={!aiStatus ? "Checking…" : aiStatus.chatgpt.connected
                 ? <>Signed in{aiStatus.chatgpt.email ? ` as ${aiStatus.chatgpt.email}` : ""}. Uses your ChatGPT plan · <a href={USAGE_URL} target="_blank" rel="noreferrer">Manage usage</a></>
@@ -132,17 +232,17 @@ export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, on
               {aiStatus?.chatgpt.connected ? (
                 <button className="btn ghost" onClick={async () => setAiStatus({ ...aiStatus, chatgpt: await ai!.signOutChatGPT() })}>Sign out</button>
               ) : (
-                <button className="btn primary" disabled={!aiStatus || signingIn} onClick={async () => {
+                <button className="btn primary" disabled={!aiStatus} onClick={async () => {
                   setSigningIn(true);
                   setError(null);
                   const result = await signInChatGPT(ai!);
                   setSigningIn(false);
                   setError(result.error);
                   setAiStatus(result.status);
-                }}>{signingIn ? "Waiting for browser…" : "Continue with ChatGPT"}</button>
+                }}>{signingIn ? "Open the sign-in page again" : "Continue with ChatGPT"}</button>
               )}
-            </Row>
-            <Row
+            </Row>}
+            {provider === "claude" && <Row
               label="Claude"
               hint={!aiStatus ? "Checking…" : !aiStatus.claude.installed
                 ? <>Uses your Claude subscription through <a href={CLAUDE_CODE_URL} target="_blank" rel="noreferrer">Claude Code</a>. Install it and sign in once.</>
@@ -151,11 +251,13 @@ export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, on
                   : "Claude Code is installed but not signed in. Run claude in a terminal and sign in."}
             >
               <button className="btn ghost" disabled={!aiStatus} onClick={async () => setAiStatus({ ...aiStatus!, claude: await ai!.recheckClaude() })}>Check again</button>
-            </Row>
-          </Section>
+            </Row>}
+            {provider === "openrouter" && (aiStatus ? <OpenRouterSettings ai={ai} configured={!!aiStatus.openrouter?.configured}
+              onConfigured={configured => setAiStatus({ ...aiStatus, openrouter: { configured } })} /> : <p className="settings-hint">Checking connection…</p>)}
+          </section>
         )}
 
-        <Section title="Signatures">
+        {section === "Storage" && <><StoredData /><Section title="Signatures">
           <p className="search-hint">{signatures.length ? "Saved on this device without encryption." : "No saved signatures. You can remember one when you sign a document."}</p>
           {signatures.map(signature => <Row key={signature.key} label={signature.name}
             hint={<img className="settings-signature-preview" src={signature.url} alt="" />}>
@@ -164,9 +266,9 @@ export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, on
               catch { setError("Couldn't forget the signature. Please try again."); }
             }}>Forget</button>
           </Row>)}
-        </Section>
+        </Section></>}
 
-        {desktop && (
+        {desktop && section === "General" && (
           <Section title="Updates">
             {updatable && (
               <Row label="Automatic updates" hint={autoUpdate === false
@@ -194,11 +296,11 @@ export function SettingsDialog({ theme, onTheme, night, onNight, wheelPaging, on
           </Section>
         )}
 
-        <Section title="About">
+        {section === "General" && <Section title="About">
           <Row label="What's new" hint="Changes in each version of Folio.">
             <button className="btn ghost" onClick={onOpenChangelog}>View changelog</button>
           </Row>
-        </Section>
+        </Section>}
 
         {error && <p className="form-error">{error}</p>}
       </div>

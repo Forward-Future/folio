@@ -1,9 +1,12 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./icons";
 import { copyText } from "./clipboard";
 import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
-import { CLAUDE_CODE_URL, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
+import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, subscribeAiPreferences, USAGE_URL } from "./ai";
+import { Modal } from "./Dialogs";
+import { readSetting } from "./preferences";
 
 const AiMarkdown = lazy(() => import("./AiMarkdown").then((module) => ({ default: module.AiMarkdown })));
 
@@ -53,7 +56,19 @@ function documentText(pdf: PDFDocumentProxy) {
 }
 
 // ── Panel ─────────────────────────────────────────────────────────────────────────────────
-const conversations = new Map<string, Message[]>();
+// Keep partial replies and provider errors when the panel closes. Protected documents are session-only.
+const conversations = new Map<string, { messages: Message[]; generation: number; persist: boolean }>();
+let lastChatClear = 0;
+export function forgetClearedChats(generation: number) {
+  lastChatClear = Math.max(lastChatClear, generation);
+  for (const [id, chat] of conversations) {
+    if (chat.persist && chat.generation < generation) conversations.delete(id);
+  }
+}
+
+function rememberChat(id: string, persist: boolean, messages: Message[], generation: number) {
+  if (!persist || generation >= lastChatClear) conversations.set(id, { messages, generation, persist });
+}
 
 function CopyResponse({ text }: { text: string }) {
   const [label, setLabel] = useState("Copy response");
@@ -76,6 +91,31 @@ function CopyResponse({ text }: { text: string }) {
 const storedMessages = (messages: Message[]) =>
   messages.filter((m) => !m.error && m.content).map(({ role, content, context }) => ({ role, content, ...(context ? { context } : {}) }));
 
+function NewConversationDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  return <div onMouseDownCapture={event => {
+    // The backdrop closes on mousedown; its default action must not blur the restored button.
+    if (event.target === event.currentTarget.querySelector(".modal-backdrop")) event.preventDefault();
+  }} onKeyDown={event => {
+    event.stopPropagation();
+    if (event.key === "Escape") { event.preventDefault(); onCancel(); }
+    if (event.key !== "Tab") return;
+    const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>("button");
+    const first = buttons[0], last = buttons[buttons.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }}>
+    <Modal title="Start a new conversation?" onClose={onCancel}>
+      <div className="password-form">
+        <p>The current conversation for this document will be deleted. This cannot be undone.</p>
+        <div className="form-actions">
+          <button className="btn ghost" autoFocus onClick={onCancel}>Cancel</button>
+          <button className="btn primary" onClick={onConfirm}>Delete conversation</button>
+        </div>
+      </div>
+    </Modal>
+  </div>;
+}
+
 interface Props {
   pdf: PDFDocumentProxy;
   docId: string;
@@ -85,71 +125,74 @@ interface Props {
   context: AiContext | null;
   onClearContext: () => void;
   onGoToPage: (n: number) => void;
+  onSettings: () => void;
   onClose: () => void;
 }
 
-export function AiPanel({ pdf, docId, persist, docName, context, onClearContext, onGoToPage, onClose }: Props) {
+export function AiPanel({ pdf, docId, persist, docName, context, onClearContext, onGoToPage, onSettings, onClose }: Props) {
   const ai = window.folioDesktop?.ai;
   const [status, setStatus] = useState<AiStatus | null>(null);
-  const [provider, setProviderState] = useState<AiProvider>(() => (localStorage.getItem("folio:ai-provider") as AiProvider) || "chatgpt");
+  const provider = useSyncExternalStore(subscribeAiPreferences, savedProvider);
+  const keyRevision = useSyncExternalStore(subscribeAiPreferences, () => readSetting("folio:ai-key-revision"));
   const [models, setModels] = useState<{ id: string; name: string }[]>([]);
-  const [model, setModelState] = useState(() => localStorage.getItem(`folio:ai-model:${provider}`) ?? "");
-  const [messages, setMessages] = useState<Message[]>(() => conversations.get(docId) ?? []);
+  const modelKey = `folio:ai-model:${provider}`;
+  const savedModel = useSyncExternalStore(subscribeAiPreferences, () => readSetting(modelKey) ?? "");
+  const model = provider === "chatgpt" && models.length && !models.some(m => m.id === savedModel) ? models[0].id : savedModel;
+  const [messages, setMessages] = useState<Message[]>(() => conversations.get(docId)?.messages ?? []);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [confirmNew, setConfirmNew] = useState(false);
   const busyRef = useRef<string | null>(null);
   const preparing = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const newConversationRef = useRef<HTMLButtonElement>(null);
+  const cancelNew = () => { setConfirmNew(false); newConversationRef.current?.focus(); };
 
   // The panel is mounted per document (keyed by docId in App), so this conversation always belongs to docId.
-  const [loaded, setLoaded] = useState(() => conversations.has(docId) || !persist);
+  const [generation, setGeneration] = useState<number | null>(() => conversations.get(docId)?.generation ?? (persist ? null : 0));
+  const loaded = generation !== null;
   useEffect(() => {
     if (loaded) return;
     let cancelled = false;
-    void getAiHistory(docId).then((saved) => {
+    void getAiHistory(docId).then(({ messages, generation }) => {
       if (cancelled) return;
-      if (saved.length) setMessages(saved);
-      setLoaded(true);
+      setMessages(messages);
+      setGeneration(generation);
     });
     return () => { cancelled = true; };
   }, [docId, loaded]);
   useEffect(() => {
-    if (!loaded) return;
-    conversations.set(docId, messages);
+    if (generation === null) return;
+    rememberChat(docId, persist, messages, generation);
     // Save once an answer has finished (not on every streamed word).
-    if (persist && !busy) void saveAiHistory(docId, storedMessages(messages));
-  }, [docId, messages, busy, loaded, persist]);
-  useEffect(() => { void ai?.status().then(setStatus); }, [ai]);
+    if (persist && !busy) void saveAiHistory(docId, storedMessages(messages), generation);
+  }, [docId, messages, busy, generation, persist]);
+  useEffect(() => {
+    let current = true;
+    void ai?.status().then(value => { if (current) setStatus(value); }).catch(() => { if (current) setSetupError("Couldn't check AI connections."); });
+    return () => { current = false; };
+  }, [ai, keyRevision]);
   useEffect(() => { if (context) inputRef.current?.focus(); }, [context]);
-
-  const setProvider = (next: AiProvider) => {
-    setProviderState(next);
-    localStorage.setItem("folio:ai-provider", next);
-    setModelState(localStorage.getItem(`folio:ai-model:${next}`) ?? "");
-    setSetupError(null);
-  };
-  const setModel = (id: string) => {
-    setModelState(id);
-    localStorage.setItem(`folio:ai-model:${provider}`, id);
-  };
 
   // ChatGPT's model list depends on the signed-in account.
   const chatgptConnected = !!status?.chatgpt.connected;
   useEffect(() => {
+    setSetupError(null);
     if (!ai || provider !== "chatgpt" || !chatgptConnected) return;
+    let current = true;
     void ai.chatgptModels().then((result) => {
+      if (!current) return;
       if (!result.ok) {
         if (result.code === "signed_out") void ai.status().then(setStatus);
         setSetupError(result.error ?? null);
         return;
       }
-      const list = result.models ?? [];
-      setModels(list);
-      setModelState((current) => (list.some((m) => m.id === current) ? current : list[0]?.id ?? ""));
+      setModels(result.models ?? []);
     });
+    return () => { current = false; };
   }, [ai, provider, chatgptConnected]);
 
   // Stream answers into the last assistant message.
@@ -178,7 +221,9 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  const ready = loaded && (provider === "chatgpt" ? chatgptConnected : !!status?.claude.installed && status.claude.loggedIn);
+  const connected = { chatgpt: chatgptConnected, claude: !!status?.claude.installed && status.claude.loggedIn,
+    openrouter: !!status?.openrouter?.configured && !!model };
+  const ready = loaded && connected[provider];
 
   // Closing the panel, entering focus mode, or opening another document ends an answer in progress the way Stop does.
   // Otherwise it keeps running unseen, holds one of the two answers allowed at a time, and comes back never finishing.
@@ -193,9 +238,11 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     const list = messagesRef.current;
     const last = list[list.length - 1];
     const kept = last?.role === "assistant" && !last.content && !last.error ? list.slice(0, -1) : list;
-    conversations.set(docId, kept);
-    if (persist) void saveAiHistory(docId, storedMessages(kept));
-  }, [ai, docId, persist]);
+    if (generation !== null) {
+      rememberChat(docId, persist, kept, generation);
+      if (persist) void saveAiHistory(docId, storedMessages(kept), generation);
+    }
+  }, [ai, docId, persist, generation]);
   const stop = () => {
     if (!busy) return;
     if (preparing.current !== busy) { void ai?.cancel(busy); return; }
@@ -217,7 +264,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     setInput("");
     onClearContext();
     try {
-      const doc = await documentText(pdf);
+      const doc = provider === "openrouter" && context ? { text: "", truncated: true } : await documentText(pdf);
       if (preparing.current !== id) return;
       preparing.current = null;
       await ai.ask({ id, provider, model, document: { name: docName, ...doc },
@@ -252,12 +299,12 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     <aside className="ai-panel" aria-label="Ask AI">
       <header className="ai-head">
         <div className="ai-title"><Icon name="sparkle" size={16} /> Ask AI</div>
-        <div className="segmented small" role="tablist" aria-label="AI provider">
-          <button role="tab" aria-selected={provider === "chatgpt"} className={provider === "chatgpt" ? "on" : ""} onClick={() => setProvider("chatgpt")}>ChatGPT</button>
-          <button role="tab" aria-selected={provider === "claude"} className={provider === "claude" ? "on" : ""} onClick={() => setProvider("claude")}>Claude</button>
-        </div>
+        {ai && <select className="ai-provider" aria-label="AI provider" value={provider} disabled={!!busy}
+          onChange={event => saveAiPreference("folio:ai-provider", event.target.value)}>
+          {Object.entries(PROVIDERS).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+        </select>}
         <div className="ai-head-actions">
-          <button className="pill-btn" title="New conversation" aria-label="New conversation" disabled={!messages.length || !!busy} onClick={() => setMessages([])}>
+          <button ref={newConversationRef} className="pill-btn" title="New conversation" aria-label="New conversation" disabled={!messages.length || !!busy} onClick={() => setConfirmNew(true)}>
             <Icon name="plus" size={15} />
           </button>
           <button className="pill-btn" title="Close" aria-label="Close Ask AI" onClick={onClose}>
@@ -275,8 +322,9 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
           <div className="ai-card">
             <h3>Use your ChatGPT plan</h3>
             <p>Sign in with ChatGPT to ask questions using your existing ChatGPT plan (Go, Plus, or Pro). No API key needed.</p>
-            <button className="btn primary chatgpt-btn" onClick={signIn} disabled={signingIn}>
-              {signingIn ? "Waiting for your browser…" : "Continue with ChatGPT"}
+            {/* Stays clickable while waiting: a closed browser tab is opened again. */}
+            <button className="btn primary chatgpt-btn" onClick={signIn}>
+              {signingIn ? "Open the sign-in page again" : "Continue with ChatGPT"}
             </button>
             {signingIn && <p className="fine">Finish signing in in your browser, then come back here.</p>}
             <p className="fine">When you ask, Folio sends your question and the document's text to OpenAI. Nothing is sent otherwise.</p>
@@ -294,6 +342,12 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
               <button className="btn primary" onClick={async () => setStatus({ ...status, claude: await ai.recheckClaude() })}>Check again</button>
             </div>
             <p className="fine">Folio never sees your Claude password or tokens. When you ask, it sends your question and the document's text to Anthropic through Claude Code.</p>
+          </div>
+        ) : provider === "openrouter" && !connected.openrouter ? (
+          <div className="ai-card">
+            <h3>Connect OpenRouter</h3>
+            <p>{status.openrouter?.configured ? "Choose a model for your questions." : "Use your own API key and choose a model in Settings."}</p>
+            <button className="btn primary" onClick={onSettings}>Open Ask AI settings</button>
           </div>
         ) : (
           <>
@@ -393,17 +447,23 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
         </form>
         {ready && (
           <div className="ai-meta">
-            <select value={model} onChange={(e) => setModel(e.target.value)} aria-label="Model">
+            {provider === "openrouter" ? <button className="link small router-model-link" title={model} onClick={onSettings}>{model}</button> :
+            <select value={model} onChange={(e) => saveAiPreference(modelKey, e.target.value)} aria-label="Model">
               {(provider === "chatgpt" ? models : CLAUDE_MODELS).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
+            </select>}
             {provider === "chatgpt" ? (
               <span>Using ChatGPT plan · <a href={USAGE_URL} target="_blank" rel="noreferrer">Manage usage</a></span>
-            ) : (
+            ) : provider === "openrouter" ? <span>Billed by OpenRouter</span> : (
               <span>{status?.claude.subscription ? "Using your Claude subscription via Claude Code" : "Using Claude Code"}</span>
             )}
           </div>
         )}
       </footer>
+      {confirmNew && createPortal(<NewConversationDialog onCancel={cancelNew} onConfirm={() => {
+        setConfirmNew(false);
+        setMessages([]);
+        inputRef.current?.focus();
+      }} />, document.body)}
     </aside>
   );
 }

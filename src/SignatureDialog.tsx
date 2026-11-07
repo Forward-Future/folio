@@ -231,7 +231,7 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
                 const area = event.currentTarget.getBoundingClientRect();
                 setManualCenter(preview.viewport.convertToPdfPoint((event.clientX - area.left) * preview.width / area.width, (event.clientY - area.top) * preview.height / area.height));
               }} onKeyDown={event => {
-                if (!ready || targetId !== "manual" || !["Enter", " ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+                if (event.altKey || !ready || targetId !== "manual" || !["Enter", " ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
                 event.preventDefault();
                 setTargetId("manual");
                 const area = rect || preview.viewport.viewBox;

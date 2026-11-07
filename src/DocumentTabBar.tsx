@@ -22,7 +22,7 @@ export function DocumentTabBar({ tabs, tabKey }: { tabs: ReaderContext["tabs"]; 
             id={active ? "selected-document-tab" : undefined} tabIndex={active ? 0 : -1}
             ref={active ? selected : undefined} title={name} aria-label={name} onClick={event => tabs.select(tab.key, event.detail === 0)}
             onKeyDown={event => {
-              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+              if (event.altKey || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
               event.preventDefault(); event.stopPropagation();
               if (event.key === "Home" || event.key === "End") tabs.select(tabs.all[event.key === "Home" ? 0 : tabs.all.length - 1].key, true);
               else tabs.cycle(event.key === "ArrowRight" ? 1 : -1);
