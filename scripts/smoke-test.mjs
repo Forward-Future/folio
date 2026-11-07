@@ -734,6 +734,7 @@ try {
       res.write(Buffer.alloc(1024, 0x41));
       return;
     }
+    if (req.url === "/stall") return; // never answers
     res.writeHead(200, { "content-type": "application/pdf" }); res.end(Buffer.from(sample));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -769,10 +770,20 @@ try {
     assert.equal(await fetchPdf(`http://folio-pinned.test:${port}/page`), "Guarded page.pdf");
     assert.ok(served.includes("/same-origin"), "allowed page subresource did not load");
     assert.ok(!served.includes("/private-trap"), "redirect or hidden page contacted a different local origin");
+    // One link opens at a time. A link that is given up on (its tab closed, another document opened instead) is
+    // stopped by the page, which lets the next one open straight away instead of after its timeout.
+    const stalled = page.evaluate((url) => window.folioDesktop.fetchPdf(url, "stalled").then((file) => file?.name ?? null, (error) => error.message),
+      `http://folio-pinned.test:${port}/stall`);
+    for (let i = 0; i < 100 && !served.includes("/stall"); i++) await page.waitForTimeout(50);
+    assert.match(await fetchPdf(`http://folio-pinned.test:${port}/pinned.pdf`), /Another link is still opening/);
+    await page.evaluate(() => window.folioDesktop.cancelFetchPdf("stalled"));
+    assert.equal(await stalled, null);
+    assert.equal(await fetchPdf(`http://folio-pinned.test:${port}/pinned.pdf`), "pinned.pdf");
   } finally {
     server.close();
   }
   console.log("ok  local network addresses need the user's OK");
+  console.log("ok  a link that is given up on stops, and the next one opens");
 
   // The question asked before closing over unsaved work names this platform's Save shortcut.
   const closePrompt = await app.evaluate(({ BrowserWindow, dialog }) => {

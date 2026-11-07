@@ -563,7 +563,14 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       try {
         let file: { name: string; data: Uint8Array } | null;
         if (window.folioDesktop) {
-          file = await window.folioDesktop.fetchPdf(url);
+          // Closing the tab or opening something else stops the download in the desktop shell too,
+          // which otherwise keeps every other link waiting until it gives up.
+          const desktop = window.folioDesktop;
+          const request = crypto.randomUUID();
+          const stop = () => { void desktop.cancelFetchPdf(request).catch(() => {}); };
+          signal.addEventListener("abort", stop, { once: true });
+          try { file = await desktop.fetchPdf(url, request); }
+          finally { signal.removeEventListener("abort", stop); }
         } else {
           // The browser edition can only read links whose server allows cross-origin requests.
           const transfer = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
