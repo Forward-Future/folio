@@ -526,9 +526,16 @@ try {
   await page.evaluate(() => { Worker.prototype.postMessage = window.folioPostMessage; });
   await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
   await page.waitForTimeout(800);
+  const firstPageMarks = '.page[data-page-number="1"] .annotationEditorLayer [id^="pdfjs_internal_editor_"]';
+  const marksBefore = await page.locator(firstPageMarks).count();
+  assert.equal(marksBefore, 6);
   await page.keyboard.press("ControlOrMeta+w");
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
+  // The saved marks are read a moment after the document opens, and a copy saved before then has none of them.
+  // Wait until the first page has all of its marks back.
+  await page.waitForFunction(([marks, count]) => document.querySelectorAll(marks).length === count, [firstPageMarks, marksBefore],
+    { timeout: 15_000 });
   const copy = path.join(env.FOLIO_TEST_USER_DATA, "copy.pdf");
   assert.equal((await saveCopy("copy.pdf")).match(/\/Subtype\s*\/Highlight\b/g)?.length, 4);
   const savedInk = await page.evaluate(async bytes => {
