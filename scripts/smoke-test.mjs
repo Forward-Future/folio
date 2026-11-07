@@ -3,19 +3,20 @@
 // selectable and highlightable, text boxes survive reopening, and the window chrome matches the platform.
 // Run `npm run build` first.
 import { _electron as electron } from "playwright-core";
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import http from "node:http";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { electronPath } from "./electron-path.mjs";
 import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
 import { checkOpenRouter } from "./smoke-openrouter.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
-const executablePath = require("electron"); // path to the Electron binary
 const shots = path.join(root, "release", "smoke");
 mkdirSync(shots, { recursive: true });
 
@@ -23,6 +24,7 @@ mkdirSync(shots, { recursive: true });
 const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir(), "folio-smoke-")),
   FOLIO_TEST_HIDDEN: process.env.FOLIO_SMOKE_SHOW === "1" ? "0" : "1" };
 delete env.ELECTRON_RUN_AS_NODE;
+const executablePath = electronPath(env);
 // Containers often run as root, where Chromium's sandbox can't start. The made-up names stand in for web addresses
 // that lead to this computer (see the local network checks below).
 const args = [root, "--mute-audio", "--host-resolver-rules=MAP folio-local.test 127.0.0.1, MAP folio-rebind.test 127.0.0.1, MAP folio-pinned.test 127.0.0.2",
@@ -55,6 +57,11 @@ async function checkStaysHidden() {
       onScreen: BrowserWindow.getAllWindows().filter((w) => w.isVisible() && onDisplay(w.getBounds())).length };
   });
   assert.deepEqual(seen, { dockIcon: false, inFront: false, onScreen: 0 }, "the hidden test run showed up on macOS");
+  // The Dock makes room for an ordinary app as it starts, before Folio can say otherwise, so the run has to have
+  // started from an app that macOS treats as an agent (see electron-path.mjs).
+  const plist = path.join(await app.evaluate(() => process.execPath), "..", "..", "Info.plist");
+  assert.equal(spawnSync("/usr/bin/plutil", ["-extract", "LSUIElement", "raw", plist], { encoding: "utf8" }).stdout.trim(), "true",
+    "the hidden test run started as an ordinary app, which the Dock makes room for");
 }
 try {
   const page = readerPage(await app.firstWindow());

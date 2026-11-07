@@ -19,7 +19,9 @@ if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData",
 // Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
 const TEST_HIDDEN = !app.isPackaged && process.env.FOLIO_TEST_HIDDEN === "1";
 // macOS gives every ordinary app a Dock icon, whatever its windows do. An accessory app has none and can't come
-// forward by itself. Set right away: the Dock starts making room for the icon as soon as the app starts.
+// forward by itself. The test scripts start a copy of Electron that is one from its first moment
+// (scripts/electron-path.mjs); this covers a hidden launch of the ordinary Electron, set right away because the Dock
+// starts making room for the icon as soon as the app starts.
 if (TEST_HIDDEN && process.platform === "darwin") app.setActivationPolicy("accessory");
 
 const DIST = path.join(__dirname, "..", "dist");

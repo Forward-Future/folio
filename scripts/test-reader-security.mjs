@@ -1,10 +1,10 @@
 // Exercises the upgraded IndexedDB, import paths and viewer in an off-screen Electron window.
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { electronPath } from "./electron-path.mjs";
 import { readerPage } from "./reader-page.mjs";
 import { _electron as electron } from "playwright-core";
 import { createServer } from "vite";
@@ -48,7 +48,7 @@ try {
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   const env = { ...process.env, FOLIO_DEV_URL: origin, FOLIO_TEST_HIDDEN: "1", FOLIO_TEST_USER_DATA: profile };
   delete env.ELECTRON_RUN_AS_NODE;
-  app = await electron.launch({ executablePath: createRequire(import.meta.url)("electron"), env,
+  app = await electron.launch({ executablePath: electronPath(env), env,
     args: [root, "--mute-audio", ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])] });
   let page = await app.firstWindow();
   assert.ok(await app.evaluate(({ app }) => app.commandLine.hasSwitch("mute-audio")));
