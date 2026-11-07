@@ -51,11 +51,21 @@ function saveHost(host) {
   writeAtomic("chatgpt-host.json", JSON.stringify(host));
 }
 
+// Linux without a keyring "encrypts" with a key that is the same on every computer. That protects nothing.
+// (The OpenRouter key is refused in that case too: see openrouter.cjs.)
+const hardcodedKey = () => process.platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text";
+const canProtectSession = async () => (await safeStorage.isAsyncEncryptionAvailable()) && !hardcodedKey();
+
 let session = null; // { accessToken, refreshToken, idToken, expiresAt, scopes, email, name }
 async function loadSession() {
   if (session) return session;
   try {
     if (!fs.existsSync(file("chatgpt-session.bin")) || !(await safeStorage.isAsyncEncryptionAvailable())) return null;
+    if (hardcodedKey()) {
+      // Saved under the shared key by an earlier version, or unreadable without the keyring: don't leave it on disk.
+      fs.rmSync(file("chatgpt-session.bin"), { force: true });
+      return null;
+    }
     const { result } = await safeStorage.decryptStringAsync(fs.readFileSync(file("chatgpt-session.bin")));
     session = JSON.parse(result);
   } catch { session = null; }
@@ -68,7 +78,7 @@ async function saveSession(next) {
     return;
   }
   // Without OS encryption, keep the session in memory only (sign in again next launch).
-  if (await safeStorage.isAsyncEncryptionAvailable()) writeAtomic("chatgpt-session.bin", await safeStorage.encryptStringAsync(JSON.stringify(next)));
+  if (await canProtectSession()) writeAtomic("chatgpt-session.bin", await safeStorage.encryptStringAsync(JSON.stringify(next)));
 }
 
 async function postForm(url, params) {
@@ -266,7 +276,7 @@ async function chatgptStatus() {
   const current = await loadSession();
   const host = loadHost();
   return { connected: !!current, email: current?.email ?? "", name: current?.name ?? "", welcomeSeen: !!host.welcomeSeen,
-    encrypted: await safeStorage.isAsyncEncryptionAvailable() };
+    encrypted: await canProtectSession() };
 }
 
 async function chatgptModels() {
