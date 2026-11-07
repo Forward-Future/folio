@@ -88,6 +88,33 @@ try {
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
   assert.match(await page.locator(".textLayer").first().innerText(), /A short tour of Folio/);
   console.log("ok  sample rendered with a text layer");
+
+  // The list of matching pages quotes each page's first match. The words it marks are the ones searched for,
+  // also when the match sits many lines down the page. (Text with ligatures is checked at the end.)
+  await page.getByRole("button", { name: /^Search/ }).click();
+  await page.getByLabel("Find in document").fill("highlight");
+  const quoted = page.locator(".search-result-list mark");
+  await quoted.nth(2).waitFor();
+  assert.deepEqual((await quoted.allTextContents()).map((text) => text.toLowerCase()), ["highlight", "highlight", "highlight"]);
+  await page.getByLabel("Find in document").press("Escape");
+  console.log("ok  search results mark the words that were searched for");
+
+  // A dialog keeps the keyboard: the reader's one-key shortcuts don't act on the document behind it.
+  const layout = () => page.evaluate(() => {
+    const box = document.querySelector(".pdfViewer .page").getBoundingClientRect();
+    return { upright: box.height > box.width, spreads: document.querySelectorAll(".pdfViewer .spread").length };
+  });
+  const before = await layout();
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: "About Folio" }).click();
+  await page.getByRole("dialog", { name: "About Folio" }).waitFor();
+  await page.keyboard.press("r");
+  await page.keyboard.press("2");
+  await page.waitForTimeout(200);
+  assert.deepEqual(await layout(), before, "a shortcut reached the document behind the About dialog");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  console.log("ok  shortcuts wait while a dialog is open");
   await checkOpenRouter(app, page);
 
   const toolbar = page.getByRole("toolbar", { name: "Tools" });
@@ -724,6 +751,7 @@ try {
       res.write(Buffer.alloc(1024, 0x41));
       return;
     }
+    if (req.url === "/stall") return; // never answers
     res.writeHead(200, { "content-type": "application/pdf" }); res.end(Buffer.from(sample));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -759,10 +787,20 @@ try {
     assert.equal(await fetchPdf(`http://folio-pinned.test:${port}/page`), "Guarded page.pdf");
     assert.ok(served.includes("/same-origin"), "allowed page subresource did not load");
     assert.ok(!served.includes("/private-trap"), "redirect or hidden page contacted a different local origin");
+    // One link opens at a time. A link that is given up on (its tab closed, another document opened instead) is
+    // stopped by the page, which lets the next one open straight away instead of after its timeout.
+    const stalled = page.evaluate((url) => window.folioDesktop.fetchPdf(url, "stalled").then((file) => file?.name ?? null, (error) => error.message),
+      `http://folio-pinned.test:${port}/stall`);
+    for (let i = 0; i < 100 && !served.includes("/stall"); i++) await page.waitForTimeout(50);
+    assert.match(await fetchPdf(`http://folio-pinned.test:${port}/pinned.pdf`), /Another link is still opening/);
+    await page.evaluate(() => window.folioDesktop.cancelFetchPdf("stalled"));
+    assert.equal(await stalled, null);
+    assert.equal(await fetchPdf(`http://folio-pinned.test:${port}/pinned.pdf`), "pinned.pdf");
   } finally {
     server.close();
   }
   console.log("ok  local network addresses need the user's OK");
+  console.log("ok  a link that is given up on stops, and the next one opens");
 
   // The question asked before closing over unsaved work names this platform's Save shortcut.
   const closePrompt = await app.evaluate(({ BrowserWindow, dialog }) => {
@@ -876,6 +914,18 @@ try {
   await page.evaluate(() => window.restorePrintFrame());
   console.log("ok  ordinary PDF printing remains available beyond the advanced sheet limit");
 
+  // Find positions count a ligature ("ﬁ") as the one character it is in the PDF. The quoted text has to count
+  // the same way, or the words it marks drift to the left of the match.
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Ligatures.pdf", data: Buffer.from(data) }), [...pdfWithLigatures()]);
+  await page.window.waitForFunction(() => document.title.startsWith("Ligatures.pdf"));
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
+  await page.getByRole("button", { name: /^Search/ }).click();
+  await page.getByLabel("Find in document").fill("zebra");
+  await quoted.first().waitFor();
+  assert.deepEqual(await quoted.allTextContents(), ["zebra"]);
+  console.log("ok  search results mark the right words in text with ligatures");
+
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {
@@ -916,6 +966,23 @@ function pdfWithPageSizes(sizes) {
       return `<< /Length ${lines.length} >>\nstream\n${lines}\nendstream`;
     }),
   ];
+  return pdfFromObjects(objects);
+}
+
+// One page whose first line is written with the "fi" ligature glyph, so its text holds the single character "ﬁ"
+// eight times before the words on the second line.
+function pdfWithLigatures() {
+  const text = "BT /F1 14 Tf 72 720 Td (\\001rst \\001ne \\001ve \\001x \\001sh \\001g \\001t \\001ll) Tj 0 -24 Td (target word zebra here) Tj ET";
+  return pdfFromObjects([
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [1 /fi] >> >>",
+    `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
+  ]);
+}
+
+function pdfFromObjects(objects) {
   let body = "%PDF-1.4\n";
   const offsets = objects.map((object, i) => {
     const offset = body.length;

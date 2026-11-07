@@ -18,8 +18,10 @@ interface FolioDesktop {
   onTabCommand(callback: (command: "new" | "close" | "next" | "previous") => void): () => void;
   openDocument(file: File): Promise<{ name: string; data: Uint8Array; note?: string }>;
   ready(): Promise<boolean>;
-  /** Null when the user declines to open an address on their computer or local network. */
-  fetchPdf(url: string): Promise<{ name: string; data: Uint8Array } | null>;
+  /** Null when the user declines to open an address on their computer or local network, or the request is stopped. */
+  fetchPdf(url: string, id: string): Promise<{ name: string; data: Uint8Array } | null>;
+  /** Stops the fetchPdf request that was started with this id (it then resolves to null). */
+  cancelFetchPdf(id: string): Promise<boolean>;
   getAppInfo(): Promise<{ version: string; mode: "development" | "portable" | "installed" | "appimage" | "package"; location: string; platform: string;
     /** True when updates are announced with a download link instead of installed (unsigned macOS builds). */
     notifyOnly: boolean }>;

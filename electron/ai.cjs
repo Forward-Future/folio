@@ -51,11 +51,21 @@ function saveHost(host) {
   writeAtomic("chatgpt-host.json", JSON.stringify(host));
 }
 
+// Linux without a keyring "encrypts" with a key that is the same on every computer. That protects nothing.
+// (The OpenRouter key is refused in that case too: see openrouter.cjs.)
+const hardcodedKey = () => process.platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text";
+const canProtectSession = async () => (await safeStorage.isAsyncEncryptionAvailable()) && !hardcodedKey();
+
 let session = null; // { accessToken, refreshToken, idToken, expiresAt, scopes, email, name }
 async function loadSession() {
   if (session) return session;
   try {
     if (!fs.existsSync(file("chatgpt-session.bin")) || !(await safeStorage.isAsyncEncryptionAvailable())) return null;
+    if (hardcodedKey()) {
+      // Saved under the shared key by an earlier version, or unreadable without the keyring: don't leave it on disk.
+      fs.rmSync(file("chatgpt-session.bin"), { force: true });
+      return null;
+    }
     const { result } = await safeStorage.decryptStringAsync(fs.readFileSync(file("chatgpt-session.bin")));
     session = JSON.parse(result);
   } catch { session = null; }
@@ -68,7 +78,7 @@ async function saveSession(next) {
     return;
   }
   // Without OS encryption, keep the session in memory only (sign in again next launch).
-  if (await safeStorage.isAsyncEncryptionAvailable()) writeAtomic("chatgpt-session.bin", await safeStorage.encryptStringAsync(JSON.stringify(next)));
+  if (await canProtectSession()) writeAtomic("chatgpt-session.bin", await safeStorage.encryptStringAsync(JSON.stringify(next)));
 }
 
 async function postForm(url, params) {
@@ -116,9 +126,16 @@ const CALLBACK_PAGE = `<!doctype html><meta charset="utf-8"><title>Folio</title>
 <p>You can close this tab and return to Folio.</p></body>`;
 
 let signInInProgress = null;
+// The page of the sign-in that is waiting for the browser, kept so it can be opened again.
+let signInPage = null;
 
 async function signInChatGPT() {
-  if (signInInProgress) return signInInProgress;
+  if (signInInProgress) {
+    // Asked again while waiting: the browser tab was probably closed. Without this, nothing could reopen it
+    // until the wait timed out.
+    if (signInPage) void shell.openExternal(signInPage).catch(() => {});
+    return signInInProgress;
+  }
   signInInProgress = (async () => {
     const host = loadHost();
     const verifier = b64url(crypto.randomBytes(32));
@@ -177,9 +194,11 @@ async function signInChatGPT() {
         ext_agent_host_id: host.hostId,
       };
       if (!host.clientId) params.agent_name_hint = "Folio";
-      await shell.openExternal(`${AUTHORIZE_URL}?${new URLSearchParams(params)}`);
+      signInPage = `${AUTHORIZE_URL}?${new URLSearchParams(params)}`;
+      await shell.openExternal(signInPage);
 
       const query = await Promise.race([callback, timeout]);
+      signInPage = null; // answered: the page has done its job
       const clientId = query.get("client_id") || host.clientId;
       if (!clientId) throw new Error("ChatGPT didn't finish registering Folio. Please try again.");
       // Keep the issued client ID for every later sign-in on this computer, even if the rest fails.
@@ -204,7 +223,7 @@ async function signInChatGPT() {
       server.close();
     }
   })();
-  try { return await signInInProgress; } finally { signInInProgress = null; }
+  try { return await signInInProgress; } finally { signInInProgress = null; signInPage = null; }
 }
 
 let refreshing = null;
@@ -257,7 +276,7 @@ async function chatgptStatus() {
   const current = await loadSession();
   const host = loadHost();
   return { connected: !!current, email: current?.email ?? "", name: current?.name ?? "", welcomeSeen: !!host.welcomeSeen,
-    encrypted: await safeStorage.isAsyncEncryptionAvailable() };
+    encrypted: await canProtectSession() };
 }
 
 async function chatgptModels() {
@@ -405,6 +424,9 @@ async function askClaude({ model, document, messages }, emit, signal) {
     const timer = setTimeout(() => { timedOut = true; child.kill(); }, CLAUDE_TIMEOUT_MS);
     const abort = () => child.kill();
     signal.addEventListener("abort", abort, { once: true });
+    // Decode each stream as a whole: a character of several bytes can arrive split across two chunks.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let buffer = "";
     let streamed = false;
     let result = null;

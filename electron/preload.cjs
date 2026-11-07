@@ -32,13 +32,17 @@ contextBridge.exposeInMainWorld("folioDesktop", {
   platform: process.platform,
   openDownload: () => ipcRenderer.invoke("folio:open-download"),
   downloadOcrModel: (code) => ipcRenderer.invoke("folio:download-ocr-model", code),
-  /** Downloads a PDF from an http(s) link; resolves to { name, data: Uint8Array }, or null if the user said no. */
-  async fetchPdf(url) {
-    const file = await ipcRenderer.invoke("folio:fetch-pdf", url);
+  /**
+   * Downloads a PDF from an http(s) link; resolves to { name, data: Uint8Array }, or null if the user said no
+   * or the request was stopped with cancelFetchPdf(id).
+   */
+  async fetchPdf(url, id) {
+    const file = await ipcRenderer.invoke("folio:fetch-pdf", url, id);
     if (file.cancelled) return null;
     if (file.error) throw new Error(file.error);
     return { name: file.name, data: new Uint8Array(file.data) };
   },
+  cancelFetchPdf: (id) => ipcRenderer.invoke("folio:cancel-fetch-pdf", id),
   getAppInfo: () => ipcRenderer.invoke("folio:app-info"),
   openInstallation: () => ipcRenderer.invoke("folio:open-installation"),
   setTheme: (theme) => ipcRenderer.send("folio:theme", theme),

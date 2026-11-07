@@ -1,9 +1,11 @@
 // Shared by the Ask AI panel and Settings: the providers' pages, and the ChatGPT sign-in flow.
+import { readSetting, writeSetting } from "./preferences";
+
 export const PROVIDERS = { chatgpt: "ChatGPT", claude: "Claude", openrouter: "OpenRouter" } as const;
 export type AiProvider = keyof typeof PROVIDERS;
 
 export function savedProvider(): AiProvider {
-  const saved = localStorage.getItem("folio:ai-provider");
+  const saved = readSetting("folio:ai-provider");
   return saved && Object.hasOwn(PROVIDERS, saved) ? saved as AiProvider : "chatgpt";
 }
 
@@ -19,7 +21,7 @@ export function subscribeAiPreferences(listener: () => void) {
   };
 }
 export function saveAiPreference(name: string, value: string) {
-  localStorage.setItem(name, value);
+  writeSetting(name, value);
   window.dispatchEvent(new Event(AI_PREFERENCES));
 }
 

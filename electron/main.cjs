@@ -402,8 +402,9 @@ async function openLink(rawUrl) {
 
 // Asked before Folio opens an address on this computer or the local network, here rather than in the page: a document
 // that managed to run code in the page could otherwise use Folio to reach them.
-async function confirmLocalAddress(url, addresses) {
+async function confirmLocalAddress(url, addresses, signal) {
   const { response } = await dialog.showMessageBox(win, {
+    signal, // closing the tab that asked dismisses the question, as if Cancel was chosen
     type: "warning",
     title: "Open a local address?",
     message: `Open ${url.host}?`,
@@ -424,10 +425,15 @@ function pdfNameFromResponse(url, disposition) {
 }
 
 // Desktop PDF downloads use the same pinned network policy as webpage capture.
-// Resolves to { name, data } or { error } (error text is shown to the user as-is).
-async function downloadPdf(url, approvedLocal) {
+// Resolves to { name, data } or { error } (error text is shown to the user as-is), or to { cancelled: true }
+// once `signal` aborts.
+async function downloadPdf(url, approvedLocal, signal) {
   const ses = session.fromPartition(`folio-download-${crypto.randomUUID()}`); // in-memory only
   const guard = await guardSession(ses, session.defaultSession, approvedLocal, app);
+  if (signal.aborted) {
+    guard.close();
+    return { cancelled: true };
+  }
   return new Promise((resolve) => {
     let done = false;
     const request = net.request({ url: url.toString(), redirect: "manual", session: ses, cache: "no-store" });
@@ -438,7 +444,17 @@ async function downloadPdf(url, approvedLocal) {
       if (result.error || result.webpage) request.abort();
       resolve(result);
     };
-    const timer = setTimeout(() => finish({ error: "The download timed out." }), 60_000);
+    // The minute is for a silent connection, not for the whole file: a large PDF on a slow connection keeps
+    // going for as long as data arrives.
+    let timer;
+    const alive = () => {
+      clearTimeout(timer);
+      if (!done) timer = setTimeout(() => finish({ error: "The download timed out." }), 60_000);
+    };
+    alive();
+    request.on("redirect", alive);
+    request.on("response", (response) => { alive(); response.on("data", alive); });
+    signal.addEventListener("abort", () => { finish({ cancelled: true }); request.abort(); }, { once: true });
     let hops = 0;
     request.setHeader("Accept", "application/pdf,*/*;q=0.8");
     // Track redirects ourselves: the final address usually carries the real file name.
@@ -553,24 +569,33 @@ if (!app.requestSingleInstanceLock()) {
     });
     // PDF links open directly; webpages are converted to a PDF first. An address on this computer or the local
     // network opens only once the user agrees (cancelling resolves to { cancelled: true }).
-    let importing = false;
-    handle("folio:fetch-pdf", async (_event, rawUrl) => {
+    // One link opens at a time. The page names its request so it can stop it (a closed tab, another document
+    // opened instead): an abandoned link would otherwise keep every other one waiting until it timed out.
+    let importing = null;
+    handle("folio:fetch-pdf", async (_event, rawUrl, id) => {
       let url;
       try { url = new URL(typeof rawUrl === "string" && rawUrl.length <= 8192 ? rawUrl.trim() : ""); }
       catch { return { error: "That isn't a valid web address." }; }
       if (url.protocol !== "http:" && url.protocol !== "https:") return { error: "Only http:// and https:// links can be opened." };
       if (importing) return { error: "Another link is still opening." };
-      importing = true;
+      const controller = new AbortController();
+      const { signal } = controller;
+      importing = { id: typeof id === "string" ? id : "", controller };
       try {
         const destination = await resolveDestination(url, session.defaultSession);
-        if (destination.local && !(await confirmLocalAddress(url, destination.addresses))) return { cancelled: true };
+        if (signal.aborted) return { cancelled: true };
+        if (destination.local && !(await confirmLocalAddress(url, destination.addresses, signal))) return { cancelled: true };
         const approved = destination.local ? destination : null;
-        const result = await downloadPdf(url, approved);
+        const result = await downloadPdf(url, approved, signal);
         if (!result.webpage) return result;
-        return await captureWebpage(result.webpage, approved?.origin === new URL(result.webpage).origin ? approved : null);
+        return await captureWebpage(result.webpage, approved?.origin === new URL(result.webpage).origin ? approved : null, signal);
       } catch {
-        return { error: `Couldn't open a verified connection to ${url.hostname}.` };
-      } finally { importing = false; }
+        return signal.aborted ? { cancelled: true } : { error: `Couldn't open a verified connection to ${url.hostname}.` };
+      } finally { importing = null; }
+    });
+    handle("folio:cancel-fetch-pdf", (_event, id) => {
+      if (importing?.id && importing.id === id) importing.controller.abort();
+      return true;
     });
     handle("folio:app-info", () => ({ version: app.getVersion(), mode: installKind(), location: installLocation(), platform: process.platform,
       notifyOnly: NOTIFY_ONLY }));
