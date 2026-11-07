@@ -321,8 +321,9 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
           <div className="ai-card">
             <h3>Use your ChatGPT plan</h3>
             <p>Sign in with ChatGPT to ask questions using your existing ChatGPT plan (Go, Plus, or Pro). No API key needed.</p>
-            <button className="btn primary chatgpt-btn" onClick={signIn} disabled={signingIn}>
-              {signingIn ? "Waiting for your browser…" : "Continue with ChatGPT"}
+            {/* Stays clickable while waiting: a closed browser tab is opened again. */}
+            <button className="btn primary chatgpt-btn" onClick={signIn}>
+              {signingIn ? "Open the sign-in page again" : "Continue with ChatGPT"}
             </button>
             {signingIn && <p className="fine">Finish signing in in your browser, then come back here.</p>}
             <p className="fine">When you ask, Folio sends your question and the document's text to OpenAI. Nothing is sent otherwise.</p>

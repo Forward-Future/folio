@@ -234,14 +234,14 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
               {aiStatus?.chatgpt.connected ? (
                 <button className="btn ghost" onClick={async () => setAiStatus({ ...aiStatus, chatgpt: await ai!.signOutChatGPT() })}>Sign out</button>
               ) : (
-                <button className="btn primary" disabled={!aiStatus || signingIn} onClick={async () => {
+                <button className="btn primary" disabled={!aiStatus} onClick={async () => {
                   setSigningIn(true);
                   setError(null);
                   const result = await signInChatGPT(ai!);
                   setSigningIn(false);
                   setError(result.error);
                   setAiStatus(result.status);
-                }}>{signingIn ? "Waiting for browser…" : "Continue with ChatGPT"}</button>
+                }}>{signingIn ? "Open the sign-in page again" : "Continue with ChatGPT"}</button>
               )}
             </Row>}
             {provider === "claude" && <Row

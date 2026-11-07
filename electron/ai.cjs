@@ -116,9 +116,16 @@ const CALLBACK_PAGE = `<!doctype html><meta charset="utf-8"><title>Folio</title>
 <p>You can close this tab and return to Folio.</p></body>`;
 
 let signInInProgress = null;
+// The page of the sign-in that is waiting for the browser, kept so it can be opened again.
+let signInPage = null;
 
 async function signInChatGPT() {
-  if (signInInProgress) return signInInProgress;
+  if (signInInProgress) {
+    // Asked again while waiting: the browser tab was probably closed. Without this, nothing could reopen it
+    // until the wait timed out.
+    if (signInPage) void shell.openExternal(signInPage).catch(() => {});
+    return signInInProgress;
+  }
   signInInProgress = (async () => {
     const host = loadHost();
     const verifier = b64url(crypto.randomBytes(32));
@@ -177,9 +184,11 @@ async function signInChatGPT() {
         ext_agent_host_id: host.hostId,
       };
       if (!host.clientId) params.agent_name_hint = "Folio";
-      await shell.openExternal(`${AUTHORIZE_URL}?${new URLSearchParams(params)}`);
+      signInPage = `${AUTHORIZE_URL}?${new URLSearchParams(params)}`;
+      await shell.openExternal(signInPage);
 
       const query = await Promise.race([callback, timeout]);
+      signInPage = null; // answered: the page has done its job
       const clientId = query.get("client_id") || host.clientId;
       if (!clientId) throw new Error("ChatGPT didn't finish registering Folio. Please try again.");
       // Keep the issued client ID for every later sign-in on this computer, even if the rest fails.
@@ -204,7 +213,7 @@ async function signInChatGPT() {
       server.close();
     }
   })();
-  try { return await signInInProgress; } finally { signInInProgress = null; }
+  try { return await signInInProgress; } finally { signInInProgress = null; signInPage = null; }
 }
 
 let refreshing = null;
