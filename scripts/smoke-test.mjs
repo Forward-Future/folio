@@ -3,19 +3,20 @@
 // selectable and highlightable, text boxes survive reopening, and the window chrome matches the platform.
 // Run `npm run build` first.
 import { _electron as electron } from "playwright-core";
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import http from "node:http";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { electronPath } from "./electron-path.mjs";
 import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
 import { checkOpenRouter } from "./smoke-openrouter.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
-const executablePath = require("electron"); // path to the Electron binary
 const shots = path.join(root, "release", "smoke");
 mkdirSync(shots, { recursive: true });
 
@@ -23,6 +24,7 @@ mkdirSync(shots, { recursive: true });
 const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir(), "folio-smoke-")),
   FOLIO_TEST_HIDDEN: process.env.FOLIO_SMOKE_SHOW === "1" ? "0" : "1" };
 delete env.ELECTRON_RUN_AS_NODE;
+const executablePath = electronPath(env);
 // Containers often run as root, where Chromium's sandbox can't start. The made-up names stand in for web addresses
 // that lead to this computer (see the local network checks below).
 const args = [root, "--mute-audio", "--host-resolver-rules=MAP folio-local.test 127.0.0.1, MAP folio-rebind.test 127.0.0.1, MAP folio-pinned.test 127.0.0.2",
@@ -45,6 +47,22 @@ async function wordDocument(text) {
 
 const app = await electron.launch({ executablePath, args, env, timeout: 60_000 });
 const failures = [];
+// A hidden run has to stay out of the way on macOS too: no Dock icon, never the app in front, no window on a display.
+async function checkStaysHidden() {
+  if (process.platform !== "darwin" || env.FOLIO_TEST_HIDDEN !== "1") return;
+  const seen = await app.evaluate(({ app, BrowserWindow, screen }) => {
+    const displays = screen.getAllDisplays().map((display) => display.bounds);
+    const onDisplay = ({ x, y, width, height }) => displays.some((d) => x < d.x + d.width && x + width > d.x && y < d.y + d.height && y + height > d.y);
+    return { dockIcon: app.dock.isVisible(), inFront: app.isActive(),
+      onScreen: BrowserWindow.getAllWindows().filter((w) => w.isVisible() && onDisplay(w.getBounds())).length };
+  });
+  assert.deepEqual(seen, { dockIcon: false, inFront: false, onScreen: 0 }, "the hidden test run showed up on macOS");
+  // The Dock makes room for an ordinary app as it starts, before Folio can say otherwise, so the run has to have
+  // started from an app that macOS treats as an agent (see electron-path.mjs).
+  const plist = path.join(await app.evaluate(() => process.execPath), "..", "..", "Info.plist");
+  assert.equal(spawnSync("/usr/bin/plutil", ["-extract", "LSUIElement", "raw", plist], { encoding: "utf8" }).stdout.trim(), "true",
+    "the hidden test run started as an ordinary app, which the Dock makes room for");
+}
 try {
   const page = readerPage(await app.firstWindow());
   assert.ok(await app.evaluate(({ app }) => app.commandLine.hasSwitch("mute-audio")));
@@ -57,6 +75,7 @@ try {
   const platformClass = await page.evaluate(() => [...document.documentElement.classList].find((c) => c.startsWith("platform-")));
   assert.equal(platformClass, `platform-${process.platform}`);
   console.log("ok  platform:", platformClass);
+  await checkStaysHidden();
 
   const whatsNew = page.getByRole("dialog", { name: "What's new" });
   const installed = await app.evaluate(({ app }) => app.getVersion());
@@ -88,6 +107,33 @@ try {
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
   assert.match(await page.locator(".textLayer").first().innerText(), /A short tour of Folio/);
   console.log("ok  sample rendered with a text layer");
+
+  // The list of matching pages quotes each page's first match. The words it marks are the ones searched for,
+  // also when the match sits many lines down the page. (Text with ligatures is checked at the end.)
+  await page.getByRole("button", { name: /^Search/ }).click();
+  await page.getByLabel("Find in document").fill("highlight");
+  const quoted = page.locator(".search-result-list mark");
+  await quoted.nth(2).waitFor();
+  assert.deepEqual((await quoted.allTextContents()).map((text) => text.toLowerCase()), ["highlight", "highlight", "highlight"]);
+  await page.getByLabel("Find in document").press("Escape");
+  console.log("ok  search results mark the words that were searched for");
+
+  // A dialog keeps the keyboard: the reader's one-key shortcuts don't act on the document behind it.
+  const layout = () => page.evaluate(() => {
+    const box = document.querySelector(".pdfViewer .page").getBoundingClientRect();
+    return { upright: box.height > box.width, spreads: document.querySelectorAll(".pdfViewer .spread").length };
+  });
+  const before = await layout();
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: "About Folio" }).click();
+  await page.getByRole("dialog", { name: "About Folio" }).waitFor();
+  await page.keyboard.press("r");
+  await page.keyboard.press("2");
+  await page.waitForTimeout(200);
+  assert.deepEqual(await layout(), before, "a shortcut reached the document behind the About dialog");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  console.log("ok  shortcuts wait while a dialog is open");
   await checkOpenRouter(app, page);
 
   const toolbar = page.getByRole("toolbar", { name: "Tools" });
@@ -710,8 +756,21 @@ try {
     if (req.url === "/redirect") { res.writeHead(302, { location: trap }); return res.end(); }
     if (req.url === "/page") {
       res.writeHead(200, { "content-type": "text/html" });
-      return res.end(`<title>Guarded page</title><img src="/same-origin"><img src="${trap}">`);
+      return res.end(`<title>Guarded page</title><script>
+        alert("dismissed");
+        const origScrollTo = window.scrollTo.bind(window);
+        window.scrollTo = (...args) => {
+          if (navigator.userActivation?.isActive) document.title = "User gesture leaked";
+          return origScrollTo(...args);
+        };
+      </script><img src="/same-origin"><img src="${trap}">`);
     }
+    if (req.url === "/non-pdf-stream") {
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      res.write(Buffer.alloc(1024, 0x41));
+      return;
+    }
+    if (req.url === "/stall") return; // never answers
     res.writeHead(200, { "content-type": "application/pdf" }); res.end(Buffer.from(sample));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -742,14 +801,25 @@ try {
     assert.equal((await settled(5)).asked.length, 5);
     assert.ok(!served.includes("/rebound.pdf"));
     assert.equal(await fetchPdf(`http://folio-pinned.test:${port}/pinned.pdf`), "pinned.pdf");
+    assert.match(await fetchPdf(`http://folio-pinned.test:${port}/non-pdf-stream`), /isn't a PDF or a webpage/);
     assert.match(await fetchPdf(`http://folio-pinned.test:${port}/redirect`), /local network address/);
     assert.equal(await fetchPdf(`http://folio-pinned.test:${port}/page`), "Guarded page.pdf");
     assert.ok(served.includes("/same-origin"), "allowed page subresource did not load");
     assert.ok(!served.includes("/private-trap"), "redirect or hidden page contacted a different local origin");
+    // One link opens at a time. A link that is given up on (its tab closed, another document opened instead) is
+    // stopped by the page, which lets the next one open straight away instead of after its timeout.
+    const stalled = page.evaluate((url) => window.folioDesktop.fetchPdf(url, "stalled").then((file) => file?.name ?? null, (error) => error.message),
+      `http://folio-pinned.test:${port}/stall`);
+    for (let i = 0; i < 100 && !served.includes("/stall"); i++) await page.waitForTimeout(50);
+    assert.match(await fetchPdf(`http://folio-pinned.test:${port}/pinned.pdf`), /Another link is still opening/);
+    await page.evaluate(() => window.folioDesktop.cancelFetchPdf("stalled"));
+    assert.equal(await stalled, null);
+    assert.equal(await fetchPdf(`http://folio-pinned.test:${port}/pinned.pdf`), "pinned.pdf");
   } finally {
     server.close();
   }
   console.log("ok  local network addresses need the user's OK");
+  console.log("ok  a link that is given up on stops, and the next one opens");
 
   // The question asked before closing over unsaved work names this platform's Save shortcut.
   const closePrompt = await app.evaluate(({ BrowserWindow, dialog }) => {
@@ -863,6 +933,20 @@ try {
   await page.evaluate(() => window.restorePrintFrame());
   console.log("ok  ordinary PDF printing remains available beyond the advanced sheet limit");
 
+  // Find positions count a ligature ("ﬁ") as the one character it is in the PDF. The quoted text has to count
+  // the same way, or the words it marks drift to the left of the match.
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Ligatures.pdf", data: Buffer.from(data) }), [...pdfWithLigatures()]);
+  await page.window.waitForFunction(() => document.title.startsWith("Ligatures.pdf"));
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
+  await page.getByRole("button", { name: /^Search/ }).click();
+  await page.getByLabel("Find in document").fill("zebra");
+  await quoted.first().waitFor();
+  assert.deepEqual(await quoted.allTextContents(), ["zebra"]);
+  console.log("ok  search results mark the right words in text with ligatures");
+
+  // Asked again at the end: the windows that convert a webpage or a Word document didn't bring it forward either.
+  await checkStaysHidden();
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {
@@ -903,6 +987,23 @@ function pdfWithPageSizes(sizes) {
       return `<< /Length ${lines.length} >>\nstream\n${lines}\nendstream`;
     }),
   ];
+  return pdfFromObjects(objects);
+}
+
+// One page whose first line is written with the "fi" ligature glyph, so its text holds the single character "ﬁ"
+// eight times before the words on the second line.
+function pdfWithLigatures() {
+  const text = "BT /F1 14 Tf 72 720 Td (\\001rst \\001ne \\001ve \\001x \\001sh \\001g \\001t \\001ll) Tj 0 -24 Td (target word zebra here) Tj ET";
+  return pdfFromObjects([
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [1 /fi] >> >>",
+    `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
+  ]);
+}
+
+function pdfFromObjects(objects) {
   let body = "%PDF-1.4\n";
   const offsets = objects.map((object, i) => {
     const offset = body.length;

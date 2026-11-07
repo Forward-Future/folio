@@ -1,10 +1,10 @@
 import { _electron as electron } from "playwright-core";
 import { createServer } from "vite";
-import { createRequire } from "node:module";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { electronPath } from "./electron-path.mjs";
 import { readerPage } from "./reader-page.mjs";
 const root = path.resolve(import.meta.dirname, "..");
 const server = await createServer({ root, server: { host: "127.0.0.1", port: 0 } });
@@ -13,7 +13,7 @@ const env = { ...process.env, FOLIO_DEV_URL: server.resolvedUrls.local[0], FOLIO
 delete env.ELECTRON_RUN_AS_NODE;
 let app;
 try {
-  app = await electron.launch({ executablePath: createRequire(import.meta.url)("electron"), args: [root, "--mute-audio"], env, timeout: 60000 });
+  app = await electron.launch({ executablePath: electronPath(env), args: [root, "--mute-audio"], env, timeout: 60000 });
   assert.ok(await app.evaluate(({ app }) => app.commandLine.hasSwitch("mute-audio")));
   const page = readerPage(await app.firstWindow());
   await page.getByRole("button", { name: /Try a sample/ }).waitFor({ timeout: 30000 });

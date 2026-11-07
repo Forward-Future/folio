@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy } from "./pdf";
 import type { EventBus, PDFFindController } from "./viewer";
+import { keys } from "./platform";
 
 interface PageResult {
   page: number;
@@ -34,7 +35,9 @@ export function SearchResults({ pdf, controller, bus, onSelect }: {
         if (request !== generation) return;
         let text = textCache.current.get(entry.page);
         if (!text) {
-          text = pdf.getPage(entry.page).then(page => page.getTextContent()).then(content =>
+          // Match offsets count characters in the text as pdf.js's find controller reads it: not normalized.
+          // Normalized text can be longer (a ligature becomes two letters), which moves the marked words.
+          text = pdf.getPage(entry.page).then(page => page.getTextContent({ disableNormalization: true })).then(content =>
             content.items.map(item => "str" in item ? item.str : "").join(""));
           textCache.current.set(entry.page, text);
         }
@@ -77,7 +80,7 @@ export function SearchResults({ pdf, controller, bus, onSelect }: {
 
   return <aside className="search-results" aria-label="Search results">
     <h3>Matching pages <span>{pageCount}</span></h3>
-    {results.length === 0 && <p className="search-hint">Search above to see matching pages. Enter and Shift+Enter navigate individual matches.</p>}
+    {results.length === 0 && <p className="search-hint">{keys("Search above to see matching pages. Enter and Shift+Enter navigate individual matches.")}</p>}
     <div className="search-result-list">
       {results.map(result => <button key={result.page} aria-label={"Go to page " + result.page + ", " + result.count + " matches"} onClick={() => onSelect(result.page)}>
         <strong>Page {result.page} <span>{result.count} {result.count === 1 ? "match" : "matches"}</span></strong>

@@ -1,15 +1,15 @@
 import { _electron as electron } from "playwright-core";
-import { createRequire } from "node:module";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { electronPath } from "./electron-path.mjs";
 import { readerPage } from "./reader-page.mjs";
 const root = path.resolve(import.meta.dirname, "..");
 const shots = path.join(root, "release", "smoke-print"); mkdirSync(shots, { recursive: true });
 const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir(), "folio-print-test-")), FOLIO_TEST_HIDDEN: "1" };
 delete env.ELECTRON_RUN_AS_NODE;
-const app = await electron.launch({ executablePath: createRequire(import.meta.url)("electron"), args: [root, "--mute-audio"], env, timeout: 60000 });
+const app = await electron.launch({ executablePath: electronPath(env), args: [root, "--mute-audio"], env, timeout: 60000 });
 try {
   assert.ok(await app.evaluate(({ app }) => app.commandLine.hasSwitch("mute-audio")));
   // Intercept every printing window before its handler can call print. No printer or native dialog is invoked.

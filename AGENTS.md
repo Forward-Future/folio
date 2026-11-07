@@ -59,5 +59,7 @@ Match the surrounding code: comments explain why, not what; user-facing text is 
 `npx tsc --noEmit`, `npm run build`, and `npm run smoke` before committing.
 
 To check a change in the running app, use `npm run smoke` (extend it if it doesn't cover your change). It runs Folio
-off-screen and leaves the clipboard alone, so it doesn't interrupt whoever is using the computer. Don't open a
-visible window (`npm run app`, `electron .`, `FOLIO_SMOKE_SHOW=1`) unless the user asks to see the app.
+without a visible window (off-screen on Windows and Linux, never shown on macOS) and leaves the clipboard alone, so it
+doesn't interrupt whoever is using the computer. A new script that launches Electron gets the binary from
+`scripts/electron-path.mjs`, which keeps a hidden run out of the Dock on macOS. Don't open a visible window
+(`npm run app`, `electron .`, `FOLIO_SMOKE_SHOW=1`) unless the user asks to see the app.

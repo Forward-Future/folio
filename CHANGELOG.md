@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.16.1
+
+- In **Pages**, Ctrl-click thumbnails (⌘-click on macOS) to select pages, or Shift-click for a range. Right-click a selected thumbnail to save those pages as a new PDF.
+- In Ask AI, **New conversation** asks before it deletes the current conversation.
+- Pen strokes stay under the pointer when the page refits while you draw.
+- If you close the ChatGPT sign-in tab by mistake, choose **Open the sign-in page again** to carry on.
+- Closing a tab while its link is still opening stops it, so the next link opens right away. Large PDFs from a link now finish downloading on slower connections.
+- Keyboard shortcuts no longer act on the document behind an open dialog.
+- The list of matching pages in search marks the right words in documents that use ligatures such as “ﬁ”.
+- Accented letters, Chinese, Japanese and Korean text, and emoji stay intact in Claude's answers.
+- Opening a link never shares a client certificate from your computer with the site. On Linux without a keyring, your ChatGPT sign-in lasts until you close Folio instead of being saved unprotected.
+
 ## 1.16.0
 
 - In **Draw → Pen**, choose **Thin**, **Medium**, or **Thick**. Quick freehand strokes follow the pointer more smoothly through the end of the stroke.

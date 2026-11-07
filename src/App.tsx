@@ -13,6 +13,7 @@ import { loadPdf, copyPdfPages, thumbnailDataUrl, type PDFDocumentProxy } from "
 import { contentKey, getRecent, MAX_RECENT_FILE_BYTES, onStoredDataCleared, removeRecent, saveRecent, updateLastPage } from "./recent";
 import { readPdfBlob, readPdfResponse } from "./pdfInput";
 import { FIT_SCALES, readView, writeView, type ReadingView } from "./session";
+import { readSetting, writeSetting } from "./preferences";
 import { DocumentTabBar } from "./DocumentTabBar";
 import { trackTitlebar } from "./titlebar";
 import type { DocumentTabs, OpenSource } from "./documentTabs";
@@ -180,25 +181,22 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [textStatus, setTextStatus] = useState<string | null>(null);
-  const [scanLanguages, setScanLanguages] = useState(() => scanLanguagesFrom(localStorage.getItem("folio:scan-language")));
+  const [scanLanguages, setScanLanguages] = useState(() => scanLanguagesFrom(readSetting("folio:scan-language")));
   const [pageInput, setPageInput] = useState("1");
   const [numPages, setNumPages] = useState(0);
   const [scale, setScale] = useState(1);
-  const [wheelPaging, setWheelPaging] = useState(() => localStorage.getItem("folio:wheel-paging") === "1");
+  const [wheelPaging, setWheelPaging] = useState(() => readSetting("folio:wheel-paging") === "1");
   const wheelPagingRef = useRef(wheelPaging);
   wheelPagingRef.current = wheelPaging;
   const [rotation, setRotation] = useState(0);
-  const [sidebar, setSidebar] = useState(() => localStorage.getItem("folio:sidebar") !== "0" && window.innerWidth > 760);
+  const [sidebar, setSidebar] = useState(() => readSetting("folio:sidebar") !== "0" && window.innerWidth > 760);
   const [searchOpen, setSearchOpen] = useState(false);
   const [find, setFind] = useState<FindResult>({ current: 0, total: 0, state: null });
   const [theme, setTheme] = useState(document.documentElement.dataset.theme || "light");
-  const [spread, setSpread] = useState(() => localStorage.getItem("folio:spread") === "1");
+  const [spread, setSpread] = useState(() => readSetting("folio:spread") === "1");
   const spreadRef = useRef(spread);
   spreadRef.current = spread;
-  const [night, setNight] = useState(() => {
-    try { return localStorage.getItem("folio:night") === "1"; }
-    catch { return false; }
-  });
+  const [night, setNight] = useState(() => readSetting("folio:night") === "1");
   const [tool, setTool] = useState<Tool>("select");
   const [drawTool, setDrawTool] = useState<"Pen" | Shape>("Pen");
   const [colors, setColors] = useState<Partial<Record<Tool, string>>>({
@@ -563,15 +561,26 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       try {
         let file: { name: string; data: Uint8Array } | null;
         if (window.folioDesktop) {
-          file = await window.folioDesktop.fetchPdf(url);
+          // Closing the tab or opening something else stops the download in the desktop shell too,
+          // which otherwise keeps every other link waiting until it gives up.
+          const desktop = window.folioDesktop;
+          const request = crypto.randomUUID();
+          const stop = () => { void desktop.cancelFetchPdf(request).catch(() => {}); };
+          signal.addEventListener("abort", stop, { once: true });
+          try { file = await desktop.fetchPdf(url, request); }
+          finally { signal.removeEventListener("abort", stop); }
         } else {
           // The browser edition can only read links whose server allows cross-origin requests.
-          const transfer = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
-          const res = await fetch(url, { signal: transfer }).catch(() => {
+          // A minute to answer, and a minute for any pause after that: not a limit on the whole download.
+          const slow = new AbortController();
+          const answering = window.setTimeout(() => slow.abort(), 60_000);
+          const res = await fetch(url, { signal: AbortSignal.any([signal, slow.signal]) }).catch(() => {
             throw new Error(`Couldn't download from ${host}. The site may not allow it.`);
-          });
-          const data = await readPdfResponse(res, transfer);
-          const name = decodeURIComponent(new URL(res.url || url).pathname.split("/").filter(Boolean).pop() || host);
+          }).finally(() => window.clearTimeout(answering));
+          const data = await readPdfResponse(res, signal, undefined, 60_000);
+          const rawName = new URL(res.url || url).pathname.split("/").filter(Boolean).pop() || host;
+          let name = rawName;
+          try { name = decodeURIComponent(rawName); } catch {}
           file = { name: /\.pdf$/i.test(name) ? name : name + ".pdf", data };
         }
         if (signal.aborted) return;
@@ -630,7 +639,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     const v = viewerRef.current!;
     const next = !spread;
     setSpread(next);
-    localStorage.setItem("folio:spread", next ? "1" : "0");
+    writeSetting("folio:spread", next ? "1" : "0");
     if (!v.pdfDocument) return;
     const value = v.currentScaleValue;
     v.spreadMode = next ? SpreadMode.ODD : SpreadMode.NONE;
@@ -1053,7 +1062,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
 
   const setThemeTo = (next: "light" | "dark") => {
     document.documentElement.dataset.theme = next;
-    localStorage.setItem("folio:theme", next);
+    writeSetting("folio:theme", next);
     setTheme(next);
   };
 
@@ -1075,10 +1084,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
-  useEffect(() => localStorage.setItem("folio:sidebar", sidebar ? "1" : "0"), [sidebar]);
+  useEffect(() => { writeSetting("folio:sidebar", sidebar ? "1" : "0"); }, [sidebar]);
   const setNightTo = (next: boolean) => {
-    try { localStorage.setItem("folio:night", next ? "1" : "0"); }
-    catch { flash("PDF dark mode changed, but couldn't save the preference."); }
+    if (!writeSetting("folio:night", next ? "1" : "0")) flash("PDF dark mode changed, but couldn't save the preference.");
     setNight(next);
   };
 
@@ -1129,6 +1137,13 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         return;
       }
       if (!docRef.current) return;
+      // A dialog owns the keyboard, and closes itself on Escape. The reader's shortcuts are swallowed
+      // rather than left to act on the document behind it (or to fall through to the browser's own).
+      if (dialog || pending || imageView) {
+        const key = e.key.toLowerCase();
+        if (mod && (["f", "s", "p", "=", "+", "-", "0", "\\"].includes(key) || (!typing && (key === "z" || key === "y")))) e.preventDefault();
+        return;
+      }
 
       if (mod && !typing && Number(viewerRef.current?.annotationEditorMode) === AnnotationEditorType.NONE
         && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")) {
@@ -1170,8 +1185,6 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       } else if (e.key === "Escape") {
         if (highlightMenu) setHighlightMenu(null);
         else if (noteBox) setNoteBox(null);
-        // Each dialog's Modal closes itself on Escape (the changelog goes back to Settings); closing here too would override it.
-        else if (dialog) return;
         else if (searchOpen) setSearchOpen(false);
         else if (contentRef.current?.deselect()) return;
         else if (contentEditing || tool !== "select") void leaveEditMode();
@@ -1186,7 +1199,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         rotate();
       } else {
         const t = TOOLS.find((t) => t.key.toLowerCase() === e.key.toLowerCase());
-        if (t && !dialog && !pending && !imageView) {
+        if (t) {
           if (focus && t.id !== "select") void toggleFocus();
           chooseTool(t.id);
         }
