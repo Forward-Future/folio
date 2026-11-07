@@ -628,6 +628,10 @@ async function checkLinkHistory(app, page, shots) {
   await choose(back); await at(1);
   await choose(forward); await at(3);
   const namedBack = page.locator('.page[data-page-number="3"] .annotationLayer a');
+  // Forward changed the zoom, so page 3 is being redrawn and its links are hidden until that finishes. A click
+  // that starts before then fails its first attempt, and Playwright's retry scrolls the link to the bottom of
+  // the window, where page 2 fills more of the view than page 3. Back then records page 2, not page 3.
+  await namedBack.waitFor();
   await namedBack.click(); await at(1);
   await page.locator('.page[data-page-number="1"] .annotationLayer a').nth(2).click(); await at(3);
   await choose(back); await at(1);
