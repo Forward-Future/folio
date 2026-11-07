@@ -5,6 +5,7 @@ import type { PDFDocumentProxy } from "./pdf";
 import type { EventBus, PDFViewer } from "./viewer";
 import type { Change, EditorReply, EditorRequest, EditTarget } from "./contentEditor.worker";
 import type { PdfChange } from "./versionHistory";
+import { hasRightToLeft, RIGHT_TO_LEFT_MESSAGE } from "./textDirection";
 
 export interface ContentEditorHandle { finish: () => Promise<boolean>; deselect: () => boolean }
 interface Surface { page: number; host: HTMLDivElement; viewport: PageViewport }
@@ -158,6 +159,11 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
 
   const pick = (s: Surface, target: EditTarget) => {
     if (pending.current) return;
+    // Opening right-to-left text in the editor would show it reversed and then refuse every change.
+    if (target.kind === "text" && hasRightToLeft(target.label)) {
+      selectedRef.current = null; setSelected(null); setError(RIGHT_TO_LEFT_MESSAGE);
+      return;
+    }
     setError(""); setValue(target.label); setSelected({ page: s.page, target, paper: target.style ? paperColor(s,target) : "" });
     if (!target.style) return;
     // Use the same embedded or system font as the page renderer while the caret is visible.
@@ -195,11 +201,18 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
   }, [selected, value]);
+  useEffect(() => {
+    if (selected || error !== RIGHT_TO_LEFT_MESSAGE) return;
+    const clear = () => setError("");
+    document.addEventListener("pointerdown", clear);
+    return () => document.removeEventListener("pointerdown", clear);
+  }, [selected, error]);
 
   return <>
     {surfaces.map(s => createPortal(<>
       {(targets.get(s.page) ?? []).map(t => <button key={t.index} type="button" className="folio-content-target"
-        data-kind={t.kind} aria-label={t.label} aria-pressed={selected?.page === s.page && selected.target === t}
+        data-kind={t.kind} data-locked={t.kind === "text" && hasRightToLeft(t.label) ? "" : undefined}
+        aria-label={t.label} aria-pressed={selected?.page === s.page && selected.target === t}
         disabled={busy} style={rectangle(t,s.viewport)} onClick={() => pick(s,t)}
         onPointerDown={e => {
           if (!modified || e.button !== 0) return;
