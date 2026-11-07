@@ -1138,6 +1138,13 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         return;
       }
       if (!docRef.current) return;
+      // A dialog owns the keyboard, and closes itself on Escape. The reader's shortcuts are swallowed
+      // rather than left to act on the document behind it (or to fall through to the browser's own).
+      if (dialog || pending || imageView) {
+        const key = e.key.toLowerCase();
+        if (mod && (["f", "s", "p", "=", "+", "-", "0", "\\"].includes(key) || (!typing && (key === "z" || key === "y")))) e.preventDefault();
+        return;
+      }
 
       if (mod && !typing && Number(viewerRef.current?.annotationEditorMode) === AnnotationEditorType.NONE
         && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")) {
@@ -1179,8 +1186,6 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       } else if (e.key === "Escape") {
         if (highlightMenu) setHighlightMenu(null);
         else if (noteBox) setNoteBox(null);
-        // Each dialog's Modal closes itself on Escape (the changelog goes back to Settings); closing here too would override it.
-        else if (dialog) return;
         else if (searchOpen) setSearchOpen(false);
         else if (contentRef.current?.deselect()) return;
         else if (contentEditing || tool !== "select") void leaveEditMode();
@@ -1195,7 +1200,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         rotate();
       } else {
         const t = TOOLS.find((t) => t.key.toLowerCase() === e.key.toLowerCase());
-        if (t && !dialog && !pending && !imageView) {
+        if (t) {
           if (focus && t.id !== "select") void toggleFocus();
           chooseTool(t.id);
         }

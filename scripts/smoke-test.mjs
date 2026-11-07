@@ -98,6 +98,23 @@ try {
   assert.deepEqual((await quoted.allTextContents()).map((text) => text.toLowerCase()), ["highlight", "highlight", "highlight"]);
   await page.getByLabel("Find in document").press("Escape");
   console.log("ok  search results mark the words that were searched for");
+
+  // A dialog keeps the keyboard: the reader's one-key shortcuts don't act on the document behind it.
+  const layout = () => page.evaluate(() => {
+    const box = document.querySelector(".pdfViewer .page").getBoundingClientRect();
+    return { upright: box.height > box.width, spreads: document.querySelectorAll(".pdfViewer .spread").length };
+  });
+  const before = await layout();
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: "About Folio" }).click();
+  await page.getByRole("dialog", { name: "About Folio" }).waitFor();
+  await page.keyboard.press("r");
+  await page.keyboard.press("2");
+  await page.waitForTimeout(200);
+  assert.deepEqual(await layout(), before, "a shortcut reached the document behind the About dialog");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  console.log("ok  shortcuts wait while a dialog is open");
   await checkOpenRouter(app, page);
 
   const toolbar = page.getByRole("toolbar", { name: "Tools" });
