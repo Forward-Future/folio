@@ -54,6 +54,20 @@ test("a local-only guard refuses a name that moves to a public address", async (
   } finally { guard.close(); }
 });
 
+test("a local-only guard refuses a name with any public address, even an approved one", async () => {
+  const url = new URL("http://mixed.corp.test:8000/v1/models");
+  const approved = await resolveDestination(url, resolver("10.0.0.5", "8.8.8.8"));
+  assert.equal(approved.local, true);
+  assert.equal(approved.allLocal, false);
+  const session = { ...resolver("10.0.0.5", "8.8.8.8"), setProxy: async () => {},
+    webRequest: { onBeforeRequest: fn => { session.authorize = url => new Promise(resolve => fn({ url: url.href }, resolve)); } } };
+  const guard = await guardSession(session, { resolveProxy: async () => "DIRECT" }, approved, new EventEmitter(), { localOnly: true });
+  try {
+    assert.deepEqual(await session.authorize(url), { cancel: true });
+    assert.equal(guard.refusedPublic(), true);
+  } finally { guard.close(); }
+});
+
 test("the system proxy gets a pinned numeric CONNECT; Chromium's tunnel stays transparent", { timeout: 5000 }, async () => {
   // Simulate an upstream HTTP proxy without contacting any non-loopback destination.
   const upstream = http.createServer();

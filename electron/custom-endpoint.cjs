@@ -116,16 +116,24 @@ function createCustomEndpoint({ fetch, resolve, confirmLocal, safeStorage, file,
       const url = new URL(baseUrl);
       let destination;
       try { destination = await resolve(url); } catch { throw new Error(`Couldn't find ${url.host}. Check the address.`); }
-      if (url.protocol === "http:" && !destination.local) throw new Error(HTTPS_ONLY);
+      if (url.protocol === "http:" && !destination.allLocal) throw new Error(HTTPS_ONLY);
       // Nothing is sent to a local address until the person agrees, in the same prompt Folio uses for links.
       if (destination.local && !(await confirmLocal(url, destination.addresses))) throw new Error(`Folio didn't connect to ${url.host}.`);
       const local = destination.local ? { origin: destination.origin, addresses: destination.addresses } : null;
       await listModels({ baseUrl, key, local });
+      let previousKey = null;
+      try { previousKey = fs.readFileSync(file(KEY_FILE)); } catch {}
       try {
         if (key) writeAtomic(KEY_FILE, await safeStorage.encryptStringAsync(key));
         else fs.rmSync(file(KEY_FILE), { force: true });
         writeAtomic(CONFIG_FILE, JSON.stringify({ baseUrl, hasKey: !!key, local }));
-      } catch { throw new Error("Couldn't save the endpoint securely. Check your system key store and try again."); }
+      } catch {
+        // The key and the address are two files. If only the key changed, put the old one back, so the saved
+        // address is never sent another server's key. If that fails too, remove the key rather than mismatch them.
+        try { if (previousKey) writeAtomic(KEY_FILE, previousKey); else fs.rmSync(file(KEY_FILE), { force: true }); }
+        catch { try { fs.rmSync(file(KEY_FILE), { force: true }); } catch {} }
+        throw new Error("Couldn't save the endpoint securely. Check your system key store and try again.");
+      }
     }),
     remove: () => change(() => {
       fs.rmSync(file(CONFIG_FILE), { force: true });

@@ -10,12 +10,14 @@ const base = "https://llm.example.test/v1";
 const question = { model: "sample-model", document: { name: "Example.pdf", text: "[Page 1] A sample", truncated: false },
   messages: [{ role: "user", content: "What is the topic?" }] };
 // Public names resolve to a public address; "localhost", "*.lan" and 192.168.* count as local, as network.cjs decides.
+// mixed.lan resolves to one local and one public address.
 function destination(url) {
   const host = url.hostname.replace(/^\[|\]$/g, "");
   if (host === "missing.example.test") throw new Error("not found");
+  if (host === "mixed.lan") return { origin: url.origin, addresses: ["192.168.1.20", "93.184.216.34"], local: true, allLocal: false };
   const local = host === "localhost" || host.endsWith(".lan") || host.startsWith("192.168.") || host === "::1" || host.startsWith("127.");
   const addresses = local ? [host === "localhost" ? "127.0.0.1" : host.endsWith(".lan") ? "192.168.1.20" : host] : ["93.184.216.34"];
-  return { origin: url.origin, addresses, local };
+  return { origin: url.origin, addresses, local, allLocal: local };
 }
 
 function fixture(t) {
@@ -27,11 +29,12 @@ function fixture(t) {
     decryptStringAsync: async bytes => ({ result: bytes.map(b => b ^ 128).toString() }) };
   const calls = [], asked = [];
   const net = { fetch: async (url, options) => Response.json({ data: [{ id: "sample-model" }] }), answer: true };
-  const endpoint = createCustomEndpoint({ safeStorage, file, writeAtomic: (name, bytes) => fs.writeFileSync(file(name), bytes),
+  const writes = { writeAtomic: (name, bytes) => fs.writeFileSync(file(name), bytes) };
+  const endpoint = createCustomEndpoint({ safeStorage, file, writeAtomic: (name, bytes) => writes.writeAtomic(name, bytes),
     resolve: async url => destination(url),
     confirmLocal: async (url, addresses) => { asked.push({ host: url.host, addresses }); return net.answer; },
     fetch: async (url, options, approvedLocal) => { calls.push({ url, options, approvedLocal }); return net.fetch(url, options, approvedLocal); } });
-  return { endpoint, calls, asked, net, safeStorage, file };
+  return { endpoint, calls, asked, net, safeStorage, file, writes };
 }
 
 function stream(...pieces) {
@@ -54,6 +57,8 @@ test("addresses are plain http or https, without credentials, queries or fragmen
 test("plain http is refused unless the address resolves to this computer or the local network", async t => {
   const { endpoint, calls, asked } = fixture(t);
   await assert.rejects(endpoint.save({ baseUrl: "http://api.example.com/v1", key }), /Use an https:\/\/ address/);
+  // Every address must be local: a name with one local and one public address isn't.
+  await assert.rejects(endpoint.save({ baseUrl: "http://mixed.lan:8000/v1", key }), /Use an https:\/\/ address/);
   await assert.rejects(endpoint.save({ baseUrl: "https://missing.example.test/v1", key }), /Couldn't find missing\.example\.test/);
   assert.equal(calls.length, 0);
   assert.equal(asked.length, 0);
@@ -94,7 +99,7 @@ test("a local address is confirmed before anything is sent, and only the approve
 });
 
 test("setup checks the server before saving, encrypts the key, and keyless servers work without one", async t => {
-  const { endpoint, calls, net, safeStorage, file } = fixture(t);
+  const { endpoint, calls, net, safeStorage, file, writes } = fixture(t);
   assert.deepEqual(endpoint.status(), { configured: false, baseUrl: "", hasKey: false });
   await endpoint.save({ baseUrl: base + "/", key });
   assert.deepEqual(endpoint.status(), { configured: true, baseUrl: base, hasKey: true });
@@ -112,6 +117,17 @@ test("setup checks the server before saving, encrypts the key, and keyless serve
   net.fetch = async () => Response.json({ error: { message: "bad key" } }, { status: 401 });
   await assert.rejects(endpoint.save({ baseUrl: base, key: "another-fake-key" }), /llm\.example\.test rejected this key/);
   assert.deepEqual(fs.readFileSync(file("custom-endpoint-key.bin")), saved);
+  // If the address can't be written after the new key was, the old key comes back: it's never paired with another server.
+  net.fetch = async () => Response.json({ data: [{ id: "sample-model" }] });
+  const { writeAtomic } = writes;
+  writes.writeAtomic = (name, bytes) => { if (name === "custom-endpoint.json") throw new Error("disk full"); writeAtomic(name, bytes); };
+  await assert.rejects(endpoint.save({ baseUrl: "https://other.example.test/v1", key: "another-fake-key" }), /Couldn't save the endpoint securely/);
+  writes.writeAtomic = writeAtomic;
+  assert.deepEqual(fs.readFileSync(file("custom-endpoint-key.bin")), saved);
+  assert.equal(endpoint.status().baseUrl, base);
+  await endpoint.check();
+  assert.equal(calls.at(-1).url, base + "/models");
+  assert.equal(calls.at(-1).options.headers.Authorization, "Bearer " + key);
   // A key never goes in plain text, but a keyless server needs no key store.
   safeStorage.isAsyncEncryptionAvailable = async () => false;
   await assert.rejects(endpoint.save({ baseUrl: base, key }), /system key store/);
