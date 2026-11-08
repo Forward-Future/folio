@@ -561,7 +561,7 @@ if (!app.requestSingleInstanceLock()) {
       if (isTrustedSender(event)) listener(event, ...args);
     });
 
-    ai.register(handle, (channel, payload) => win?.webContents.send(channel, payload));
+    ai.register(handle, (channel, payload) => win?.webContents.send(channel, payload), { confirmLocal: (url, addresses) => confirmLocalAddress(url, addresses) });
     registerPrinting(handle, () => win);
 
     handle("folio:ready", () => {

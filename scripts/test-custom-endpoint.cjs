@@ -9,6 +9,15 @@ const key = "test-only-example-key";
 const base = "https://llm.example.test/v1";
 const question = { model: "sample-model", document: { name: "Example.pdf", text: "[Page 1] A sample", truncated: false },
   messages: [{ role: "user", content: "What is the topic?" }] };
+// Public names resolve to a public address; "localhost", "*.lan" and 192.168.* count as local, as network.cjs decides.
+function destination(url) {
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (host === "missing.example.test") throw new Error("not found");
+  const local = host === "localhost" || host.endsWith(".lan") || host.startsWith("192.168.") || host === "::1" || host.startsWith("127.");
+  const addresses = local ? [host === "localhost" ? "127.0.0.1" : host.endsWith(".lan") ? "192.168.1.20" : host] : ["93.184.216.34"];
+  return { origin: url.origin, addresses, local };
+}
+
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "folio-test-endpoint-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -16,13 +25,13 @@ function fixture(t) {
   const safeStorage = { isAsyncEncryptionAvailable: async () => true, getSelectedStorageBackend: () => "gnome_libsecret",
     encryptStringAsync: async value => Buffer.from(value).map(b => b ^ 128),
     decryptStringAsync: async bytes => ({ result: bytes.map(b => b ^ 128).toString() }) };
-  const calls = [];
-  const net = { fetch: async (url, options) => {
-    calls.push({ url, options });
-    return Response.json({ data: [{ id: "sample-model" }] });
-  } };
-  return { endpoint: createCustomEndpoint({ safeStorage, net, file, writeAtomic: (name, bytes) => fs.writeFileSync(file(name), bytes) }),
-    calls, net, safeStorage, file };
+  const calls = [], asked = [];
+  const net = { fetch: async (url, options) => Response.json({ data: [{ id: "sample-model" }] }), answer: true };
+  const endpoint = createCustomEndpoint({ safeStorage, file, writeAtomic: (name, bytes) => fs.writeFileSync(file(name), bytes),
+    resolve: async url => destination(url),
+    confirmLocal: async (url, addresses) => { asked.push({ host: url.host, addresses }); return net.answer; },
+    fetch: async (url, options, approvedLocal) => { calls.push({ url, options, approvedLocal }); return net.fetch(url, options, approvedLocal); } });
+  return { endpoint, calls, asked, net, safeStorage, file };
 }
 
 function stream(...pieces) {
@@ -32,23 +41,58 @@ function stream(...pieces) {
   } }));
 }
 
-test("addresses need https, except for this computer and the local network", () => {
+test("addresses are plain http or https, without credentials, queries or fragments", () => {
   assert.equal(endpointAddress(" https://api.example.com/v1/ "), "https://api.example.com/v1");
   assert.equal(endpointAddress("http://localhost:11434/v1"), "http://localhost:11434/v1");
-  assert.equal(endpointAddress("http://127.0.0.1:1234/v1"), "http://127.0.0.1:1234/v1");
-  assert.equal(endpointAddress("http://192.168.1.20:8080/v1"), "http://192.168.1.20:8080/v1");
   assert.equal(endpointAddress("http://[::1]:11434/v1"), "http://[::1]:11434/v1");
-  for (const rejected of ["http://api.example.com/v1", "http://8.8.8.8/v1", "ftp://example.com", "https://user:pass@example.com/v1",
+  for (const rejected of ["ftp://example.com", "file:///etc/passwd", "https://user:pass@example.com/v1",
     "https://example.com/v1?key=1", "https://example.com/v1#x", "not a url", "", 42, "https://" + "a".repeat(520) + ".com"]) {
     assert.equal(endpointAddress(rejected), null, String(rejected));
   }
 });
 
+test("plain http is refused unless the address resolves to this computer or the local network", async t => {
+  const { endpoint, calls, asked } = fixture(t);
+  await assert.rejects(endpoint.save({ baseUrl: "http://api.example.com/v1", key }), /Use an https:\/\/ address/);
+  await assert.rejects(endpoint.save({ baseUrl: "https://missing.example.test/v1", key }), /Couldn't find missing\.example\.test/);
+  assert.equal(calls.length, 0);
+  assert.equal(asked.length, 0);
+  assert.equal(endpoint.status().configured, false);
+});
+
+test("a local address is confirmed before anything is sent, and only the approved addresses are used", async t => {
+  const { endpoint, calls, asked, net, file } = fixture(t);
+  net.answer = false;
+  await assert.rejects(endpoint.save({ baseUrl: "http://ollama.lan:11434/v1", key: "" }), /didn't connect to ollama\.lan:11434/);
+  assert.deepEqual(asked, [{ host: "ollama.lan:11434", addresses: ["192.168.1.20"] }]);
+  assert.equal(calls.length, 0, "nothing is sent when the person declines");
+  assert.equal(endpoint.status().configured, false);
+  net.answer = true;
+  await endpoint.save({ baseUrl: "http://ollama.lan:11434/v1", key: "" });
+  const approved = { origin: "http://ollama.lan:11434", addresses: ["192.168.1.20"] };
+  assert.deepEqual(calls.map(c => c.approvedLocal), [approved]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file("custom-endpoint.json"), "utf8")).local, approved);
+  await endpoint.models();
+  assert.deepEqual(calls.at(-1).approvedLocal, approved, "later requests carry the same approval");
+  assert.equal(asked.length, 2, "approval is asked once per connection, not per request");
+  // A public https endpoint never carries a local approval.
+  await endpoint.save({ baseUrl: base, key });
+  assert.equal(calls.at(-1).approvedLocal, null);
+  assert.equal(asked.length, 2);
+  // If the guard refuses an address that wasn't approved, say so instead of "couldn't reach".
+  net.fetch = async () => { throw Object.assign(new Error("refused"), { code: "local_refused" }); };
+  await assert.rejects(endpoint.models(), /haven't approved\. Connect it again in Settings/);
+  // A saved http address without an approval (hand-edited) isn't trusted.
+  fs.writeFileSync(file("custom-endpoint.json"), JSON.stringify({ baseUrl: "http://ollama.lan:11434/v1", hasKey: false, local: null }));
+  assert.equal(endpoint.status().configured, false);
+  fs.writeFileSync(file("custom-endpoint.json"), JSON.stringify({ baseUrl: "http://ollama.lan:11434/v1", hasKey: false,
+    local: { origin: "http://other.lan:11434", addresses: ["192.168.1.20"] } }));
+  assert.equal(endpoint.status().configured, false);
+});
+
 test("setup checks the server before saving, encrypts the key, and keyless servers work without one", async t => {
   const { endpoint, calls, net, safeStorage, file } = fixture(t);
   assert.deepEqual(endpoint.status(), { configured: false, baseUrl: "", hasKey: false });
-  await assert.rejects(endpoint.save({ baseUrl: "http://api.example.com/v1", key }), /https/);
-  assert.equal(calls.length, 0);
   await endpoint.save({ baseUrl: base + "/", key });
   assert.deepEqual(endpoint.status(), { configured: true, baseUrl: base, hasKey: true });
   assert.equal(fs.readFileSync(file("custom-endpoint-key.bin")).includes(key), false);
@@ -68,7 +112,7 @@ test("setup checks the server before saving, encrypts the key, and keyless serve
   // A key never goes in plain text, but a keyless server needs no key store.
   safeStorage.isAsyncEncryptionAvailable = async () => false;
   await assert.rejects(endpoint.save({ baseUrl: base, key }), /system key store/);
-  net.fetch = async (url, options) => { calls.push({ url, options }); return Response.json({ data: [] }); };
+  net.fetch = async () => Response.json({ data: [] });
   await endpoint.save({ baseUrl: "http://localhost:11434/v1", key: "" });
   assert.deepEqual(endpoint.status(), { configured: true, baseUrl: "http://localhost:11434/v1", hasKey: false });
   assert.equal(fs.existsSync(file("custom-endpoint-key.bin")), false);

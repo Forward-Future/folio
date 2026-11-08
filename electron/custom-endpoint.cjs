@@ -1,35 +1,51 @@
 // Any server that speaks the OpenAI-style Chat Completions API: a hosted provider, a company gateway,
 // or a model running on this computer (Ollama, LM Studio, llama.cpp). The person enters its address,
 // an optional key, and a model ID. Folio talks only to that address.
+//
+// The address must use https, except on this computer or the local network. Folio asks before it
+// connects to a local address, and requests can only reach the local addresses the person approved
+// (main.cjs passes a fetch that runs through network.cjs's guarded session).
 const fs = require("node:fs");
-const net = require("node:net");
 const { chatRequest } = require("./ai-prompt.cjs");
-const { isLocalAddress } = require("./network.cjs");
 const { providerError, readAnswer, secureStorageAvailable, serial } = require("./chat-completions.cjs");
 
 const CONFIG_FILE = "custom-endpoint.json";
 const KEY_FILE = "custom-endpoint-key.bin";
 const validModel = (id) => typeof id === "string" && /^[\x21-\x7e]{1,256}$/.test(id);
 const validKey = (key) => /^[\x21-\x7e]{1,1024}$/.test(key);
+const HTTPS_ONLY = "Use an https:// address. Plain http works only for this computer or your local network.";
 
-/** The address as Folio stores it, or null. Plain http is only for this computer or the local network. */
+/** The address as Folio stores it, or null. Whether plain http is allowed depends on where it resolves. */
 function endpointAddress(input) {
   if (typeof input !== "string" || input.trim().length > 512) return null;
   let url;
   try { url = new URL(input.trim()); } catch { return null; }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
   if (url.username || url.password || url.search || url.hash) return null;
-  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  const local = host === "localhost" || host.endsWith(".localhost") || (net.isIP(host) !== 0 && isLocalAddress(host));
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) return null;
   return url.origin + url.pathname.replace(/\/+$/, "");
 }
 
-function createCustomEndpoint({ net: electronNet, safeStorage, file, writeAtomic }) {
+/** A saved local approval: the origin and the resolved addresses the person agreed to. */
+function validApproval(local, baseUrl) {
+  return local === null || (typeof local?.origin === "string" && local.origin === new URL(baseUrl).origin
+    && Array.isArray(local.addresses) && local.addresses.length > 0 && local.addresses.length <= 64
+    && local.addresses.every((a) => typeof a === "string" && a.length <= 64));
+}
+
+/**
+ * `fetch(url, options, approvedLocal)` makes the request, reaching a local address only if it is in
+ * `approvedLocal`. `resolve(url)` returns { origin, addresses, local }. `confirmLocal(url, addresses)`
+ * asks the person and resolves to true if they allow it.
+ */
+function createCustomEndpoint({ fetch, resolve, confirmLocal, safeStorage, file, writeAtomic }) {
   function config() {
     try {
       const saved = JSON.parse(fs.readFileSync(file(CONFIG_FILE), "utf8"));
       const baseUrl = endpointAddress(saved?.baseUrl);
-      return baseUrl ? { baseUrl, hasKey: saved.hasKey === true } : null;
+      const local = saved?.local ?? null;
+      if (!baseUrl || !validApproval(local, baseUrl)) return null;
+      if (baseUrl.startsWith("http:") && !local) return null;
+      return { baseUrl, hasKey: saved.hasKey === true, local };
     } catch { return null; }
   }
   const status = () => {
@@ -41,27 +57,27 @@ function createCustomEndpoint({ net: electronNet, safeStorage, file, writeAtomic
   async function connection() {
     const saved = config();
     if (!saved) throw new Error("Connect a custom endpoint in Settings.");
-    if (!saved.hasKey) return { baseUrl: saved.baseUrl, key: "" };
+    if (!saved.hasKey) return { baseUrl: saved.baseUrl, key: "", local: saved.local };
     try {
       const { result } = await safeStorage.decryptStringAsync(fs.readFileSync(file(KEY_FILE)));
-      return { baseUrl: saved.baseUrl, key: result };
+      return { baseUrl: saved.baseUrl, key: result, local: saved.local };
     } catch { throw new Error("Couldn't unlock the endpoint's key. Unlock your system key store or enter the key again in Settings."); }
   }
 
-  async function request({ baseUrl, key }, endpoint, options = {}) {
-    const name = nameOf(baseUrl);
-    let response;
+  async function request({ baseUrl, key, local }, endpoint, options = {}) {
     try {
-      response = await electronNet.fetch(baseUrl + endpoint, {
+      return await fetch(baseUrl + endpoint, {
         ...options, signal: options.signal || AbortSignal.timeout(20_000), credentials: "omit", redirect: "error", referrerPolicy: "no-referrer",
         headers: { Accept: options.body ? "text/event-stream" : "application/json", ...(key ? { Authorization: "Bearer " + key } : {}),
           ...(options.body ? { "Content-Type": "application/json" } : {}) },
-      });
+      }, local);
     } catch (error) {
       if (options.signal?.aborted) throw error;
-      throw new Error(`Couldn't reach ${name}. Check the address and your connection, and that the server is running.`);
+      if (error?.code === "local_refused") {
+        throw new Error(`${nameOf(baseUrl)} now leads to an address on this computer or your network that you haven't approved. Connect it again in Settings.`);
+      }
+      throw new Error(`Couldn't reach ${nameOf(baseUrl)}. Check the address and your connection, and that the server is running.`);
     }
-    return response;
   }
   async function failure(name, response) {
     const body = await response.json().catch(() => ({}));
@@ -71,7 +87,7 @@ function createCustomEndpoint({ net: electronNet, safeStorage, file, writeAtomic
   /** Lists the server's models. Servers without a model list still work with a typed model ID. */
   async function listModels(endpoint) {
     const response = await request(endpoint, "/models");
-    if (response.status === 404 || response.status === 405) return [];
+    if (response.status === 404 || response.status === 405) { await response.body?.cancel().catch(() => {}); return []; }
     if (!response.ok) throw await failure(nameOf(endpoint.baseUrl), response);
     const data = (await response.json().catch(() => null))?.data;
     if (!Array.isArray(data)) return [];
@@ -87,15 +103,22 @@ function createCustomEndpoint({ net: electronNet, safeStorage, file, writeAtomic
     check: async () => { await listModels(await connection()); },
     save: (input) => change(async () => {
       const baseUrl = endpointAddress(input?.baseUrl);
-      if (!baseUrl) throw new Error("Enter the endpoint's address, such as https://api.example.com/v1. Plain http works only for this computer or your local network.");
+      if (!baseUrl) throw new Error("Enter the endpoint's address, such as https://api.example.com/v1.");
       const key = typeof input?.key === "string" ? input.key.trim() : "";
       if (key && !validKey(key)) throw new Error("Enter a valid API key, or leave it empty if the server doesn't need one.");
       if (key && !(await secureStorageAvailable(safeStorage))) throw new Error("Unlock or enable your system key store to save an API key.");
-      await listModels({ baseUrl, key });
+      const url = new URL(baseUrl);
+      let destination;
+      try { destination = await resolve(url); } catch { throw new Error(`Couldn't find ${url.host}. Check the address.`); }
+      if (url.protocol === "http:" && !destination.local) throw new Error(HTTPS_ONLY);
+      // Nothing is sent to a local address until the person agrees, in the same prompt Folio uses for links.
+      if (destination.local && !(await confirmLocal(url, destination.addresses))) throw new Error(`Folio didn't connect to ${url.host}.`);
+      const local = destination.local ? { origin: destination.origin, addresses: destination.addresses } : null;
+      await listModels({ baseUrl, key, local });
       try {
         if (key) writeAtomic(KEY_FILE, await safeStorage.encryptStringAsync(key));
         else fs.rmSync(file(KEY_FILE), { force: true });
-        writeAtomic(CONFIG_FILE, JSON.stringify({ baseUrl, hasKey: !!key }));
+        writeAtomic(CONFIG_FILE, JSON.stringify({ baseUrl, hasKey: !!key, local }));
       } catch { throw new Error("Couldn't save the endpoint securely. Check your system key store and try again."); }
     }),
     remove: () => change(() => {

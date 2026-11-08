@@ -30,7 +30,8 @@ export function CustomEndpointSettings({ ai, status, onStatus }: { ai: FolioAi; 
   };
   return <div className="router-settings">
     <p className="settings-hint">Use any server that accepts OpenAI-style Chat Completions: a provider's API, a company gateway, or a model running on
-      this computer. When you ask, that server receives the text you ask about and the conversation. Its own terms and billing apply.</p>
+      this computer. Addresses must use https, except on this computer or your local network, where Folio asks first. When you ask, that
+      server receives the text you ask about and the conversation. Its own terms and billing apply.</p>
     {status.configured && !editing ? <div className="settings-row">
       <div className="settings-label"><span>Endpoint</span><small title={status.baseUrl}>{status.baseUrl}{status.hasKey ? " · key stored securely on this device" : ""}</small></div>
       <button className="link small" disabled={busy} onClick={() => { setEditing(true); setNotice(""); setError(""); }}>Change endpoint</button>

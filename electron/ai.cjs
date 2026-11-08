@@ -6,7 +6,7 @@
 // - Claude: the person's own, unmodified Claude Code CLI, signed in with their Claude subscription
 //   through Anthropic's own flow. Folio never sees or stores Claude credentials; it runs `claude -p`
 //   with every tool disabled and reads the streamed answer.
-const { app, net, safeStorage, shell } = require("electron");
+const { app, net, safeStorage, session: sessions, shell } = require("electron");
 const { spawn, execFile } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -16,6 +16,7 @@ const path = require("node:path");
 const { chatRequest, claudePrompt } = require("./ai-prompt.cjs");
 const { createOpenRouter } = require("./openrouter.cjs");
 const { createCustomEndpoint } = require("./custom-endpoint.cjs");
+const { guardSession, resolveDestination } = require("./network.cjs");
 const { claudeChildPath, findClaude: lookUpClaude } = require("./claude-path.cjs");
 
 const AUTH_ISSUER = "https://auth.openai.com";
@@ -30,13 +31,43 @@ const REFRESH_FAILURES = new Set(["invalid_grant", "invalid_refresh_token", "tok
 const dir = () => path.join(app.getPath("userData"), "ai");
 const file = (name) => path.join(dir(), name);
 const openRouter = createOpenRouter({ net, safeStorage, file, writeAtomic });
-const customEndpoint = createCustomEndpoint({ net, safeStorage, file, writeAtomic });
+// Set by register(): main.cjs owns the window, so it shows the local-address question.
+let confirmLocalAddress = async () => false;
+const customEndpoint = createCustomEndpoint({ fetch: endpointFetch, resolve: (url) => resolveDestination(url, sessions.defaultSession),
+  confirmLocal: (url, addresses) => confirmLocalAddress(url, addresses), safeStorage, file, writeAtomic });
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
 function writeAtomic(name, contents) {
   fs.mkdirSync(dir(), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file(name) + ".tmp", contents, { mode: 0o600 });
   fs.renameSync(file(name) + ".tmp", file(name));
+}
+
+// ── Custom endpoints ───────────────────────────────────────────────────────────────────────
+// Each request gets its own in-memory session behind network.cjs's guard, the one URL downloads use: Folio connects
+// to the addresses it resolved itself, and reaches this computer or the local network only at the origin and
+// addresses the person approved. The guard closes once the answer has been read.
+async function endpointFetch(url, options, approvedLocal) {
+  const ses = sessions.fromPartition(`folio-endpoint-${crypto.randomUUID()}`); // in-memory only
+  const guard = await guardSession(ses, sessions.defaultSession, approvedLocal, app);
+  let response;
+  try { response = await ses.fetch(url, options); }
+  catch (error) {
+    guard.close();
+    throw guard.refusedLocal() ? Object.assign(new Error("Local address not approved"), { code: "local_refused" }) : error;
+  }
+  if (!response.body) { guard.close(); return response; }
+  const reader = response.body.getReader();
+  const body = new ReadableStream({
+    async pull(controller) {
+      try {
+        const { value, done } = await reader.read();
+        if (done) { guard.close(); controller.close(); } else controller.enqueue(value);
+      } catch (error) { guard.close(); controller.error(error); }
+    },
+    cancel(reason) { guard.close(); return reader.cancel(reason); },
+  });
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 // ── ChatGPT credentials (encrypted with Windows' per-user data protection) ──────────────────
@@ -522,7 +553,8 @@ function validRequest(req) {
 
 const MAX_ACTIVE = 2;
 
-function register(handle, send) {
+function register(handle, send, { confirmLocal } = {}) {
+  if (confirmLocal) confirmLocalAddress = confirmLocal;
   cleanStaleClaudeFolders();
   handle("folio:ai-status", async () => ({ chatgpt: await chatgptStatus(), claude: await claudeStatus(), openrouter: openRouter.status(),
     custom: customEndpoint.status() }));
