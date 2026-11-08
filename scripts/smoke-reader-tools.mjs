@@ -744,7 +744,10 @@ async function checkOrganizePages(app, page, folder, shots) {
   await thumb(2).click();
   await page.keyboard.press("Backspace");
   assert.deepEqual(await shown(), [1, 3, 4]);
-  await thumb(4).dragTo(thumb(1));
+  // Dragging is covered by the reorder check; dragging here hangs Playwright on Windows CI.
+  await thumb(4).click();
+  await organizer.getByLabel("Move page 4 to").fill("1");
+  await organizer.getByRole("button", { name: "Move", exact: true }).click();
   assert.deepEqual(await shown(), [4, 1, 3]);
 
   const file = path.join(folder, "organized.pdf");
