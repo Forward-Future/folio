@@ -3,8 +3,9 @@
 // an optional key, and a model ID. Folio talks only to that address.
 //
 // The address must use https, except on this computer or the local network. Folio asks before it
-// connects to a local address, and requests can only reach the local addresses the person approved
-// (main.cjs passes a fetch that runs through network.cjs's guarded session).
+// connects to a local address, requests can only reach the local addresses the person approved, and a
+// plain http address never reaches a public one (ai.cjs passes a fetch that runs through network.cjs's
+// guarded session).
 const fs = require("node:fs");
 const { chatRequest } = require("./ai-prompt.cjs");
 const { providerError, readAnswer, secureStorageAvailable, serial } = require("./chat-completions.cjs");
@@ -76,11 +77,16 @@ function createCustomEndpoint({ fetch, resolve, confirmLocal, safeStorage, file,
       if (error?.code === "local_refused") {
         throw new Error(`${nameOf(baseUrl)} now leads to an address on this computer or your network that you haven't approved. Connect it again in Settings.`);
       }
+      if (error?.code === "public_refused") {
+        throw new Error(`${nameOf(baseUrl)} now leads to an address outside this computer and your local network, so Folio sent nothing over plain http. Check your network, or use an https:// address.`);
+      }
       throw new Error(`Couldn't reach ${nameOf(baseUrl)}. Check the address and your connection, and that the server is running.`);
     }
   }
   async function failure(name, response) {
     const body = await response.json().catch(() => ({}));
+    // A 404 without an API error usually means the base URL is wrong, not the model (for example a missing /v1).
+    if (response.status === 404 && !body?.error) return new Error(`${name} has no Chat Completions API at this address. Check the base URL in Settings; many end in /v1.`);
     return providerError(name, response.status, body?.error ?? {});
   }
 
@@ -134,9 +140,15 @@ function createCustomEndpoint({ fetch, resolve, confirmLocal, safeStorage, file,
       const { instructions, input } = chatRequest(model, passage
         ? { name: document.name, text: `[Page ${passage.page}]\n${passage.text}`, truncated: true } : document, messages);
       const body = JSON.stringify({ model, messages: [{ role: "system", content: instructions }, ...input], stream: true });
-      const response = await request(endpoint, "/chat/completions", { method: "POST", body, signal: AbortSignal.any([signal, AbortSignal.timeout(5 * 60_000)]) });
-      if (!response.ok) throw await failure(nameOf(endpoint.baseUrl), response);
-      await readAnswer(nameOf(endpoint.baseUrl), response, emit);
+      const name = nameOf(endpoint.baseUrl), timer = AbortSignal.timeout(5 * 60_000);
+      try {
+        const response = await request(endpoint, "/chat/completions", { method: "POST", body, signal: AbortSignal.any([signal, timer]) });
+        if (!response.ok) throw await failure(name, response);
+        await readAnswer(name, response, emit);
+      } catch (error) {
+        if (timer.aborted && !signal.aborted) throw new Error(`${name} didn't finish answering within 5 minutes. Try again, or ask about a shorter passage.`);
+        throw error;
+      }
     },
   };
 }

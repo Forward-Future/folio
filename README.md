@@ -279,7 +279,8 @@ Then pick a provider at the top of the panel:
   accepts OpenAI-style Chat Completions (for example `https://api.example.com/v1`, or `http://localhost:11434/v1` for
   Ollama), plus its API key if it needs one. Then pick a model from the server's list or enter a model ID. The address
   must use `https://`, except for this computer or your local network. Folio asks before it connects to an address there,
-  and then reaches only the addresses you approved. That server's own terms and billing apply.
+  and later requests reach only the local addresses you approved. A plain `http://` address is never used to send to the
+  internet, even if its name later points there. That server's own terms and billing apply.
 
 Ask AI is available in the desktop app only, not the browser version.
 

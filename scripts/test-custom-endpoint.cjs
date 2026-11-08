@@ -82,6 +82,9 @@ test("a local address is confirmed before anything is sent, and only the approve
   // If the guard refuses an address that wasn't approved, say so instead of "couldn't reach".
   net.fetch = async () => { throw Object.assign(new Error("refused"), { code: "local_refused" }); };
   await assert.rejects(endpoint.models(), /haven't approved\. Connect it again in Settings/);
+  // If a plain http name later points outside the local network, nothing is sent and the message says why.
+  net.fetch = async () => { throw Object.assign(new Error("refused"), { code: "public_refused" }); };
+  await assert.rejects(endpoint.models(), /outside this computer and your local network, so Folio sent nothing over plain http/);
   // A saved http address without an approval (hand-edited) isn't trusted.
   fs.writeFileSync(file("custom-endpoint.json"), JSON.stringify({ baseUrl: "http://ollama.lan:11434/v1", hasKey: false, local: null }));
   assert.equal(endpoint.status().configured, false);
@@ -171,6 +174,9 @@ test("errors name the server, and Stop cancels the request", async t => {
     net.fetch = async () => Response.json({ error: { message: detail } }, { status });
     await assert.rejects(endpoint.ask(question, () => {}, signal), expected);
   }
+  // A 404 that isn't an API error points at the base URL (such as a missing /v1), not the model.
+  net.fetch = async () => new Response("404 page not found", { status: 404 });
+  await assert.rejects(endpoint.ask(question, () => {}, signal), /no Chat Completions API at this address\. Check the base URL/);
   net.fetch = async () => stream("data: " + JSON.stringify({ choices: [{ delta: { content: "partial" } }] }) + "\n\n");
   await assert.rejects(endpoint.ask(question, () => {}, signal), /without a complete answer/);
   const controller = new AbortController();
@@ -179,4 +185,18 @@ test("errors name the server, and Stop cancels the request", async t => {
     options.signal.throwIfAborted();
   };
   await assert.rejects(endpoint.ask(question, () => {}, controller.signal), error => error.name === "AbortError");
+});
+
+test("an answer that runs past the time limit gets a clear message, not the raw abort error", async t => {
+  const { endpoint, net } = fixture(t);
+  await endpoint.save({ baseUrl: base, key });
+  const timeout = AbortSignal.timeout;
+  t.mock.method(AbortSignal, "timeout", ms => timeout(ms >= 60_000 ? 20 : ms));
+  net.fetch = async (_url, options) => new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode("data: " + JSON.stringify({ choices: [{ delta: { content: "slow" } }] }) + "\n\n"));
+    options.signal.addEventListener("abort", () => controller.error(options.signal.reason));
+  } }));
+  const alive = setInterval(() => {}, 1000); // AbortSignal.timeout doesn't keep Node running by itself
+  try { await assert.rejects(endpoint.ask(question, () => {}, new AbortController().signal), /didn't finish answering within 5 minutes/); }
+  finally { clearInterval(alive); }
 });

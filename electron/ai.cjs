@@ -46,15 +46,18 @@ function writeAtomic(name, contents) {
 // ── Custom endpoints ───────────────────────────────────────────────────────────────────────
 // Each request gets its own in-memory session behind network.cjs's guard, the one URL downloads use: Folio connects
 // to the addresses it resolved itself, and reaches this computer or the local network only at the origin and
-// addresses the person approved. The guard closes once the answer has been read.
+// addresses the person approved. A plain http address can't reach anywhere else, even if its name later resolves to
+// a public address. The guard closes once the answer has been read.
 async function endpointFetch(url, options, approvedLocal) {
   const ses = sessions.fromPartition(`folio-endpoint-${crypto.randomUUID()}`); // in-memory only
-  const guard = await guardSession(ses, sessions.defaultSession, approvedLocal, app);
+  const guard = await guardSession(ses, sessions.defaultSession, approvedLocal, app, { localOnly: url.startsWith("http:") });
   let response;
   try { response = await ses.fetch(url, options); }
   catch (error) {
     guard.close();
-    throw guard.refusedLocal() ? Object.assign(new Error("Local address not approved"), { code: "local_refused" }) : error;
+    if (guard.refusedLocal()) throw Object.assign(new Error("Local address not approved"), { code: "local_refused" });
+    if (guard.refusedPublic()) throw Object.assign(new Error("Plain http to a public address"), { code: "public_refused" });
+    throw error;
   }
   if (!response.body) { guard.close(); return response; }
   const reader = response.body.getReader();
