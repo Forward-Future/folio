@@ -26,8 +26,9 @@ export function detectSignatureTargets(pdf: PDFDocumentProxy, pageNumber: number
       if (fields.length) return fields;
       const text = await page.getTextContent();
       return text.items.flatMap((item, index): SignatureTarget[] => {
-        if (!("str" in item) || !/\b(signature|sign here|signed by)\b/i.test(item.str)
-          || /digital|electronic|verified|invalid/i.test(item.str)) return [];
+        // A word in a paragraph is not a signing caption. Keep this fallback conservative;
+        // native PDF signature fields above are the authoritative targets.
+        if (!("str" in item) || !/^(?:(?:your|applicant(?:['’]s)?|signer(?:['’]s)?|authorized|witness(?:['’]s)?|client|customer)\s+)?(?:signature|sign here|signed by)\s*[:_\s]*$/i.test(item.str.trim())) return [];
         const [left, bottom, right, top] = page.view;
         const positionX = Math.max(left, Math.min(item.transform[4], right - Math.min(180, right - left)));
         const positionY = Math.max(bottom, Math.min(item.transform[5] + Math.max(item.height, 10) + 3, top - 42));

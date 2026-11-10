@@ -116,7 +116,8 @@ The editor works with unsigned, unencrypted PDFs.
 - **Draw on a page:** choose **Draw** (`D`) for a freehand pen, rectangle, oval, or arrow. With **Pen** selected,
   choose **Thin**, **Medium**, or **Thick** for your next strokes. Pick a color, then drag on the page.
   Drawings can be undone and are included when you save a PDF copy.
-- **Text boxes:** choose **Text** (`T`) to add text to a page, using the same ink palette.
+- **Text boxes:** choose **Text** (`T`) to add text to a page, using the same ink palette. Click outside the box to
+  finish editing and return to Select. Choose Text again to add another box.
 - **Undo and redo** annotation edits with the usual keyboard shortcuts; choose **Done**, `V`, or `Esc` to leave a
   drawing/text tool and return to selection.
 - **Notes tab:** review highlights, their notes, and text boxes; click an entry to jump to it, edit a highlight's note,
