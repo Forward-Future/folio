@@ -15,7 +15,7 @@ const FONT_TAG = "FolioOcr";
  * The file is rewritten, not appended to, so anything that depends on its exact bytes (a digital signature) would
  * stop being valid, and an encrypted file can't be read at all: the caller checks for both first (see copyWithText).
  */
-export async function embedRecognizedText(bytes: Uint8Array, pages: ReadonlyMap<number, unknown[]>, embedded: ReadonlySet<number>): Promise<Uint8Array> {
+export async function embedRecognizedText(bytes: Uint8Array, pages: ReadonlyMap<number, unknown[]>, embedded: ReadonlySet<number>) {
   const lib = await import("pdf-lib");
   const doc = await lib.PDFDocument.load(bytes, { updateMetadata: false });
   const font = await doc.embedFont(lib.StandardFonts.Helvetica);
@@ -23,10 +23,14 @@ export async function embedRecognizedText(bytes: Uint8Array, pages: ReadonlyMap<
   const widthOfEm = (text: string) => font.widthOfTextAtSize(text, 1);
   const space = font.encodeText(" ");
 
+  const written = new Set(embedded);
+  let unsupported = false;
   for (const [n, items] of pages) {
     if (n < 1 || n > doc.getPageCount()) continue;
     const runs = placeWords(items as TextItem[], widthOfEm, supported);
+    if (runs === null) { unsupported = true; continue; }
     if (!runs.length) continue;
+    written.add(n);
     const page = doc.getPage(n - 1);
     const operators = [
       lib.pushGraphicsState(), lib.beginText(),
@@ -46,10 +50,16 @@ export async function embedRecognizedText(bytes: Uint8Array, pages: ReadonlyMap<
   // Which pages have recognized text, so Folio doesn't offer to read them again when the copy is opened.
   const { context } = doc;
   let info = context.lookupMaybe(context.trailerInfo.Info, lib.PDFDict);
-  if (!info) {
-    info = context.obj({});
-    context.trailerInfo.Info = context.register(info);
+  const pageList = lib.PDFName.of(PAGES_KEY);
+  if (!written.size) {
+    if (!info?.has(pageList)) return { bytes, embedded: false, unsupported };
+    info.delete(pageList);
+  } else {
+    if (!info) {
+      info = context.obj({});
+      context.trailerInfo.Info = context.register(info);
+    }
+    info.set(pageList, lib.PDFString.of(formatPages(written)));
   }
-  info.set(lib.PDFName.of(PAGES_KEY), lib.PDFString.of(formatPages([...pages.keys(), ...embedded])));
-  return doc.save();
+  return { bytes: await doc.save(), embedded: written.size > 0, unsupported };
 }

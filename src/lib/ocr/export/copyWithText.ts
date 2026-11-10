@@ -4,7 +4,7 @@ import type { OcrSession } from "../session/OcrSession";
 import { embedRecognizedText } from "./embedText";
 
 /** Why a copy went without the recognized text. */
-export type TextProblem = "protected" | "signature" | "failed";
+export type TextProblem = "protected" | "signature" | "characters" | "failed";
 
 export interface SavedCopy {
   bytes: Uint8Array;
@@ -35,7 +35,8 @@ export async function copyWithText(session: OcrSession | null, bytes: Uint8Array
     if (problem) return { bytes, embedded: false, problem };
     const pages = order ? new Map(order.flatMap((source, i) => session.pages.has(source) ? [[i + 1, session.pages.get(source)!] as const] : [])) : session.pages;
     const embedded = order ? new Set(order.flatMap((source, i) => session.embedded.has(source) ? [i + 1] : [])) : session.embedded;
-    return { bytes: await embedRecognizedText(bytes, pages, embedded), embedded: true };
+    const result = await embedRecognizedText(bytes, pages, embedded);
+    return { bytes: result.bytes, embedded: result.embedded, ...(result.unsupported && { problem: "characters" as const }) };
   } catch {
     return { bytes, embedded: false, problem: "failed" };
   }
@@ -44,6 +45,7 @@ export async function copyWithText(session: OcrSession | null, bytes: Uint8Array
 const REASONS: Record<TextProblem, string> = {
   protected: "The recognized text can't be added to a protected file.",
   signature: "The recognized text was left out because this file has a signature field, and rewriting it could break the signature.",
+  characters: "Pages with characters the export font can't write were saved without an OCR text layer.",
   failed: "Couldn't add the recognized text.",
 };
 

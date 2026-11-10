@@ -100,6 +100,14 @@ describe("copyWithText", () => {
     expect(embedRecognizedText).not.toHaveBeenCalled();
   });
 
+  it("keeps the original copy and explains when no page can take an accurate text layer", async () => {
+    const bytes = await blank();
+    const session = sessionFor({}, [[1, [{ ...word, str: "日本語" }]]]);
+    const copy = await copyWithText(session, bytes);
+    expect(copy).toEqual({ bytes, embedded: false, problem: "characters" });
+    expect(savedMessage({ markup: false, ...copy })).toMatch(/saved without an OCR text layer/);
+  });
+
   it("still returns the copy, and says so, when the text can't be added", async () => {
     const bytes = await blank();
     vi.mocked(embedRecognizedText).mockRejectedValueOnce(new Error("could not parse"));

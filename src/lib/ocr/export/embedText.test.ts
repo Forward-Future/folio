@@ -32,8 +32,8 @@ async function textOn(bytes: Uint8Array, n = 1) {
   return (items as { str: string; transform: number[]; width: number; height: number; hasEOL: boolean }[]).filter((i) => i.str !== "");
 }
 const flat = (items: { str: string }[]) => items.map((i) => i.str).join("").replace(/\s+/g, " ").trim();
-const embed = (bytes: Uint8Array, pages: [number, TextItem[]][], embedded: number[] = []) =>
-  embedRecognizedText(bytes, new Map(pages), new Set(embedded));
+const embed = async (bytes: Uint8Array, pages: [number, TextItem[]][], embedded: number[] = []) =>
+  (await embedRecognizedText(bytes, new Map(pages), new Set(embedded))).bytes;
 
 describe("embedRecognizedText", () => {
   it("lays each word over the page where it was recognized, as wide as its ink", async () => {
@@ -131,9 +131,17 @@ describe("embedRecognizedText", () => {
     expect(flat(await textOn(await embed(bytes, [[1, [word("inherited", 72, 700, 80)]]])))).toBe("inherited");
   });
 
-  it("writes what the font can't as the nearest plain text, rather than failing the save", async () => {
-    const out = await embed(await blank(1), [[1, [word("naïve ≥ ﬁx →", 72, 700, 150)]]]);
-    expect(flat(await textOn(out))).toBe("naïve ? fix ?");
+  it("keeps supported pages searchable and leaves other scans available for recognition", async () => {
+    const bytes = await blank(2);
+    const result = await embedRecognizedText(bytes, new Map([
+      [1, [word("مرحبا", 72, 700, 100)]], [2, [word("naïve", 72, 700, 50)]],
+    ]), new Set());
+    expect(result.unsupported).toBe(true);
+    expect(result.embedded).toBe(true);
+    expect(await textOn(result.bytes, 1)).toEqual([]);
+    expect(flat(await textOn(result.bytes, 2))).toBe("naïve");
+    const { info } = await (await openPdf(result.bytes)).getMetadata();
+    expect((info as { Custom: Map<string, string> }).Custom.get("FolioOcrPages")).toBe("2");
   });
 
   it("skips words it can't place, and adds no font to a page with none", async () => {
@@ -167,7 +175,7 @@ describe("embedRecognizedText", () => {
     const out = await embed(await blank(6), [[1, [word("a", 72, 700, 10)]], [2, []], [3, [word("c", 72, 700, 10)]]], [5]);
     const { info } = await (await openPdf(out)).getMetadata();
     // pdf.js hands the document info's own entries over as a Map.
-    expect((info as { Custom: Map<string, string> }).Custom.get("FolioOcrPages")).toBe("1-3,5");
+    expect((info as { Custom: Map<string, string> }).Custom.get("FolioOcrPages")).toBe("1,3,5");
   });
 
   it("keeps the document's own details, and adds the record to a file that had none", async () => {

@@ -249,6 +249,7 @@ On macOS, use `⌘` wherever this table says `Ctrl`. Press `?` with a document o
 
 - Automatic OCR reads scanned pages on your device using the scan languages selected in Settings. Recognized text becomes available for selection,
   document search and Ask AI. Saving a copy adds a searchable text layer when the file can safely be rewritten.
+  Pages whose text the export font cannot represent stay available for recognition when reopened.
 - Ask AI uses extracted text, not page images, and includes up to about 400,000 characters of document text. Long
   documents may be truncated; AI answers can be wrong, so check the cited pages.
 - Folio opens PDFs up to 300 MiB and 10,000 pages. Webpage conversion uses a separate session, so pages behind a
