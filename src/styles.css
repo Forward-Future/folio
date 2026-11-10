@@ -1619,6 +1619,7 @@ kbd {
 .folio-content-target, .folio-old-text, .folio-inline-text, .folio-image-actions { position: absolute; }
 .folio-content-target { border: 0; padding: 0; border-radius: 0; background: transparent; cursor: text; }
 .folio-content-target[data-kind=image] { cursor: pointer; }
+.folio-content-target[data-locked] { cursor: not-allowed; }
 .folio-content-target:is(:hover, :focus-visible, [aria-pressed=true]) { outline: 1.5px solid #3377ac; outline-offset: 1px; background: #3a86bc0b; }
 .folio-old-text { pointer-events: none; }
 .app[data-night] :is(.folio-old-text, .folio-inline-text) { filter: invert(0.88) hue-rotate(180deg) contrast(0.92); }
