@@ -103,7 +103,7 @@ test("setup checks the server before saving, encrypts the key, and keyless serve
   assert.deepEqual(endpoint.status(), { configured: false, baseUrl: "", hasKey: false });
   await endpoint.save({ baseUrl: base + "/", key });
   assert.deepEqual(endpoint.status(), { configured: true, baseUrl: base, hasKey: true });
-  assert.equal(fs.readFileSync(file("custom-endpoint-key.bin")).includes(key), false);
+  assert.equal(fs.existsSync(file("custom-endpoint-key.bin")), false);
   assert.equal(fs.readFileSync(file("custom-endpoint.json"), "utf8").includes(key), false);
   await endpoint.check();
   for (const { url, options } of calls) {
@@ -113,17 +113,19 @@ test("setup checks the server before saving, encrypts the key, and keyless serve
     assert.equal(options.credentials, "omit");
   }
   // A rejected key leaves the working setup in place.
-  const saved = fs.readFileSync(file("custom-endpoint-key.bin"));
+  const saved = fs.readFileSync(file("custom-endpoint.json"));
   net.fetch = async () => Response.json({ error: { message: "bad key" } }, { status: 401 });
   await assert.rejects(endpoint.save({ baseUrl: base, key: "another-fake-key" }), /llm\.example\.test rejected this key/);
-  assert.deepEqual(fs.readFileSync(file("custom-endpoint-key.bin")), saved);
-  // If the address can't be written after the new key was, the old key comes back: it's never paired with another server.
+  assert.deepEqual(fs.readFileSync(file("custom-endpoint.json")), saved);
+  // Interrupt the commit: nothing else on disk may pair the new key with the old server.
   net.fetch = async () => Response.json({ data: [{ id: "sample-model" }] });
   const { writeAtomic } = writes;
-  writes.writeAtomic = (name, bytes) => { if (name === "custom-endpoint.json") throw new Error("disk full"); writeAtomic(name, bytes); };
+  const attempted = [];
+  writes.writeAtomic = (name) => { attempted.push(name); throw new Error("disk full"); };
   await assert.rejects(endpoint.save({ baseUrl: "https://other.example.test/v1", key: "another-fake-key" }), /Couldn't save the endpoint securely/);
+  assert.deepEqual(attempted, ["custom-endpoint.json"]);
   writes.writeAtomic = writeAtomic;
-  assert.deepEqual(fs.readFileSync(file("custom-endpoint-key.bin")), saved);
+  assert.deepEqual(fs.readFileSync(file("custom-endpoint.json")), saved);
   assert.equal(endpoint.status().baseUrl, base);
   await endpoint.check();
   assert.equal(calls.at(-1).url, base + "/models");
@@ -139,6 +141,20 @@ test("setup checks the server before saving, encrypts the key, and keyless serve
   await endpoint.remove();
   assert.equal(endpoint.status().configured, false);
   assert.equal(fs.existsSync(file("custom-endpoint.json")), false);
+});
+
+test("a legacy key is usable until a new connection is committed", async t => {
+  const { endpoint, calls, file, safeStorage } = fixture(t);
+  fs.writeFileSync(file("custom-endpoint-key.bin"), await safeStorage.encryptStringAsync(key));
+  fs.writeFileSync(file("custom-endpoint.json"), JSON.stringify({ baseUrl: base, hasKey: true, local: null }));
+  await endpoint.check();
+  assert.equal(calls.at(-1).options.headers.Authorization, "Bearer " + key);
+  const next = "https://new.example.test/v1";
+  await endpoint.save({ baseUrl: next, key: "new-test-key" });
+  assert.equal(fs.existsSync(file("custom-endpoint-key.bin")), false);
+  await endpoint.check();
+  assert.equal(calls.at(-1).url, next + "/models");
+  assert.equal(calls.at(-1).options.headers.Authorization, "Bearer new-test-key");
 });
 
 test("model lists are optional, sorted, and skip unusable IDs", async t => {

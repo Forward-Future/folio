@@ -11,7 +11,7 @@ const { chatRequest } = require("./ai-prompt.cjs");
 const { providerError, readAnswer, secureStorageAvailable, serial } = require("./chat-completions.cjs");
 
 const CONFIG_FILE = "custom-endpoint.json";
-const KEY_FILE = "custom-endpoint-key.bin";
+const LEGACY_KEY_FILE = "custom-endpoint-key.bin";
 const validModel = (id) => typeof id === "string" && /^[\x21-\x7e]{1,256}$/.test(id);
 const validKey = (key) => /^[\x21-\x7e]{1,1024}$/.test(key);
 const HTTPS_ONLY = "Use an https:// address. Plain http works only for this computer or your local network.";
@@ -46,7 +46,7 @@ function createCustomEndpoint({ fetch, resolve, confirmLocal, safeStorage, file,
       const local = saved?.local ?? null;
       if (!baseUrl || !validApproval(local, baseUrl)) return null;
       if (baseUrl.startsWith("http:") && !local) return null;
-      return { baseUrl, hasKey: saved.hasKey === true, local };
+      return { baseUrl, hasKey: typeof saved.encryptedKey === "string" || saved.hasKey === true, encryptedKey: saved.encryptedKey, local };
     } catch { return null; }
   }
   const status = () => {
@@ -60,7 +60,8 @@ function createCustomEndpoint({ fetch, resolve, confirmLocal, safeStorage, file,
     if (!saved) throw new Error("Connect a custom endpoint in Settings.");
     if (!saved.hasKey) return { baseUrl: saved.baseUrl, key: "", local: saved.local };
     try {
-      const { result } = await safeStorage.decryptStringAsync(fs.readFileSync(file(KEY_FILE)));
+      const bytes = saved.encryptedKey === undefined ? fs.readFileSync(file(LEGACY_KEY_FILE)) : Buffer.from(saved.encryptedKey, "base64");
+      const { result } = await safeStorage.decryptStringAsync(bytes);
       return { baseUrl: saved.baseUrl, key: result, local: saved.local };
     } catch { throw new Error("Couldn't unlock the endpoint's key. Unlock your system key store or enter the key again in Settings."); }
   }
@@ -121,23 +122,19 @@ function createCustomEndpoint({ fetch, resolve, confirmLocal, safeStorage, file,
       if (destination.local && !(await confirmLocal(url, destination.addresses))) throw new Error(`Folio didn't connect to ${url.host}.`);
       const local = destination.local ? { origin: destination.origin, addresses: destination.addresses } : null;
       await listModels({ baseUrl, key, local });
-      let previousKey = null;
-      try { previousKey = fs.readFileSync(file(KEY_FILE)); } catch {}
+      // One atomic rename keeps the key paired with its destination even if Folio exits during the save.
       try {
-        if (key) writeAtomic(KEY_FILE, await safeStorage.encryptStringAsync(key));
-        else fs.rmSync(file(KEY_FILE), { force: true });
-        writeAtomic(CONFIG_FILE, JSON.stringify({ baseUrl, hasKey: !!key, local }));
+        const encryptedKey = key ? (await safeStorage.encryptStringAsync(key)).toString("base64") : null;
+        writeAtomic(CONFIG_FILE, JSON.stringify({ baseUrl, encryptedKey, local }));
       } catch {
-        // The key and the address are two files. If only the key changed, put the old one back, so the saved
-        // address is never sent another server's key. If that fails too, remove the key rather than mismatch them.
-        try { if (previousKey) writeAtomic(KEY_FILE, previousKey); else fs.rmSync(file(KEY_FILE), { force: true }); }
-        catch { try { fs.rmSync(file(KEY_FILE), { force: true }); } catch {} }
         throw new Error("Couldn't save the endpoint securely. Check your system key store and try again.");
       }
+      // A previous version of this provider kept the encrypted key in a separate file.
+      try { fs.rmSync(file(LEGACY_KEY_FILE), { force: true }); } catch {}
     }),
     remove: () => change(() => {
       fs.rmSync(file(CONFIG_FILE), { force: true });
-      fs.rmSync(file(KEY_FILE), { force: true });
+      fs.rmSync(file(LEGACY_KEY_FILE), { force: true });
     }),
     models: async () => listModels(await connection()),
     ask: async ({ model, document, messages }, emit, signal) => {
