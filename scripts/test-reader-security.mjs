@@ -176,16 +176,17 @@ try {
     const mark = { id: "saved", type: "highlight", page: 0, text: "saved selection", note: "", color: "#00ff00",
       createdAt: 1, data: { color: [0, 255, 0] } };
     await saveNotes({ id: "reopened", marks: [mark], note: "", updatedAt: 1 }, 0);
+    const started = Promise.withResolvers();
     const deferred = Promise.withResolvers();
     let staleAdds = 0, currentAdds = 0;
     const firstLoad = markup.load("reopened", true);
-    manager({ div: root, deserialize: () => deferred.promise, add() { staleAdds++; } });
-    await firstLoad;
+    manager({ div: root, deserialize() { started.resolve(); return deferred.promise; }, add() { staleAdds++; } });
+    await started.promise;
     const nextLoad = markup.load("reopened", true);
     manager({ div: root, deserialize: async () => editor(), add() { currentAdds++; } });
     await nextLoad;
     deferred.resolve(editor());
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await firstLoad;
     markup.unload();
     root.remove();
     return { firstText, highlightedText, staleAdds, currentAdds };
