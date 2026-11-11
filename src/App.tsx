@@ -21,6 +21,7 @@ import { SearchResults } from "./SearchResults";
 import { Icon, type IconName } from "./icons";
 import { Welcome } from "./Welcome";
 import { Sidebar, type SidebarTab } from "./Sidebar";
+import { attachmentBytes, type Attachment } from "./attachments";
 import { MarkupController, type Mark, type MarkupState } from "./markup";
 import { HighlightMenu, NoteBox, SelectionPopover, useTextSelection, type SelectionInfo } from "./Selection";
 import { NotesPanel } from "./NotesPanel";
@@ -977,6 +978,19 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     }
   };
 
+  const saveAttachment = async (file: Attachment) => {
+    const source = docRef.current;
+    if (!source) return;
+    try {
+      const bytes = await attachmentBytes(source.pdf, file.id);
+      if (docRef.current !== source) return;
+      // Without a type, Chromium guesses one from the bytes and adds its extension to a name that has none.
+      saveBlob(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "application/octet-stream" }), file.name);
+    } catch {
+      if (docRef.current === source) flash(`Couldn't save ${file.name}.`);
+    }
+  };
+
   const exportNotes = async (format: "markdown" | "json") => {
     if (!doc) return;
     const controller = markupRef.current!;
@@ -1493,6 +1507,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             onOrder={order => setPageDraft(order ? { order } : null)}
             onSaveOrder={download}
               onExportPages={exportPages}
+            onSaveAttachment={saveAttachment}
             onOpenCopy={pageDraft?.copy ? () => {
               tabs.open([{ kind: "bytes", name: copyName, data: pageDraft.copy!, password: doc.password }]);
             } : undefined}

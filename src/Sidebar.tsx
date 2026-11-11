@@ -2,6 +2,7 @@ import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
 import { Icon } from "./icons";
+import { listAttachments, MAX_ATTACHMENTS, type Attachment } from "./attachments";
 import { IS_MAC } from "./platform";
 import { anchoredScrollTop, loadPageSizes, rowAt, thumbLayout, THUMB_ROW_EXTRA, type PageSize } from "./thumbnails";
 
@@ -17,6 +18,7 @@ interface Props {
   onOrder: (order: number[] | null) => void;
   onSaveOrder: () => Promise<void>;
   onExportPages: (pages: number[]) => Promise<void>;
+  onSaveAttachment: (file: Attachment) => Promise<void>;
   onOpenCopy?: () => void;
   tab: SidebarTab;
   onTab: (tab: SidebarTab) => void;
@@ -24,17 +26,39 @@ interface Props {
   noteCount: number;
 }
 
-export type SidebarTab = "pages" | "outline" | "notes";
+export type SidebarTab = "pages" | "outline" | "notes" | "files";
 
 export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order, onOrder, onSaveOrder, onOpenCopy, onExportPages,
-  tab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
+  onSaveAttachment, tab: chosenTab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
   const [outline, setOutline] = useState<OutlineItem[] | null>(null);
   const [bookmarkedOnly, setBookmarkedOnly] = useState(false);
+
+  const [files, setFiles] = useState<Attachment[]>([]);
+  const [savingFile, setSavingFile] = useState<string | null>(null);
 
   useEffect(() => {
     setOutline(null);
     pdf.getOutline().then((o) => setOutline((o as OutlineItem[] | null) ?? []));
   }, [pdf]);
+
+  useEffect(() => {
+    let current = true;
+    setFiles([]);
+    // A PDF whose attachment list can't be read is still a PDF to read: it just gets no Files tab.
+    listAttachments(pdf).then(found => { if (current) setFiles(found); }, () => {});
+    return () => { current = false; };
+  }, [pdf]);
+
+  // Most PDFs carry no files, so the tab is there only for the ones that do.
+  const tab = chosenTab === "files" && !files.length ? "pages" : chosenTab;
+  const saveFile = async (file: Attachment) => {
+    setSavingFile(file.id);
+    try {
+      await onSaveAttachment(file);
+    } finally {
+      setSavingFile(null);
+    }
+  };
 
   if (order) return (
     <PageOrganizer pdf={pdf} page={page} rotation={rotation} onSelect={onSelectPage}
@@ -42,7 +66,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order
   );
   return (
     <aside className={`sidebar tab-${tab}`}>
-      <div className="sidebar-tabs" role="tablist">
+      <div className={`sidebar-tabs ${files.length ? "with-files" : ""}`} role="tablist">
         <button role="tab" aria-selected={tab === "pages"} className={tab === "pages" ? "on" : ""} onClick={() => setTab("pages")}>
           Pages
         </button>
@@ -52,6 +76,11 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order
         <button role="tab" aria-selected={tab === "notes"} className={tab === "notes" ? "on" : ""} onClick={() => setTab("notes")}>
           Notes{noteCount > 0 && <span className="tab-count">{noteCount}</span>}
         </button>
+        {files.length > 0 && (
+          <button role="tab" aria-selected={tab === "files"} className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>
+            Files
+          </button>
+        )}
       </div>
       {tab === "pages" && (
         <button type="button" className="bookmark-filter" aria-pressed={bookmarkedOnly} disabled={bookmarkedPages === null}
@@ -62,6 +91,23 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order
       <div className="sidebar-scroll">
         {tab === "notes" ? (
           notes
+        ) : tab === "files" ? (
+          <ul className="attachments" aria-label="Attached files">
+            {files.map(file => (
+              <li key={file.id}>
+                <Icon name="file" size={16} />
+                <div className="attachment-text">
+                  <span className="attachment-name" title={file.name}>{file.name}</span>
+                  {file.description && <span className="attachment-description">{file.description}</span>}
+                </div>
+                <button className="icon-btn" disabled={savingFile !== null} onClick={() => void saveFile(file)}
+                  aria-label={`Save ${file.name}`} title={`Save ${file.name}`}>
+                  <Icon name="download" size={15} />
+                </button>
+              </li>
+            ))}
+            {files.length === MAX_ATTACHMENTS && <li className="attachments-more">Only the first {MAX_ATTACHMENTS} files are listed.</li>}
+          </ul>
         ) : tab === "pages" ? (
           <Thumbnails pdf={pdf} page={page} rotation={rotation}
             onSelect={onSelectPage} onExportPages={onExportPages}
@@ -79,7 +125,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order
           </ul>
         )}
       </div>
-      {tab !== "notes" && pdf.numPages > 1 && (
+      {tab !== "notes" && tab !== "files" && pdf.numPages > 1 && (
         <div className="organize-actions">
           <button className="link small" onClick={() => onOrder(Array.from({ length: pdf.numPages }, (_, i) => i + 1))}>
             <Icon name="grid" size={14} /> Reorder pages
