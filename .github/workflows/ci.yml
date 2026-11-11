@@ -31,7 +31,7 @@ jobs:
       - run: npm run test:thumbnails
       - run: node --test scripts/test-word-files.cjs scripts/test-network-security.cjs scripts/test-release-build.mjs scripts/test-claude-path.cjs
       - run: node --test scripts/test-link-history.mjs scripts/test-text-direction.mjs
-      - run: node --test scripts/test-openrouter.cjs
+      - run: node --test scripts/test-openrouter.cjs scripts/test-custom-endpoint.cjs
       - run: npm run build
       - name: Browser Edition link shortcuts
         run: |

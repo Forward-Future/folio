@@ -42,6 +42,7 @@ interface FolioDesktop {
 
 interface AiStatus {
   openrouter: { configured: boolean };
+  custom: CustomEndpointStatus;
   chatgpt: { connected: boolean; email: string; name: string; welcomeSeen: boolean; encrypted: boolean };
   claude: { installed: boolean; loggedIn: boolean; version?: string; subscription?: boolean; authMethod?: string };
 }
@@ -70,13 +71,17 @@ interface FolioAi {
   recheckClaude(): Promise<AiStatus["claude"]>;
   openRouterKey(action: "save" | "check" | "remove", key?: string): Promise<{ ok: boolean; configured?: boolean; error?: string }>;
   openRouterModels(): Promise<{ ok: boolean; models?: OpenRouterModel[]; error?: string }>;
-  ask(request: { id: string; provider: "chatgpt" | "claude" | "openrouter"; model: string; document: { name: string; text: string; truncated: boolean };
+  customEndpoint(action: "save" | "check" | "remove", input?: { baseUrl: string; key: string }): Promise<{ ok: boolean; status?: CustomEndpointStatus; error?: string }>;
+  customModels(): Promise<{ ok: boolean; models?: OpenRouterModel[]; error?: string }>;
+  ask(request: { id: string; provider: "chatgpt" | "claude" | "openrouter" | "custom"; model: string; document: { name: string; text: string; truncated: boolean };
     messages: AiMessage[] }): Promise<boolean>;
   cancel(id: string): Promise<boolean>;
   onEvent(callback: (event: AiEvent) => void): () => void;
 }
 
 interface OpenRouterModel { id: string; name: string; contextLength: number | null }
+
+interface CustomEndpointStatus { configured: boolean; baseUrl: string; hasKey: boolean }
 
 interface Window {
   folioDesktop?: FolioDesktop;
