@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import { electronPath } from "./electron-path.mjs";
 import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
+import { checkSignatureTargets } from "./smoke-signature-targets.mjs";
 import { checkOpenRouter } from "./smoke-openrouter.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -595,7 +596,47 @@ try {
   await page.locator('.page[data-page-number="1"] .annotationEditorLayer').click();
   // Filled in one go: pdf.js moves the caret while it focuses a new box, which can scramble key-by-key typing.
   await page.locator('.freeTextEditor .internal[contenteditable="true"]').fill("Saved text box");
-  await page.getByRole("button", { name: "Done", exact: true }).click();
+  const textBox = page.locator('.freeTextEditor .internal[contenteditable="true"]');
+  await textBox.click();
+  assert.equal(await toolbar.getByRole("button", { name: "Text", exact: true }).getAttribute("aria-pressed"), "true",
+    "clicking inside the text box keeps Text active");
+  const sheet = page.locator('.page[data-page-number="1"]');
+  await sheet.click({ position: { x: 30, y: 150 } });
+  await page.screenshot({ path: path.join(shots, "text-click-away.png") });
+  await page.waitForFunction(() => document.querySelector('.app')?.getAttribute('data-tool') === 'select');
+  await sheet.click({ position: { x: 45, y: 180 } });
+  assert.equal(await page.locator(".freeTextEditor").count(), 1, "clicking away never creates an extra box");
+  assert.equal(await page.locator(".freeTextEditor").innerText(), "Saved text box");
+
+  // A deliberately armed Text tool creates another box; abandoning it removes only that empty box.
+  await toolbar.getByRole("button", { name: "Text", exact: true }).click();
+  await sheet.locator(".annotationEditorLayer").click({ position: { x: 60, y: 210 } });
+  await page.locator('.freeTextEditor .internal[contenteditable="true"]').waitFor();
+  await sheet.click({ position: { x: 30, y: 150 } });
+  await page.waitForFunction(() => document.querySelector('.app')?.getAttribute('data-tool') === 'select');
+  assert.equal(await page.locator(".freeTextEditor").count(), 1, "clicking away removes an empty box");
+  await toolbar.getByRole("button", { name: "Text", exact: true }).click();
+  await sheet.locator(".annotationEditorLayer").click({ position: { x: 60, y: 210 } });
+  await page.locator('.freeTextEditor .internal[contenteditable="true"]').fill("Another text box");
+  const anotherBox = page.locator(".freeTextEditor", { hasText: "Another text box" });
+  const originalColor = await anotherBox.locator(".internal").evaluate(element => element.style.color);
+  await page.getByRole("toolbar", { name: "Annotation options" }).getByRole("radio").last().click();
+  assert.equal(await toolbar.getByRole("button", { name: "Text", exact: true }).getAttribute("aria-pressed"), "true",
+    "formatting does not exit the Text tool");
+  await sheet.click({ position: { x: 30, y: 150 } });
+  await page.waitForFunction(() => document.querySelector('.app')?.getAttribute('data-tool') === 'select');
+  assert.equal(await page.locator(".freeTextEditor").count(), 2);
+  // The color change and the text insertion are separate undoable actions.
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.waitForFunction(color => [...document.querySelectorAll(".freeTextEditor .internal")]
+    .some(element => element.textContent === "Another text box" && element.style.color === color), originalColor);
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.locator(".freeTextEditor", { hasText: "Another text box" }).waitFor({ state: "detached" });
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await page.locator(".freeTextEditor", { hasText: "Another text box" }).waitFor();
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.locator(".freeTextEditor", { hasText: "Another text box" }).waitFor({ state: "detached" });
+  console.log("ok  clicking away finishes text, removes empty boxes, preserves formatting, and supports undo/redo");
   await page.waitForTimeout(1000);
   await page.keyboard.press("ControlOrMeta+w");
   await page.getByRole("button", { name: /Try a sample/ }).click();
@@ -1069,6 +1110,7 @@ try {
 
   // Asked again at the end: the windows that convert a webpage or a Word document didn't bring it forward either.
   await checkStaysHidden();
+  await checkSignatureTargets(app, page, photo, shots);
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {

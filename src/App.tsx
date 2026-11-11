@@ -49,6 +49,7 @@ import { keepDrawingPointer } from "./drawing";
 import { useOcrSearchRefresh } from "./hooks/ocr";
 import { OcrSession, copyWithText, savedMessage } from "./lib/ocr";
 import { restoreForOpen } from "./lib/ocr/session/restore";
+import { finishTextOnClickAway } from "./textEditing";
 import { drawShapes, type Shape } from "./shapes";
 import { enableWheelPaging } from "./wheelPaging";
 import { LinkHistory, type HistoryState } from "./linkHistory";
@@ -308,6 +309,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     });
     trackPageImages(eventBus);
     const stopDrawingPointer = keepDrawingPointer(container);
+    const stopTextClickAway = finishTextOnClickAway(container, viewer, eventBus);
     linkService.setViewer(viewer);
     const history = new LinkHistory(viewer, (state, followed) => {
       setNavigation(state);
@@ -381,7 +383,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       });
     };
     container.addEventListener("wheel", onWheel, { passive: false });
-    return () => { stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
+    return () => { stopTextClickAway(); stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
   }, [tabs, tabKey]);
 
   useEffect(() => {

@@ -2,6 +2,7 @@ import { init, type WrappedPdfiumModule } from "@embedpdf/pdfium";
 import wasmUrl from "@embedpdf/pdfium/pdfium.wasm?url";
 import { checkPdfSize } from "./pdfInput";
 import { replacePageImage } from "./pdfImageEdit";
+import { hasRightToLeft, RIGHT_TO_LEFT_MESSAGE } from "./textDirection";
 
 export interface EditTarget {
   index: number;
@@ -142,6 +143,7 @@ function replaceText(m: WrappedPdfiumModule, page: number, target: EditTarget, t
   if (m.FPDFPageObj_GetType(obj) !== 1 || text.length > 32767 || /[\u0000-\u001f]/u.test(text)) {
     throw new Error("Enter a single line of text.");
   }
+  if (hasRightToLeft(target.label) || hasRightToLeft(text)) throw new Error(RIGHT_TO_LEFT_MESSAGE);
   const firstToRemove = text ? target.index + 1 : target.index;
   for (let i = target.end; i >= firstToRemove; i--) {
     const fragment = m.FPDFPage_GetObject(page, i);
