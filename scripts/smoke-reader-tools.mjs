@@ -142,6 +142,11 @@ async function checkScanSelection(app, page) {
   await page.getByRole("button", { name: "Try again" }).click();
   await page.locator('.page[data-page-number="4"] .textLayer span:not(.markedContent)').first().waitFor();
   assert.equal(await status.innerText(), "");
+  const interceptsPageClicks = await status.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === el;
+  });
+  assert.equal(interceptsPageClicks, false, "the empty OCR status blocks clicks on the page");
   console.log("ok  background OCR prepares unvisited scans, prioritizes page jumps, and shows selectable text in dark mode");
 
   // Exercise the real desktop download and checksum path without reaching GitHub from CI.
@@ -281,11 +286,15 @@ async function checkPenDrawing(app, page, folder, shots) {
       await page.getByRole("menuitem", { name: "Fit width" }).click();
       await layer.waitFor();
     }
+    const size = await layer.boundingBox();
+    const position = { x: Math.floor(size.width * 0.2), y: Math.floor(size.height * (0.3 + index * 0.15)) };
+    // Wait for the ink layer to receive the pointer after a page opens or changes scale.
+    await layer.hover({ position });
     const box = await layer.boundingBox();
-    const x = box.x + box.width * 0.2;
-    const y = box.y + box.height * (0.3 + index * 0.15);
-    await page.mouse.move(x, y);
+    const x = box.x + position.x;
+    const y = box.y + position.y;
     await page.mouse.down();
+    assert.ok(await layer.evaluate(el => el.classList.contains("drawing")), `${name} pen did not start a stroke`);
     await page.mouse.move(x + 25, y - 10);
     await page.mouse.move(x + 50, y + 10);
     await page.mouse.move(x + 100, y);
