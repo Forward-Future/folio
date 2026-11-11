@@ -115,13 +115,35 @@ export async function checkImageInsertion(app, page, folder, shots) {
         const canvas = document.createElement("canvas"); canvas.width = viewport.width; canvas.height = viewport.height;
         await p.render({ canvas, viewport }).promise;
         const g = canvas.getContext("2d"), {width:w,height:h} = canvas, pixels = g.getImageData(0,0,w,h).data;
-        let l=w,t=h,r=-1,b=-1;
-        for (let y=0; y<h; y++) for (let x=0; x<w; x++) {
-          const i=4*(y*w+x), red=pixels[i], green=pixels[i+1], blue=pixels[i+2];
-          if (n===1 ? green-red>55 && blue-red>50 : red-green>65 && green-blue>50) {
-            l=Math.min(l,x);r=Math.max(r,x);t=Math.min(t,y);b=Math.max(b,y);
-          }
+        // Text antialiasing can produce colored pixels too. Measure the largest
+        // connected patch of the image color, independently of its expected position.
+        const mask = new Uint8Array(w*h);
+        for (let pos = 0; pos < mask.length; pos++) {
+          const i = 4*pos, red = pixels[i], green = pixels[i+1], blue = pixels[i+2];
+          mask[pos] = Number(n === 1 ? green-red > 55 && blue-red > 50 : red-green > 65 && green-blue > 50);
         }
+        const queue = new Uint32Array(mask.length);
+        let largest = 0, measured;
+        for (let seed = 0; seed < mask.length; seed++) {
+          if (!mask[seed]) continue;
+          let count = 0, left = w, top = h, right = -1, bottom = -1;
+          const visit = pos => {
+            if (mask[pos]) { mask[pos] = 0; queue[count++] = pos; }
+          };
+          visit(seed);
+          for (let head = 0; head < count; head++) {
+            const pos = queue[head], x = pos % w, y = Math.floor(pos / w);
+            left = Math.min(left, x); right = Math.max(right, x);
+            top = Math.min(top, y); bottom = Math.max(bottom, y);
+            if (x > 0) visit(pos-1);
+            if (x+1 < w) visit(pos+1);
+            if (y > 0) visit(pos-w);
+            if (y+1 < h) visit(pos+w);
+          }
+          if (count > largest) { largest = count; measured = [left, top, right, bottom]; }
+        }
+        if (!measured) throw new Error("Image color missing on page "+n);
+        const [l,t,r,b] = measured;
         const clear = Array.from(g.getImageData(Math.round(l+(r-l)/6),Math.round(t+(b-t)/6),1,1).data);
         const sun = Array.from(g.getImageData(Math.round(l+(r-l)*124/160),Math.round(t+(b-t)*24/96),1,1).data);
         output.push({ box:[l/w,t/h,(r-l+1)/w,(b-t+1)/h], clear, sun });
