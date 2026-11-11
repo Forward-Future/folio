@@ -143,7 +143,7 @@ function createCustomEndpoint({ fetch, resolve, confirmLocal, safeStorage, file,
       const passage = messages.at(-1)?.context;
       if (document.truncated && !passage) throw new Error("This document exceeds Folio’s whole-document limit. Select a passage and ask again.");
       const { instructions, input } = chatRequest(model, passage
-        ? { name: document.name, text: `[Page ${passage.page}]\n${passage.text}`, truncated: true } : document, messages);
+        ? { ...document, text: `[Page ${passage.page}]\n${passage.text}`, truncated: true } : document, messages);
       const body = JSON.stringify({ model, messages: [{ role: "system", content: instructions }, ...input], stream: true });
       const name = nameOf(endpoint.baseUrl), timer = AbortSignal.timeout(5 * 60_000);
       try {

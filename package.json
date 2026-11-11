@@ -16,6 +16,7 @@
     "dist:mac": "npm run build && electron-builder --mac --publish never",
     "dist:linux": "npm run build && electron-builder --linux --publish never",
     "smoke": "node scripts/smoke-test.mjs && node scripts/test-print.mjs && node scripts/smoke-print.mjs && node scripts/smoke-print-resolution.mjs",
+    "test": "vitest run",
     "test:reader-security": "node scripts/test-reader-security.mjs && node scripts/test-url-client-certificates.mjs",
     "test:chat-math": "node scripts/test-chat-math.mjs",
     "test:thumbnails": "node scripts/test-thumbnails.mjs"
@@ -36,6 +37,8 @@
     "@vitejs/plugin-react": "^6.1.2",
     "electron": "^45.2.1",
     "electron-builder": "^26.18.0",
+    "fake-indexeddb": "^6.2.7",
+    "jsdom": "^29.1.1",
     "idb-keyval": "^6.3.0",
     "katex": "^0.19.1",
     "mdast-util-from-markdown": "^2.1.0",
@@ -50,7 +53,8 @@
     "remark-math": "^6.0.0",
     "tesseract.js": "^7.0.0",
     "typescript": "^7.0.2",
-    "vite": "^8.3.5"
+    "vite": "^8.3.5",
+    "vitest": "^4.1.12"
   },
   "productName": "Folio",
   "description": "A simple, clean PDF reader for Windows, macOS, and Linux",

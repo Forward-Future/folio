@@ -4,6 +4,7 @@ import { Icon } from "./icons";
 import { copyText } from "./clipboard";
 import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
+import { ocrSession } from "./lib/ocr";
 import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, subscribeAiPreferences, USAGE_URL } from "./ai";
 import { Modal } from "./Dialogs";
 import { readSetting } from "./preferences";
@@ -29,30 +30,35 @@ const CLAUDE_MODELS = [
 ];
 
 // ── Document text ───────────────────────────────────────────────────────────────────────
-const textCache = new WeakMap<PDFDocumentProxy, Promise<{ text: string; truncated: boolean }>>();
+export type DocText = { text: string; truncated: boolean; recognized: boolean };
+// Keyed by the OCR version too: pages of a scan gain text while it is being recognized.
+const textCache = new WeakMap<PDFDocumentProxy, { version: number; text: Promise<DocText> }>();
 
-function documentText(pdf: PDFDocumentProxy) {
-  let cached = textCache.get(pdf);
-  if (!cached) {
-    cached = (async () => {
-      let text = "";
-      let truncated = false;
-      for (let n = 1; n <= pdf.numPages; n++) {
-        const content = await (await pdf.getPage(n)).getTextContent();
-        const page = content.items.map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : " ") : "")).join("")
-          .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-        const block = `[Page ${n}]\n${page}\n\n`;
-        if (text.length + block.length > MAX_DOC_CHARS) {
-          truncated = true;
-          break;
-        }
-        text += block;
+export function documentText(pdf: PDFDocumentProxy) {
+  const session = ocrSession(pdf);
+  const version = session?.version ?? 0;
+  const hit = textCache.get(pdf);
+  if (hit?.version === version) return hit.text;
+  const text = (async () => {
+    let text = "";
+    let truncated = false;
+    for (let n = 1; n <= pdf.numPages; n++) {
+      const content = await (await pdf.getPage(n)).getTextContent();
+      const page = content.items.map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : " ") : "")).join("")
+        .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+      const block = `[Page ${n}]\n${page}\n\n`;
+      if (text.length + block.length > MAX_DOC_CHARS) {
+        truncated = true;
+        break;
       }
-      return { text, truncated };
-    })();
-    textCache.set(pdf, cached);
-  }
-  return cached;
+      text += block;
+    }
+    // OCR can finish while extraction is awaiting a page; use the final state for the safety caveat.
+    const recognized = !!session && (session.embedded.size > 0 || [...session.pages.values()].some((items) => items.length));
+    return { text, truncated, recognized };
+  })();
+  textCache.set(pdf, { version, text });
+  return text;
 }
 
 // ── Panel ─────────────────────────────────────────────────────────────────────────────────
@@ -264,7 +270,10 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     setInput("");
     onClearContext();
     try {
-      const doc = (provider === "openrouter" || provider === "custom") && context ? { text: "", truncated: true } : await documentText(pdf);
+      const session = ocrSession(pdf);
+      const doc = (provider === "openrouter" || provider === "custom") && context
+        ? { text: "", truncated: true, recognized: !!session && (session.embedded.has(context.page) || !!session.pages.get(context.page)?.length) }
+        : await documentText(pdf);
       if (preparing.current !== id) return;
       preparing.current = null;
       await ai.ask({ id, provider, model, document: { name: docName, ...doc },

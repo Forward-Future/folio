@@ -183,7 +183,7 @@ Ask AI is optional and desktop-only. See [Using Ask AI](#using-ask-ai) for setup
 ### Pick up where you left off
 
 - **Recent library:** keep up to eight recently opened PDFs with thumbnail previews and the last page read; reopen
-  with one click, remove individual entries, or choose **Clear all**.
+  with one click, remove individual entries, or choose **Clear all**. Removing entries also removes their saved recognized text; **Clear all** removes all saved recognized text. You can also clear saved recognized text from Settings without removing documents.
 - **Startup restore:** reopen the last active document automatically when it is still in the recent library.
 - **Reading state:** remember each document's page, scroll position, zoom, rotation, sidebar visibility, and two-page
   mode.
@@ -249,8 +249,9 @@ On macOS, use `⌘` wherever this table says `Ctrl`. Press `?` with a document o
 
 ### Current limits
 
-- Automatic OCR adds a selection layer in the reader. The source PDF stays intact. Document-wide search,
-  signature-label detection, and whole-document AI questions use the PDF’s embedded text.
+- Automatic OCR reads scanned pages on your device using the scan languages selected in Settings. Recognized text becomes available for selection,
+  document search and Ask AI. Saving a copy adds a searchable text layer when the file can safely be rewritten.
+  Pages whose text the export font cannot represent stay available for recognition when reopened.
 - Ask AI uses extracted text, not page images, and includes up to about 400,000 characters of document text. Long
   documents may be truncated; AI answers can be wrong, so check the cited pages.
 - Folio opens PDFs up to 300 MiB and 10,000 pages. Webpage conversion uses a separate session, so pages behind a

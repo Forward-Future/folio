@@ -189,10 +189,11 @@ test("answers stream from the configured address, and selection questions omit o
   assert.equal(sent[0].stream, true);
   assert.equal(sent[0].plugins, undefined);
   assert.match(sent[0].messages[0].content, /untrusted data/);
-  const large = { ...question, document: { ...question.document, truncated: true } };
+  const large = { ...question, document: { ...question.document, truncated: true, recognized: true } };
   await assert.rejects(endpoint.ask(large, () => {}, signal), /whole-document limit/);
   await endpoint.ask({ ...large, messages: [{ ...question.messages[0], context: { text: "Excerpt", page: 2 } }] }, () => {}, signal);
   assert.equal(JSON.parse(sent[1].messages[1].content).document.text, "[Page 2]\nExcerpt");
+  assert.match(sent[1].messages[0].content, /recognition errors/);
   assert.doesNotMatch(JSON.stringify(sent[1]), /A sample/);
   await assert.rejects(endpoint.ask({ ...question, model: "has space" }, () => {}, signal), /Choose a model/);
 });

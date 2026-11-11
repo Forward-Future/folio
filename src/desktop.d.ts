@@ -73,7 +73,7 @@ interface FolioAi {
   openRouterModels(): Promise<{ ok: boolean; models?: OpenRouterModel[]; error?: string }>;
   customEndpoint(action: "save" | "check" | "remove", input?: { baseUrl: string; key: string }): Promise<{ ok: boolean; status?: CustomEndpointStatus; error?: string }>;
   customModels(): Promise<{ ok: boolean; models?: OpenRouterModel[]; error?: string }>;
-  ask(request: { id: string; provider: "chatgpt" | "claude" | "openrouter" | "custom"; model: string; document: { name: string; text: string; truncated: boolean };
+  ask(request: { id: string; provider: "chatgpt" | "claude" | "openrouter" | "custom"; model: string; document: { name: string; text: string; truncated: boolean; recognized: boolean };
     messages: AiMessage[] }): Promise<boolean>;
   cancel(id: string): Promise<boolean>;
   onEvent(callback: (event: AiEvent) => void): () => void;

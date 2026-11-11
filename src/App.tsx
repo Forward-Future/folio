@@ -46,6 +46,9 @@ import { PrintDialog } from "./PrintDialog";
 import type { Release } from "./releaseNotes";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
+import { useOcrSearchRefresh } from "./hooks/ocr";
+import { OcrSession, copyWithText, savedMessage } from "./lib/ocr";
+import { restoreForOpen } from "./lib/ocr/session/restore";
 import { finishTextOnClickAway } from "./textEditing";
 import { drawShapes, type Shape } from "./shapes";
 import { enableWheelPaging } from "./wheelPaging";
@@ -176,6 +179,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     }
   }), []);
   const persistRef = useRef(false);
+  const ocrRef = useRef<OcrSession | null>(null);
+  const pageOcrRef = useRef<{ retry(): void } | null>(null);
+  const dirtyRef = useRef(false);
   const exporting = useRef<PDFDocumentProxy | null>(null);
   const savingCopy = useRef(false);
 
@@ -248,6 +254,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const [aiOpen, setAiOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [aiContext, setAiContext] = useState<AiContext | null>(null);
+  const [ocr, setOcr] = useState<OcrSession | null>(null);
+  const [ocrVersion, setOcrVersion] = useState(0);
+  const [ocrPhase, setOcrPhase] = useState<"running" | "done">("done");
 
   useLayoutEffect(() => {
     if (active && window.folioDesktop && !focus && !dialog && !signing && !pending && !imageView) {
@@ -274,10 +283,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   useEffect(() => { window.dispatchEvent(new Event("folio:tab-visibility")); }, [active]);
 
   const toastTimer = useRef(0);
-  const flash = useCallback((msg: string) => {
+  const flash = useCallback((msg: string, ms = 2200) => {
     setToast(msg);
     window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 2200);
+    toastTimer.current = window.setTimeout(() => setToast(null), ms);
   }, []);
 
   // ── Viewer bootstrap ────────────────────────────────────────────────
@@ -382,8 +391,24 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     const viewer = viewerRef.current!, bus = busRef.current!;
     const events = new AbortController();
     let stop: (() => void) | undefined;
-    const start = () => { stop = recognizeScannedPages(bus, viewer, scanLanguages, setTextStatus); };
-    const end = () => { stop?.(); stop = undefined; };
+    let generation = 0;
+    const end = () => { generation++; stop?.(); stop = undefined; pageOcrRef.current = null; };
+    const start = async () => {
+      end();
+      const current = generation;
+      const pdf = viewer.pdfDocument;
+      const session = ocrRef.current;
+      if (!pdf || !session || session.pdf !== pdf) return;
+      await session.setLanguages(scanLanguages);
+      if (events.signal.aborted || current !== generation || viewer.pdfDocument !== pdf) return;
+      for (const view of viewer.getCachedPageViews()) {
+        view.reset({ keepAnnotationLayer: true, keepAnnotationEditorLayer: true, keepCanvasWrapper: true });
+      }
+      viewer.update();
+      const recognition = recognizeScannedPages(bus, viewer, scanLanguages, setTextStatus, setOcrPhase);
+      pageOcrRef.current = recognition;
+      stop = recognition.stop;
+    };
     bus.on("pagesinit", start, { signal: events.signal });
     bus.on("pagesdestroy", end, { signal: events.signal });
     if (viewer.pagesCount) start();
@@ -438,6 +463,14 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
           spreadRef.current = saved.spread;
           preferencesRef.current = { sidebar: saved.sidebar, spread: saved.spread };
         }
+
+        // Recognized text for scans plugs into pdf.js page by page; it must be in place before the viewer asks for text.
+        // Password-protected documents keep theirs in memory only, like everything else Folio doesn't store for them.
+        const session = new OcrSession(pdf, password ? null : id, scanLanguages);
+        await restoreForOpen(session, signal);
+        ocrRef.current?.destroy();
+        ocrRef.current = session;
+        setOcr(session);
 
         const prev = docRef.current;
         // Password-protected documents aren't stored by Folio (same rule as Recent).
@@ -611,6 +644,12 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (!signal.aborted) { setLoading(false); tabs.failed(tabKey); setError("Couldn't open the sample document."); }
     }
   }, [beginOpen, openBytes, tabs, tabKey]);
+
+  useEffect(() => {
+    if (!ocr) return;
+    return ocr.onPage(() => setOcrVersion(ocr.version));
+  }, [ocr]);
+  useOcrSearchRefresh({ session: ocr, searchOpen, phase: ocrPhase, version: ocrVersion, find: findRef, bus: busRef });
 
   // Remember where the reader left off.
   useEffect(() => {
@@ -932,8 +971,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     try {
       const copy = await currentBytes(doc, pageOrder);
       if (!copy || docRef.current !== doc) return;
+      const withText = await copyWithText(ocr, copy.bytes, pageOrder);
+      if (docRef.current !== doc) return;
       const name = doc.sourceId ? copyName.replace(/\.pdf$/i, "") + " (edited).pdf" : copyName;
-      const blob = pdfBlob(copy.bytes);
+      const blob = pdfBlob(withText.bytes);
       saveBlob(blob, /\.pdf$/i.test(name) ? name : name + ".pdf");
       if (editRevision.current === revision) setDirty(false);
       const changes = changesForCopy(doc, copy.annotated, pageOrder);
@@ -942,7 +983,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         try {
           const original = doc.edits?.original ?? pdfBlob(await doc.pdf.getData());
           await saveVersion({ id: doc.sourceId ?? doc.id, name: doc.name, data: original },
-            { id: await contentKey(copy.bytes), name, data: blob }, changes);
+            { id: await contentKey(withText.bytes), name, data: blob }, changes);
         } catch { historyMessage = "Copy exported. Couldn’t save its version history on this device."; }
       } else if (changes.length) {
         historyMessage = "Copy exported. History is available for unencrypted PDFs up to 50 MB.";
@@ -950,14 +991,18 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (docRef.current !== doc) return;
       setError(null);
       if (doc.sourceId) {
-        await openBytes(name, copy.bytes, undefined, beginOpen(), pageOrder ? pageOrder.indexOf(pageRef.current) + 1 : pageRef.current, undefined, doc, pageOrder);
+        await openBytes(name, withText.bytes, undefined, beginOpen(), pageOrder ? pageOrder.indexOf(pageRef.current) + 1 : pageRef.current, undefined, doc, pageOrder);
       } else if (pageOrder) {
-        setPageDraft(draft => draft?.order === pageOrder ? { order: pageOrder, copy: copy.bytes } : draft);
-        flash("Downloading reordered copy");
+        setPageDraft(draft => draft?.order === pageOrder ? { order: pageOrder, copy: withText.bytes } : draft);
+        flash(withText.problem ? savedMessage({ markup: copy.annotated, ...withText }) : "Downloading reordered copy", withText.problem ? 6000 : undefined);
       } else {
-        flash(copy.annotated ? "Saved a copy with your highlights and notes" : "Download started");
+        flash(savedMessage({ markup: copy.annotated, ...withText }), withText.problem ? 6000 : undefined);
       }
-      if (historyMessage) flash(historyMessage);
+      if (historyMessage) {
+        flash(historyMessage + (withText.problem ? ` ${savedMessage({ markup: copy.annotated, ...withText })}` : ""), 6000);
+      } else if (doc.sourceId && withText.problem) {
+        flash(savedMessage({ markup: copy.annotated, ...withText }), 6000);
+      }
     } catch {
       if (docRef.current === doc) {
         if (dirty) setDirty(true);
@@ -1374,6 +1419,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
                     { kind: "action", icon: "history", label: "Version history", onSelect: () => { setAiOpen(false); setHistoryOpen(true); } },
                     { kind: "action", icon: "print", label: "Print", shortcut: keys("Ctrl P"), onSelect: print },
                     { kind: "action", icon: "info", label: "Document info", onSelect: () => setDialog("info") },
+                    { kind: "action", icon: "search", label: "Recognize text", onSelect: () => pageOcrRef.current?.retry() },
                     { kind: "divider" },
                     { kind: "toggle", icon: "moon", label: "PDF dark mode", checked: night, onSelect: () => setNightTo(!night) },
                     { kind: "action", icon: "expand", label: "Focus mode", shortcut: "F", onSelect: toggleFocus },
@@ -1441,11 +1487,11 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
               if (!copy || docRef.current !== doc) throw new Error("The document changed. Try again.");
               return copy.bytes;
             }} apply={async (bytes, change) => docRef.current === doc && !!await openBytes(doc.name, bytes, undefined, opening.current!.signal, undefined, { doc, change })} />}
-          {doc && <div className="page-text-status" role="status">{textStatus}</div>}
+          {doc && <div className="page-text-status" role="status">{textStatus}{textStatus?.startsWith("Text unavailable") && <button onClick={() => pageOcrRef.current?.retry()}>Try again</button>}</div>}
 
           {doc && searchOpen && (
             <>
-              <SearchBar result={find} onFind={runFind} onClose={closeSearch} />
+              <SearchBar result={find} recognizing={ocrPhase === "running"} onFind={runFind} onClose={closeSearch} />
               <SearchResults pdf={doc.pdf} controller={findRef.current!} bus={busRef.current!} onSelect={goTo} />
             </>
           )}
@@ -1615,6 +1661,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         onSample={() => tabs.open([{ kind: "sample", name: "Folio sample.pdf" }])} loading={loading} />}
 
       {loading && doc && <div className="loading-bar" />}
+
 
       {dragging && (
         <div className="drop-overlay">
