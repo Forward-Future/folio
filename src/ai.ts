@@ -1,7 +1,7 @@
 // Shared by the Ask AI panel and Settings: the providers' pages, and the ChatGPT sign-in flow.
 import { readSetting, writeSetting } from "./preferences";
 
-export const PROVIDERS = { chatgpt: "ChatGPT", claude: "Claude", openrouter: "OpenRouter" } as const;
+export const PROVIDERS = { chatgpt: "ChatGPT", claude: "Claude", openrouter: "OpenRouter", custom: "Custom endpoint" } as const;
 export type AiProvider = keyof typeof PROVIDERS;
 
 export function savedProvider(): AiProvider {

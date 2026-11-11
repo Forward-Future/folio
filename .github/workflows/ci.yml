@@ -27,11 +27,12 @@ jobs:
       # Everything, not --omit=dev: the libraries bundled into the app (pdf.js, KaTeX, the Markdown and OCR
       # code) and Electron itself are devDependencies here, so leaving them out audits almost nothing that ships.
       - run: npm audit --audit-level=high
+      - run: npm test
       - run: npm run test:chat-math
       - run: npm run test:thumbnails
       - run: node --test scripts/test-word-files.cjs scripts/test-network-security.cjs scripts/test-release-build.mjs scripts/test-claude-path.cjs
-      - run: node --test scripts/test-link-history.mjs
-      - run: node --test scripts/test-openrouter.cjs
+      - run: node --test scripts/test-link-history.mjs scripts/test-text-direction.mjs
+      - run: node --test scripts/test-openrouter.cjs scripts/test-custom-endpoint.cjs
       - run: npm run build
       - name: Browser Edition link shortcuts
         run: |
@@ -54,8 +55,9 @@ jobs:
       - name: Smoke test
         if: runner.os != 'Linux'
         run: npm run smoke
+      # Keep PR and temporary CI-run screenshots on the runner; only main retains its existing artifact.
       - uses: actions/upload-artifact@v7
-        if: always()
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: smoke-${{ matrix.os }}
           path: release/smoke/

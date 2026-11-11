@@ -40,8 +40,9 @@ async function resolveDestination(url, resolver) {
   const addresses = net.isIP(host) ? [host] : (await resolver.resolveHost(host)).endpoints.map(e => e.address);
   if (!addresses.length || addresses.some(ip => !net.isIP(ip))) throw new Error("Couldn't resolve that address.");
   const networks = connectedNetworks();
-  return { origin: url.origin, addresses, local: localName(host) || addresses.some(ip =>
-    isLocalAddress(ip) || networks.check(ip, net.isIPv4(ip) ? "ipv4" : "ipv6")) };
+  const nearby = ip => isLocalAddress(ip) || networks.check(ip, net.isIPv4(ip) ? "ipv4" : "ipv6");
+  // `local`: any address is local, so the person must be asked. `allLocal`: every address is, as plain http requires.
+  return { origin: url.origin, addresses, local: localName(host) || addresses.some(nearby), allLocal: addresses.every(nearby) };
 }
 
 // Read exactly one SOCKS field. Leave any pipelined application bytes in the socket.
@@ -107,10 +108,12 @@ async function connectPinned({ addresses, route, port }, signal) {
   });
 }
 
-async function guardSession(ses, system, approvedLocal, app) {
+// `localOnly` refuses every destination outside this computer and the local network (custom endpoints on plain http).
+async function guardSession(ses, system, approvedLocal, app, { localOnly = false } = {}) {
   const grants = new Map();
   const sockets = new Set();
   let denied = false;
+  let deniedPublic = false;
   let closed = false;
   const server = net.createServer({ pauseOnConnect: true }, async client => {
     sockets.add(client);
@@ -165,6 +168,7 @@ async function guardSession(ses, system, approvedLocal, app) {
         const [dest, route] = await Promise.all([resolveDestination(url, ses), system.resolveProxy(url.href)]);
         const allowedLocal = approvedLocal?.origin === dest.origin && dest.addresses.every(ip => approvedLocal.addresses.includes(ip));
         if (dest.local && !allowedLocal) { denied = true; return callback({ cancel: true }); }
+        if (localOnly && !dest.allLocal) { deniedPublic = true; return callback({ cancel: true }); }
         if (closed) return callback({ cancel: true });
         const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
         const key = bare(url.hostname) + ":" + port;
@@ -183,7 +187,7 @@ async function guardSession(ses, system, approvedLocal, app) {
         callback({});
       } catch { callback({ cancel: true }); }
     });
-    return { close, refusedLocal: () => denied };
+    return { close, refusedLocal: () => denied, refusedPublic: () => deniedPublic };
   } catch (error) { close(); throw error; }
 }
 

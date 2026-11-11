@@ -1,6 +1,7 @@
 // End-to-end smoke test, run in CI on Windows, macOS, and Linux (and locally with `npm run smoke`):
 // launches the built app in Electron, opens the sample document, and checks that pages render, text is
-// selectable and highlightable, text boxes survive reopening, and the window chrome matches the platform.
+// selectable and highlightable, text boxes survive reopening, a scanned page can be recognized and saved with its text,
+// and the window chrome matches the platform.
 // Run `npm run build` first.
 import { _electron as electron } from "playwright-core";
 import { spawnSync } from "node:child_process";
@@ -13,7 +14,9 @@ import assert from "node:assert/strict";
 import { electronPath } from "./electron-path.mjs";
 import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
+import { checkSignatureTargets } from "./smoke-signature-targets.mjs";
 import { checkOpenRouter } from "./smoke-openrouter.mjs";
+import { checkCustomEndpoint } from "./smoke-custom-endpoint.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -135,6 +138,7 @@ try {
   assert.equal(await page.getByRole("dialog").count(), 0);
   console.log("ok  shortcuts wait while a dialog is open");
   await checkOpenRouter(app, page);
+  await checkCustomEndpoint(app, page);
 
   const toolbar = page.getByRole("toolbar", { name: "Tools" });
   for (const name of ["Select", "Highlight", "Draw", "Text", "Sign", "Edit mode"]) await toolbar.getByRole("button", { name, exact: true }).waitFor();
@@ -448,7 +452,9 @@ try {
       setTimeout(() => post.call(this, message, ...rest), 2500);
     };
   });
-  await page.evaluate((n) => document.querySelector(`.page[data-page-number="${n}"]`).scrollIntoView(), lastPage);
+  const lastPageField = page.getByLabel("Page number", { exact: true });
+  await lastPageField.fill(String(lastPage));
+  await lastPageField.press("Enter");
   await page.locator(`.page[data-page-number="${lastPage}"] .textLayer span:not(.markedContent)`).first().evaluate((span) => {
     const range = document.createRange();
     range.selectNodeContents(span);
@@ -462,8 +468,23 @@ try {
   await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
   await page.waitForTimeout(800);
   await page.keyboard.press("ControlOrMeta+w");
+  await page.getByRole("button", { name: /Try a sample/ }).waitFor();
+  // A slow notes read can finish after the reopened PDF is already usable. Hold the result until Save is pressed.
+  await page.evaluate(() => {
+    const transaction = IDBDatabase.prototype.transaction;
+    IDBDatabase.prototype.transaction = function(stores, mode, ...args) {
+      const tx = transaction.call(this, stores, mode, ...args);
+      if (mode !== "readonly" || !tx.objectStoreNames.contains("notes")) return tx;
+      IDBDatabase.prototype.transaction = transaction;
+      Object.defineProperty(tx, "oncomplete", { set(handler) {
+        tx.addEventListener("complete", event => { window.releaseSavedMarks = () => handler.call(tx, event); });
+      } });
+      return tx;
+    };
+  });
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
+  await page.waitForFunction(() => typeof window.releaseSavedMarks === "function");
   const copy = path.join(env.FOLIO_TEST_USER_DATA, "copy.pdf");
   await app.evaluate(({ session }, file) => {
     globalThis.folioCopySaved = new Promise((resolve) => session.defaultSession.once("will-download", (_event, item) => {
@@ -472,6 +493,7 @@ try {
     }));
   }, copy);
   await page.keyboard.press("ControlOrMeta+s");
+  await page.evaluate(() => window.releaseSavedMarks());
   assert.equal(await app.evaluate(() => globalThis.folioCopySaved), "completed");
   assert.equal(readFileSync(copy, "latin1").match(/\/Subtype\s*\/Highlight\b/g)?.length, 4);
   const savedInk = await page.evaluate(async bytes => {
@@ -592,12 +614,125 @@ try {
   await page.locator('.page[data-page-number="1"] .annotationEditorLayer').click();
   // Filled in one go: pdf.js moves the caret while it focuses a new box, which can scramble key-by-key typing.
   await page.locator('.freeTextEditor .internal[contenteditable="true"]').fill("Saved text box");
-  await page.getByRole("button", { name: "Done", exact: true }).click();
+  const textBox = page.locator('.freeTextEditor .internal[contenteditable="true"]');
+  await textBox.click();
+  assert.equal(await toolbar.getByRole("button", { name: "Text", exact: true }).getAttribute("aria-pressed"), "true",
+    "clicking inside the text box keeps Text active");
+  const sheet = page.locator('.page[data-page-number="1"]');
+  await sheet.click({ position: { x: 30, y: 150 } });
+  await page.screenshot({ path: path.join(shots, "text-click-away.png") });
+  await page.waitForFunction(() => document.querySelector('.app')?.getAttribute('data-tool') === 'select');
+  await sheet.click({ position: { x: 45, y: 180 } });
+  assert.equal(await page.locator(".freeTextEditor").count(), 1, "clicking away never creates an extra box");
+  assert.equal(await page.locator(".freeTextEditor").innerText(), "Saved text box");
+
+  // A deliberately armed Text tool creates another box; abandoning it removes only that empty box.
+  await toolbar.getByRole("button", { name: "Text", exact: true }).click();
+  await sheet.locator(".annotationEditorLayer").click({ position: { x: 60, y: 210 } });
+  await page.locator('.freeTextEditor .internal[contenteditable="true"]').waitFor();
+  await sheet.click({ position: { x: 30, y: 150 } });
+  await page.waitForFunction(() => document.querySelector('.app')?.getAttribute('data-tool') === 'select');
+  assert.equal(await page.locator(".freeTextEditor").count(), 1, "clicking away removes an empty box");
+  await toolbar.getByRole("button", { name: "Text", exact: true }).click();
+  await sheet.locator(".annotationEditorLayer").click({ position: { x: 60, y: 210 } });
+  await page.locator('.freeTextEditor .internal[contenteditable="true"]').fill("Another text box");
+  const anotherBox = page.locator(".freeTextEditor", { hasText: "Another text box" });
+  const originalColor = await anotherBox.locator(".internal").evaluate(element => element.style.color);
+  await page.getByRole("toolbar", { name: "Annotation options" }).getByRole("radio").last().click();
+  assert.equal(await toolbar.getByRole("button", { name: "Text", exact: true }).getAttribute("aria-pressed"), "true",
+    "formatting does not exit the Text tool");
+  await sheet.click({ position: { x: 30, y: 150 } });
+  await page.waitForFunction(() => document.querySelector('.app')?.getAttribute('data-tool') === 'select');
+  assert.equal(await page.locator(".freeTextEditor").count(), 2);
+  // The color change and the text insertion are separate undoable actions.
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.waitForFunction(color => [...document.querySelectorAll(".freeTextEditor .internal")]
+    .some(element => element.textContent === "Another text box" && element.style.color === color), originalColor);
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.locator(".freeTextEditor", { hasText: "Another text box" }).waitFor({ state: "detached" });
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await page.locator(".freeTextEditor", { hasText: "Another text box" }).waitFor();
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.locator(".freeTextEditor", { hasText: "Another text box" }).waitFor({ state: "detached" });
+  console.log("ok  clicking away finishes text, removes empty boxes, preserves formatting, and supports undo/redo");
   await page.waitForTimeout(1000);
   await page.keyboard.press("ControlOrMeta+w");
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".freeTextEditor", { hasText: "Saved text box" }).waitFor({ timeout: 15_000 });
   console.log("ok  text box restored after reopening");
+
+  // A scanned page (an image, no text) is offered text recognition; once read, its words can be searched and selected.
+  // (Opened from the library by clicking, not with Ctrl+O: where the keyboard focus is after a text box was restored differs by platform.)
+  // Simulate a real Tesseract language-load rejection, then verify the reader releases the worker and offers a retry.
+  await page.window.addInitScript(() => {
+    const post = Worker.prototype.postMessage;
+    const terminate = Worker.prototype.terminate;
+    Worker.prototype.terminate = function () {
+      if (this.folioFailedStartup) top.sessionStorage.setItem("folio-failed-worker-terminated", "yes");
+      return terminate.call(this);
+    };
+    Worker.prototype.postMessage = function (message, ...rest) {
+      if (message?.action === "loadLanguage" && !top.sessionStorage.getItem("folio-language-failed")) {
+        top.sessionStorage.setItem("folio-language-failed", "yes");
+        this.folioFailedStartup = true;
+        queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+          data: { workerId: message.workerId, jobId: message.jobId, action: message.action, status: "reject", data: "Test language failure" },
+        })));
+        return;
+      }
+      return post.call(this, message, ...rest);
+    };
+  });
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /New tab/ }).click();
+  await docs.getByRole("tab", { name: "Library", selected: true }).waitFor();
+  const [scanChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.getByRole("button", { name: /Open a PDF/ }).click(),
+  ]);
+  await scanChooser.setFiles(path.join(root, "scripts", "fixtures", "scanned-sample.pdf"));
+  await page.getByRole("button", { name: "Try again" }).waitFor({ timeout: 60_000 });
+  assert.equal(await page.evaluate(() => top.sessionStorage.getItem("folio-failed-worker-terminated")), "yes");
+  // Search before the scan is read and leave the search open while recognition resumes.
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("searchable");
+  await page.getByText("No results", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Try again" }).click();
+  await page.getByText(/Results may be incomplete while text is being recognized/).waitFor();
+  await page.waitForFunction(() => document.querySelectorAll(".textLayer span:not(.markedContent)").length > 60, null, { timeout: 180_000 });
+  assert.match(await page.locator(".textLayer").first().innerText(), /Scanned\s+pages\s+become\s+searchable/);
+  console.log("ok  scanned page recognized");
+
+  // The open search refreshes after recognition; PDF.js must have a matching text-layer map.
+  await page.locator('.page[data-page-number="1"] .textLayer .highlight').filter({ hasText: "searchable" }).first().waitFor({ timeout: 15_000 });
+  await page.getByText(/1 of \d+/).first().waitFor();
+  await page.getByRole("textbox", { name: "Find in document" }).press("Escape");
+  console.log("ok  an open search warns while recognition runs, then highlights newly recognized text");
+
+  // Saving a copy puts the recognized text into the file: reopened, it has the text at once and is not offered again.
+  const scannedCopy = path.join(env.FOLIO_TEST_USER_DATA, "scanned-copy.pdf");
+  await app.evaluate(({ session }, file) => {
+    globalThis.folioScanSaved = new Promise((resolve) => session.defaultSession.once("will-download", (_event, item) => {
+      item.setSavePath(file);
+      item.once("done", (_done, state) => resolve(state));
+    }));
+  }, scannedCopy);
+  await page.keyboard.press("ControlOrMeta+s");
+  await page.getByText("Saved a copy with the recognized text").waitFor({ timeout: 60_000 });
+  assert.equal(await app.evaluate(() => globalThis.folioScanSaved), "completed");
+  assert.equal(readFileSync(scannedCopy).subarray(0, 5).toString("latin1"), "%PDF-");
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "scanned-copy.pdf", data: Buffer.from(data) }), Array.from(readFileSync(scannedCopy)));
+  await page.waitForFunction(() => document.title.startsWith("scanned-copy.pdf"), null, { timeout: 30_000 });
+  await page.waitForFunction(() => document.querySelectorAll(".textLayer span:not(.markedContent)").length > 60, null, { timeout: 30_000 });
+  assert.match(await page.locator(".textLayer").first().innerText(), /Scanned\s+pages\s+become\s+searchable/);
+  await page.waitForTimeout(2000); // a scan is looked for after the page is shown
+  assert.equal(await page.getByText("This looks like a scan").count(), 0);
+  console.log("ok  saved copy carries the recognized text");
+  await docs.getByRole("tab", { name: "Folio sample.pdf", exact: true }).click();
+  await docs.getByRole("tab", { name: "Folio sample.pdf", selected: true }).waitFor();
+  await docs.getByRole("button", { name: "Close scanned-copy.pdf", exact: true }).click();
+  await docs.getByRole("button", { name: "Close scanned-sample.pdf", exact: true }).click();
 
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });
@@ -933,6 +1068,52 @@ try {
   await page.evaluate(() => window.restorePrintFrame());
   console.log("ok  ordinary PDF printing remains available beyond the advanced sheet limit");
 
+  // Cancel must keep both Recent and saved text, including text whose PDF is no longer recent.
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: /New tab/ }).click();
+  await docs.getByRole("tab", { name: "Library", selected: true }).waitFor();
+  await page.getByRole("button", { name: "Clear all", exact: true }).waitFor();
+  const database = async (action) => page.evaluate(async (action) => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("folio");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["recent", "ocr"], action === "seed" ? "readwrite" : "readonly");
+      if (action === "seed") tx.objectStore("ocr").put({ id: "not-in-recent#1", items: [{ str: "saved text" }] });
+      const recent = tx.objectStore("recent").getAllKeys();
+      const saved = tx.objectStore("ocr").get("not-in-recent#1");
+      let linked;
+      recent.onsuccess = () => {
+        if (action === "seed") window.folioTestRecentKey = recent.result[0];
+        if (!window.folioTestRecentKey) return;
+        const key = `${window.folioTestRecentKey}#1`;
+        if (action === "seed") tx.objectStore("ocr").put({ id: key, items: [{ str: "recent saved text" }] });
+        linked = tx.objectStore("ocr").get(key);
+      };
+      tx.oncomplete = () => { db.close(); resolve({ recent: recent.result, saved: saved.result, linked: linked?.result }); };
+      tx.onabort = () => { db.close(); reject(tx.error); };
+    });
+  }, action);
+  const beforeClear = await database("seed");
+  assert.ok(beforeClear.recent.length > 0);
+  assert.ok(beforeClear.saved);
+  assert.ok(beforeClear.linked);
+  await page.evaluate(() => {
+    window.confirm = message => { window.folioClearPrompt = message; return false; };
+  });
+  await page.getByRole("button", { name: "Clear all", exact: true }).click();
+  assert.equal(await page.evaluate(() => window.folioClearPrompt), "Remove all recent files and all saved recognized text from this device?");
+  assert.deepEqual(await database("read"), beforeClear);
+  await page.getByRole("button", { name: "Clear all", exact: true }).waitFor();
+  await page.evaluate(() => { window.confirm = () => true; });
+  await page.getByRole("button", { name: "Clear all", exact: true }).click();
+  await page.getByRole("button", { name: "Clear all", exact: true }).waitFor({ state: "hidden" });
+  assert.deepEqual(await database("read"), { recent: [], saved: undefined, linked: undefined });
+  console.log("ok  cancelling Clear all preserves recent files and all saved recognized text");
+
+
   // Find positions count a ligature ("ﬁ") as the one character it is in the PDF. The quoted text has to count
   // the same way, or the words it marks drift to the left of the match.
   await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
@@ -947,6 +1128,7 @@ try {
 
   // Asked again at the end: the windows that convert a webpage or a Word document didn't bring it forward either.
   await checkStaysHidden();
+  await checkSignatureTargets(app, page, photo, shots);
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {

@@ -87,11 +87,12 @@ test("answers stream page-marked content, selection questions omit other pages, 
   assert.equal(JSON.parse(sent[0].messages[1].content).document.text, question.document.text);
   assert.match(sent[0].messages[0].content, /untrusted data/);
   assert.deepEqual(sent[0].plugins, [{ id: "context-compression", enabled: false }]);
-  const large = { ...question, document: { ...question.document, truncated: true } };
+  const large = { ...question, document: { ...question.document, truncated: true, recognized: true } };
   await assert.rejects(router.ask(large, () => {}, signal), /whole-document limit/);
   assert.equal(sent.length, 1);
   await router.ask({ ...large, messages: [{ ...question.messages[0], context: { text: "Excerpt", page: 2 } }] }, () => {}, signal);
   assert.equal(JSON.parse(sent[1].messages[1].content).document.text, "[Page 2]\nExcerpt");
+  assert.match(sent[1].messages[0].content, /recognition errors/);
   assert.doesNotMatch(JSON.stringify(sent[1]), /A sample/);
 });
 

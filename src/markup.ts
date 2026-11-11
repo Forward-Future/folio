@@ -167,8 +167,8 @@ export class MarkupController {
     }
     this.#emit();
     if (reading) this.#scheduleSave();
-    // Pages that rendered before the saved data arrived.
-    for (const page of [...this.#pending.keys()]) if (this.#ui?.getLayer(page)) void this.#restorePage(page);
+    // Finish restoring visible pages before an export collects the marks still pending on other pages.
+    await Promise.allSettled(Array.from(this.#pending.keys(), page => this.#restorePage(page)));
   }
 
   unload() {

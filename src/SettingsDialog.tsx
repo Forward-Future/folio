@@ -1,7 +1,9 @@
+import { clearRecognizedText } from "./recent";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Modal } from "./Dialogs";
 import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
 import { OpenRouterSettings } from "./OpenRouterSettings";
+import { CustomEndpointSettings } from "./CustomEndpointSettings";
 import { updateSummary } from "./updates";
 import { ScanLanguagePicker } from "./ScanLanguagePicker";
 import type { ScanLanguage } from "./scanLanguage";
@@ -151,6 +153,7 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
   const desktop = window.folioDesktop;
   const ai = desktop?.ai;
   const [error, setError] = useState<string | null>(null);
+  const [ocrCleared, setOcrCleared] = useState(false);
   const [section, setSection] = useState<"General" | "Ask AI" | "Storage">(initialSection);
 
   // Updates
@@ -256,10 +259,21 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
             </Row>}
             {provider === "openrouter" && (aiStatus ? <OpenRouterSettings ai={ai} configured={!!aiStatus.openrouter?.configured}
               onConfigured={configured => setAiStatus({ ...aiStatus, openrouter: { configured } })} /> : <p className="settings-hint">Checking connection…</p>)}
+            {provider === "custom" && (aiStatus ? <CustomEndpointSettings ai={ai} status={aiStatus.custom}
+              onStatus={custom => setAiStatus({ ...aiStatus, custom })} /> : <p className="settings-hint">Checking connection…</p>)}
           </section>
         )}
 
-        {section === "Storage" && <><StoredData /><Section title="Signature">
+        {section === "Storage" && <><StoredData /><Section title="Recognized text">
+          <Row label="Saved recognized text" hint={ocrCleared ? "Saved recognized text has been removed." : "Recognized text is stored on this device so you can search it later."}>
+            <button className="btn ghost" onClick={async () => {
+              try { await clearRecognizedText(); setOcrCleared(true); setError(null); }
+              catch { setError("Couldn't clear saved recognized text. Please try again."); }
+            }}>Clear saved text</button>
+          </Row>
+        </Section>
+
+        <Section title="Signature">
           <Row label="Remembered signature" hint={savedSignature
             ? "Saved on this computer (unencrypted) for quick signing."
             : "None. You can choose to remember one when you sign a document."}>

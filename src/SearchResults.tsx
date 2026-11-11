@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy } from "./pdf";
 import type { EventBus, PDFFindController } from "./viewer";
+import { pageText, snippetAt, type PageText, type TextPiece } from "./lib/search";
 import { keys } from "./platform";
 
 interface PageResult {
@@ -11,6 +12,8 @@ interface PageResult {
   after: string;
 }
 
+const UNREADABLE: PageText = { text: "", breaks: [] };
+
 export function SearchResults({ pdf, controller, bus, onSelect }: {
   pdf: PDFDocumentProxy;
   controller: PDFFindController;
@@ -19,7 +22,7 @@ export function SearchResults({ pdf, controller, bus, onSelect }: {
 }) {
   const [results, setResults] = useState<PageResult[]>([]);
   const [pageCount, setPageCount] = useState(0);
-  const textCache = useRef(new Map<number, Promise<string>>());
+  const textCache = useRef(new Map<number, Promise<PageText>>());
 
   useEffect(() => {
     let generation = 0;
@@ -35,18 +38,13 @@ export function SearchResults({ pdf, controller, bus, onSelect }: {
         if (request !== generation) return;
         let text = textCache.current.get(entry.page);
         if (!text) {
-          // Match offsets count characters in the text as pdf.js's find controller reads it: not normalized.
-          // Normalized text can be longer (a ligature becomes two letters), which moves the marked words.
+          // Read the page the way find does: its offsets are into the text as stored, not as normalized for display.
           text = pdf.getPage(entry.page).then(page => page.getTextContent({ disableNormalization: true })).then(content =>
-            content.items.map(item => "str" in item ? item.str : "").join(""));
+            pageText(content.items as TextPiece[]));
           textCache.current.set(entry.page, text);
         }
-        const content = await text.catch(() => "");
-        const offset = entry.offset;
-        next.push({ page: entry.page, count: entry.count,
-          before: (offset > 55 ? "..." : "") + content.slice(Math.max(0, offset - 55), offset),
-          match: content.slice(offset, offset + entry.length),
-          after: content.slice(offset + entry.length, offset + entry.length + 100) + (content.length > offset + entry.length + 100 ? "..." : "") });
+        const content = await text.catch(() => UNREADABLE);
+        next.push({ page: entry.page, count: entry.count, ...snippetAt(content, entry.offset, entry.length) });
         if (next.length % 10 === 0 && request === generation) {
           setResults([...next]);
           await new Promise(resolve => window.setTimeout(resolve, 0));
@@ -62,6 +60,8 @@ export function SearchResults({ pdf, controller, bus, onSelect }: {
     const clear = () => {
       generation++;
       window.clearTimeout(timer);
+      // OCR can add text between searches without replacing the PDF object.
+      textCache.current.clear();
       setResults([]);
       setPageCount(0);
     };
