@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { checkImageInsertion } from "./smoke-image-insertion.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
@@ -541,7 +542,61 @@ async function checkRightToLeftEditing(app, page, shots) {
   await page.getByRole("button", { name: "Exit edit mode" }).click();
   await page.getByRole("button", { name: "Edit mode", exact: true }).waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
-  console.log("ok  right-to-left text is read-only in Edit mode and can't be typed into other text");
+  console.log("ok  Hebrew text remains protected in Edit mode");
+}
+
+async function checkArabicEditing(app, page, folder, shots) {
+  // This synthetic PDF has subset fonts, Arabic ligatures, and separately positioned glyphs.
+  const source = readFileSync(path.join(import.meta.dirname, "fixtures", "arabic-editing.pdf"));
+  const open = (name, bytes) => app.evaluate(({ BrowserWindow }, { name, bytes }) =>
+    BrowserWindow.getAllWindows()[0].webContents.send("folio:open-file", { name, data: Buffer.from(bytes) }),
+    { name, bytes: Array.from(bytes) });
+  await open("Arabic editing.pdf", source);
+  await page.window.waitForFunction(() => document.title.startsWith("Arabic editing.pdf"));
+  const edit = page.getByRole("button", { name: "Edit mode", exact: true });
+  await edit.click();
+  const sheet = page.locator('.page[data-page-number="1"]');
+  const text = label => sheet.getByRole("button", { name: label, exact: true });
+  const input = sheet.getByRole("textbox", { name: "Edit text on page" });
+  await text("مراد ناصر").click();
+  assert.equal(await input.inputValue(), "مراد ناصر");
+  assert.equal(await input.evaluate(el => getComputedStyle(el).direction), "rtl");
+  const greeting = "مَرْحَبًا 2026";
+  await input.fill(greeting);
+  await page.screenshot({ path: path.join(shots, "arabic-edit-after.png") });
+  // Switching directly to another run commits the first edit and selects the second.
+  await text("شركة الخطوط يويو").click();
+  await page.waitForFunction(() => document.querySelector(".folio-inline-text")?.value === "شركة الخطوط يويو");
+  await input.fill("شركة الخطوط");
+  await sheet.click({ position: { x: 5, y: 5 } });
+  await text("شركة الخطوط").waitFor();
+  await text(greeting).waitFor();
+  const file = path.join(folder, "arabic-copy.pdf");
+  await captureDownload(app, file);
+  await page.getByRole("button", { name: "Save copy", exact: true }).click();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  const bytes = readFileSync(file);
+  const extracted = await page.evaluate(async bytes => {
+    const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
+    try {
+      const content = await (await (await task.promise).getPage(1)).getTextContent();
+      return content.items.map(item => item.str || "").join(" ").normalize("NFKC");
+    } finally { await task.destroy(); }
+  }, Array.from(bytes));
+  assert.ok(extracted.includes("شركة الخطوط"), extracted);
+  assert.ok(extracted.includes(greeting) && !extracted.includes("يويو"), extracted);
+  await open("Reopened Arabic.pdf", bytes);
+  await page.window.waitForFunction(() => document.title.startsWith("Reopened Arabic.pdf"));
+  await edit.click();
+  await text(greeting).click();
+  assert.equal(await input.inputValue(), greeting);
+  await input.fill("أهلا");
+  await input.press("Enter");
+  await text("أهلا").waitFor();
+  await captureDownload(app, path.join(folder, "arabic-edited-again.pdf"));
+  await page.getByRole("button", { name: "Save copy", exact: true }).click();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  console.log("ok  Arabic ligatures, diacritics, and numbers survive editing, saving, and reopening");
 }
 
 export function linkHistoryPdf() {
@@ -1105,7 +1160,9 @@ export async function checkReaderTools(app, page, folder, shots) {
   console.log("ok  the normal Save shortcut and Open organized copy preserve filled form fields");
   await checkScanSelection(app, page);
   await checkContentEditing(app, page, folder, shots);
+  await checkImageInsertion(app, page, folder, shots);
   await checkRightToLeftEditing(app, page, shots);
+  await checkArabicEditing(app, page, folder, shots);
   await checkLinkHistory(app, page, shots);
   await checkPageExport(app, page, folder, shots);
   await checkOrganizePages(app, page, folder, shots);

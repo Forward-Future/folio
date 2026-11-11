@@ -5,7 +5,8 @@ import type { PDFDocumentProxy } from "./pdf";
 import type { EventBus, PDFViewer } from "./viewer";
 import type { Change, EditorReply, EditorRequest, EditTarget } from "./contentEditor.worker";
 import type { PdfChange } from "./versionHistory";
-import { hasRightToLeft, RIGHT_TO_LEFT_MESSAGE } from "./textDirection";
+import { ImagePlacement, type ImageDraft } from "./ImagePlacement";
+import { isArabicText, unsupportedDirection, RIGHT_TO_LEFT_MESSAGE } from "./textDirection";
 
 export interface ContentEditorHandle { finish: () => Promise<boolean>; deselect: () => boolean }
 interface Surface { page: number; host: HTMLDivElement; viewport: PageViewport }
@@ -37,15 +38,17 @@ function inputStyle(t: EditTarget, v: PageViewport, paper: string): CSSPropertie
   const size = Math.max(1, Math.hypot(ux-ox,uy-oy));
   const angle = Math.atan2(ey-oy,ex-ox), box = rectangle(t,v);
   const width = Math.abs(Math.cos(angle))*box.width + Math.abs(Math.sin(angle))*box.height;
-  return { left: ox, top: oy, minWidth: Math.max(width+4, size), fontSize: size,
+  const anchor = s.anchor ? v.convertToViewportPoint(s.anchor[0], s.anchor[1]) : [ox,oy];
+  return { left: anchor[0], top: anchor[1], minWidth: Math.max(width+4, size), fontSize: size,
     fontFamily: s.flags & 1 ? "monospace" : s.flags & 2 ? "serif" : "sans-serif",
     fontWeight: s.bold ? 700 : 400, fontStyle: s.flags & 64 ? "italic" : "normal", color: s.color, background: paper,
-    transform: 'rotate(' + angle + 'rad) translateY(-0.88em)' };
+    transform: 'rotate(' + angle + 'rad) ' + (s.anchor ? 'translate(-100%, -0.88em)' : 'translateY(-0.88em)') };
 }
 
-export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, apply, onDirty }: {
+export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, apply, onDirty, imageDraft, setImageDraft }: {
   ref: Ref<ContentEditorHandle>; pdf: PDFDocumentProxy; viewer: PDFViewer; bus: EventBus;
   nextSelection: RefObject<NextSelection | null>;
+  imageDraft: ImageDraft | null; setImageDraft: (draft: ImageDraft | null) => void;
   snapshot: () => Promise<Uint8Array>; apply: (bytes: Uint8Array, change: PdfChange) => Promise<boolean>; onDirty: (dirty: boolean) => void;
 }) {
   const [surfaces, setSurfaces] = useState<Surface[]>([]);
@@ -60,10 +63,13 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
   const worker = useRef<Worker | null>(null);
   const waiter = useRef<{ resolve: (data: Uint8Array) => void; reject: (reason: Error) => void } | null>(null);
   const pending = useRef<Promise<boolean> | null>(null);
+  const draftRef = useRef(imageDraft);
+  draftRef.current = imageDraft;
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const modified = selected?.target.kind === "text" && value !== selected.target.label;
-  useEffect(() => { onDirty(!!modified || busy); return () => onDirty(false); }, [modified, busy, onDirty]);
+  const dirty = !!modified || !!imageDraft || busy;
+  useEffect(() => { onDirty(dirty); return () => onDirty(false); }, [dirty, onDirty]);
 
   useEffect(() => {
     const w = new Worker(new URL("./contentEditor.worker.ts", import.meta.url), { type: "module" });
@@ -75,6 +81,7 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
       const visible = viewer._getVisiblePages() as { views?: { id: number }[] };
       const pages = new Set(visible.views?.map(v => v.id));
       if (selectedRef.current) pages.add(selectedRef.current.page);
+      if (draftRef.current) pages.add(draftRef.current.page);
       const next: Surface[] = [];
       for (const page of pages) {
         const view = viewer.getPageView(page-1);
@@ -123,10 +130,10 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
     if (selected?.target.kind === "text") { input.current?.focus({ preventScroll: true }); input.current?.select(); }
   }, [selected]);
 
-  const commit = (change: Change): Promise<boolean> => {
+  const commit = (change: Change, page = selected?.page): Promise<boolean> => {
     if (pending.current) return pending.current;
     const w = worker.current;
-    if (!w || !selected) return Promise.resolve(false);
+    if (!w || !page) return Promise.resolve(false);
     setBusy(true); setError("");
     const transaction = (async () => {
       try {
@@ -134,11 +141,11 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
         if (worker.current !== w) return false;
         const result = await new Promise<Uint8Array>((resolve,reject) => {
           waiter.current = { resolve, reject };
-          w.postMessage({ page: selected.page, change, snapshot: data } satisfies EditorRequest);
+          w.postMessage({ page, change, snapshot: data } satisfies EditorRequest);
         });
         const detail: PdfChange = change.kind === "text"
-          ? { kind: "text", page: selected.page, before: selected.target.label, after: change.text }
-          : { kind: "image", page: selected.page, fileName: change.file.name };
+          ? { kind: "text", page, before: selected!.target.label, after: change.text }
+          : { kind: "image", page, fileName: change.file.name, inserted: change.kind === "insertImage" };
         return worker.current === w && await apply(result, detail);
       } catch (e) {
         if (worker.current === w) { setError(e instanceof Error ? e.message : "Couldn't apply the edit."); input.current?.focus({ preventScroll: true }); }
@@ -149,23 +156,25 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
   };
   const finish = () => {
     if (pending.current) return pending.current;
+    if (imageDraft) return commit({ kind: "insertImage", file: imageDraft.file, box: imageDraft.box, rotation: imageDraft.rotation }, imageDraft.page);
     if (selected && modified) return commit({ kind: "text", index: selected.target.index, text: value });
     setSelected(null); return Promise.resolve(true);
   };
   useImperativeHandle(ref, () => ({ finish, deselect: () => {
-    if (!selected || pending.current) return false;
+    if (pending.current) return false;
+    if (imageDraft) { setImageDraft(null); setError(""); return true; }
+    if (!selected) return false;
     selectedRef.current = null; setSelected(null); setError(""); return true;
   } }));
 
   const pick = (s: Surface, target: EditTarget) => {
-    if (pending.current) return;
-    // Opening right-to-left text in the editor would show it reversed and then refuse every change.
-    if (target.kind === "text" && hasRightToLeft(target.label)) {
+    if (pending.current || imageDraft) return;
+    if (target.kind === "text" && unsupportedDirection(target.label)) {
       selectedRef.current = null; setSelected(null); setError(RIGHT_TO_LEFT_MESSAGE);
       return;
     }
     setError(""); setValue(target.label); setSelected({ page: s.page, target, paper: target.style ? paperColor(s,target) : "" });
-    if (!target.style) return;
+    if (!target.style || target.fitted || isArabicText(target.label)) return;
     // Use the same embedded or system font as the page renderer while the caret is visible.
     const origin = target.style.origin;
     void pdf.getPage(s.page).then(async page => {
@@ -196,7 +205,7 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
   useEffect(() => {
     if (!selected) return;
     const outside = (e: PointerEvent) => {
-      if (!pending.current && e.target instanceof Element && !e.target.closest(".folio-inline-text, .folio-image-actions, .folio-content-target")) void finish();
+      if (!pending.current && e.target instanceof Element && !e.target.closest(".folio-inline-text, .folio-image-actions, .folio-content-target, [data-insert-image]")) void finish();
     };
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
@@ -211,20 +220,22 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
   return <>
     {surfaces.map(s => createPortal(<>
       {(targets.get(s.page) ?? []).map(t => <button key={t.index} type="button" className="folio-content-target"
-        data-kind={t.kind} data-locked={t.kind === "text" && hasRightToLeft(t.label) ? "" : undefined}
+        data-kind={t.kind} data-locked={t.kind === "text" && unsupportedDirection(t.label) ? "" : undefined}
         aria-label={t.label} aria-pressed={selected?.page === s.page && selected.target === t}
-        disabled={busy} style={rectangle(t,s.viewport)} onClick={() => pick(s,t)}
+        disabled={busy || !!imageDraft} style={rectangle(t,s.viewport)} onClick={() => pick(s,t)}
         onPointerDown={e => {
           if (!modified || e.button !== 0) return;
           e.preventDefault();
           nextSelection.current = { from: pdf, page: s.page, target: t };
           void finish().then(ok => { if (!ok) nextSelection.current = null; });
         }} />)}
+      {imageDraft?.page === s.page && <ImagePlacement draft={imageDraft} viewport={s.viewport} onChange={setImageDraft} disabled={busy} />}
       {selected?.page === s.page && (selected.target.kind === "text" ? <>
         <div className="folio-old-text" style={{ ...rectangle(selected.target,s.viewport), background: selected.paper }} />
-        <input ref={input} className="folio-inline-text" aria-label="Edit text on page" maxLength={32767}
+        <input ref={input} className="folio-inline-text" dir="auto" aria-label="Edit text on page" maxLength={32767}
           style={{ ...inputStyle(selected.target,s.viewport,selected.paper),
-            ...(face?.target === selected.target ? { fontFamily: face.family } : {}) }} value={value} readOnly={busy}
+            ...(selected.target.fitted || isArabicText(selected.target.label) || isArabicText(value)
+              ? { fontFamily: "FolioArabic, sans-serif" } : face?.target === selected.target ? { fontFamily: face.family } : {}) }} value={value} readOnly={busy}
           onChange={e => { setValue(e.target.value); setError(""); }}
           onKeyDown={e => {
             if (e.nativeEvent.isComposing) return;
@@ -240,7 +251,11 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
         }} />
       </div>)}
     </>,s.host,s.page))}
+    {imageDraft && <div className="folio-place-actions" role="toolbar" aria-label="Image placement">
+      <button type="button" className="btn" disabled={busy} onClick={() => { setImageDraft(null); setError(""); }}>Cancel</button>
+      <button type="button" className="btn primary" disabled={busy} onClick={() => void finish()}>Place image</button>
+    </div>}
     <div className="folio-edit-status" role={error ? "alert" : "status"}>{error || (busy ? "Applying edit…" :
-      surfaces.length > 0 && surfaces.every(s => targets.get(s.page)?.length === 0) ? "No editable text or images on this page." : "")}</div>
+      !imageDraft && surfaces.length > 0 && surfaces.every(s => targets.get(s.page)?.length === 0) ? "No editable text or images on this page." : "")}</div>
   </>;
 }

@@ -1678,3 +1678,17 @@ kbd {
 @media (max-width: 760px) {
   .version-panel { position: absolute; inset: 0 0 0 auto; width: min(340px, 92%); z-index: 12; box-shadow: var(--shadow-md); }
 }
+
+@font-face { font-family: FolioArabic; src: url("dejavu-fonts-ttf/ttf/DejaVuSans.ttf"); }
+@font-face { font-family: FolioArabic; font-weight: 700; src: url("dejavu-fonts-ttf/ttf/DejaVuSans-Bold.ttf"); }
+
+.folio-image-placement { position: absolute; z-index: 2; cursor: move; outline: 2px solid #3377ac; touch-action: none; user-select: none; }
+.folio-image-placement img { position: absolute; left: 50%; top: 50%; max-width: none; pointer-events: none; }
+.folio-image-placement .image-corner { position: absolute; width: 13px; height: 13px; padding: 0; background: white; border: 2px solid #3377ac; border-radius: 3px; touch-action: none; }
+.image-corner.nw, .image-corner.sw { left: -6px; }
+.image-corner.ne, .image-corner.se { right: -6px; }
+.image-corner.nw, .image-corner.ne { top: -6px; }
+.image-corner.sw, .image-corner.se { bottom: -6px; }
+.image-corner.nw, .image-corner.se { cursor: nwse-resize; }
+.image-corner.ne, .image-corner.sw { cursor: nesw-resize; }
+.folio-place-actions { position: absolute; z-index: 11; left: 50%; bottom: 76px; transform: translateX(-50%); display: flex; gap: 6px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow-sm); }
