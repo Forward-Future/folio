@@ -2,7 +2,7 @@ import { arabicLine } from "./arabicLayout";
 import { init, type WrappedPdfiumModule } from "@embedpdf/pdfium";
 import wasmUrl from "@embedpdf/pdfium/pdfium.wasm?url";
 import { checkPdfSize } from "./pdfInput";
-import { replacePageImage } from "./pdfImageEdit";
+import { replacePageImage, insertPageImage } from "./pdfImageEdit";
 import { isArabicText, unsupportedDirection, RIGHT_TO_LEFT_MESSAGE } from "./textDirection";
 
 export interface EditTarget {
@@ -16,7 +16,8 @@ export interface EditTarget {
   box: number[];
   style?: { matrix?: number[]; anchor?: number[]; origin: number[]; axis: number[]; size: number; flags: number; bold: boolean; color: string };
 }
-export type Change = { kind: "text"; index: number; text: string } | { kind: "image"; index: number; file: File };
+export type Change = { kind: "text"; index: number; text: string } | { kind: "image"; index: number; file: File }
+  | { kind: "insertImage"; file: File; box: number[]; rotation: number };
 export type EditorRequest = { source: Uint8Array } | { page: number } | { page: number; change: Change; snapshot: Uint8Array };
 export type EditorReply = { page: number; targets: EditTarget[] } | { bytes: Uint8Array } | { error: string; page?: number };
 
@@ -306,6 +307,7 @@ self.onmessage = async ({ data }: MessageEvent<EditorRequest>) => {
     }
     const { change, snapshot } = data;
     const result = withPage(m, snapshot, page, async (doc, handle) => {
+      if (change.kind === "insertImage") return insertPageImage(snapshot, page, change.file, change.box, change.rotation);
       const { targets, imageCount } = pageView(m, handle);
       const target = targets.find(t => t.index === change.index && t.kind === change.kind);
       if (!target) throw new Error("Select the item again.");
