@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { checkImageInsertion } from "./smoke-image-insertion.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
@@ -1057,6 +1058,7 @@ export async function checkReaderTools(app, page, folder, shots) {
   console.log("ok  the normal Save shortcut and Open reordered copy preserve filled form fields");
   await checkScanSelection(app, page);
   await checkContentEditing(app, page, folder, shots);
+  await checkImageInsertion(app, page, folder, shots);
   await checkRightToLeftEditing(app, page, shots);
   await checkArabicEditing(app, page, folder, shots);
   await checkLinkHistory(app, page, shots);

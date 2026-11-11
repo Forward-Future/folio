@@ -37,6 +37,7 @@ import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
 import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
 import { SignatureDialog } from "./SignatureDialog";
+import { newImageDraft, type ImageDraft } from "./ImagePlacement";
 import { ContentEditor, type ContentEditorHandle, type NextSelection } from "./ContentEditor";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { saveVersion, type PdfChange } from "./versionHistory";
@@ -220,6 +221,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const markDirty = useCallback(() => { editRevision.current++; setDirty(true); }, []);
   const [contentEditing, setContentEditing] = useState(false);
   const contentRef = useRef<ContentEditorHandle>(null);
+  const imageFile = useRef<HTMLInputElement>(null);
+  const imageLoad = useRef(0);
+  const [imageDraft, setImageDraft] = useState<ImageDraft | null>(null);
   const nextSelection = useRef<NextSelection | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
   const [pageDraft, setPageDraft] = useState<{ order: number[]; copy?: Uint8Array } | null>(null);
@@ -504,6 +508,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         setDoc(next);
         if (!revision) { nextSelection.current = null; setContentEditing(false); }
         setEditorDirty(false);
+        setImageDraft(null);
         setPageDraft(draft => revision && draft ? { order: draft.order } : null);
         setNumPages(pdf.numPages);
         setPage(lastPageRef.current);
@@ -694,6 +699,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   };
 
   const chooseTool = async (next: Tool, editContent = false) => {
+    if (!editContent) imageLoad.current++;
     if (contentRef.current && !(await contentRef.current.finish())) return false;
     const v = viewerRef.current!;
     if (!v.pdfDocument) return false;
@@ -711,6 +717,34 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     } catch { flash("Annotations aren’t supported for this document"); return false; }
   };
   const leaveEditMode = () => chooseTool("select");
+  const insertImage = useCallback(async (file: File) => {
+    const editor = contentRef.current, owner = docRef.current, viewer = viewerRef.current;
+    if (!editor || !owner || !viewer) return;
+    const request = ++imageLoad.current, page = viewer.currentPageNumber;
+    const pageView = viewer.getPageView(page-1);
+    const sheet = pageView?.div.querySelector(".canvasWrapper")?.getBoundingClientRect();
+    const view = containerRef.current?.getBoundingClientRect();
+    try {
+      // Measure the original page before committing a text edit, which replaces the viewer document.
+      const viewport = pageView?.viewport ?? (await owner.pdf.getPage(page)).getViewport({ scale: 1 });
+      let visible;
+      if (sheet?.width && sheet.height && view) {
+        const left = Math.max(sheet.left, view.left), top = Math.max(sheet.top, view.top);
+        const width = Math.min(sheet.right, view.right)-left, height = Math.min(sheet.bottom, view.bottom)-top;
+        if (width > 0 && height > 0) visible = new DOMRect((left-sheet.left)*viewport.width/sheet.width,
+          (top-sheet.top)*viewport.height/sheet.height, width*viewport.width/sheet.width, height*viewport.height/sheet.height);
+      }
+      const draft = await newImageDraft(file, page, viewport, visible);
+      if (request !== imageLoad.current || docRef.current !== owner || !contentRef.current) return;
+      if (!(await contentRef.current.finish())) return;
+      const current = docRef.current;
+      if (request === imageLoad.current && current && (current.sourceId ?? current.id) === (owner.sourceId ?? owner.id)) {
+        setImageDraft(draft);
+      }
+    } catch (err) {
+      if (request === imageLoad.current && docRef.current === owner) flash(err instanceof Error ? err.message : "Couldn't insert this image.");
+    }
+  }, [flash]);
   const startSigning = async () => { if (await chooseTool("select")) setSigning(true); };
 
   useEffect(() => {
@@ -1305,6 +1339,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     // Pasting a link (outside text fields) fills in Open from URL too.
     const paste = (e: ClipboardEvent) => {
       if (signing || (e.target as HTMLElement | null)?.closest?.("input, textarea, [contenteditable=true], .freeTextEditor")) return;
+      const image = contentRef.current && Array.from(e.clipboardData?.files ?? []).find(file => /^image\/(png|jpeg)$/i.test(file.type));
+      if (image) { e.preventDefault(); void insertImage(image); return; }
       const url = parseWebUrl(e.clipboardData?.getData("text/plain"));
       if (!url) return;
       e.preventDefault();
@@ -1326,7 +1362,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       window.removeEventListener("dragover", over);
       window.removeEventListener("drop", drop);
     };
-  }, [openFiles, signing]);
+  }, [openFiles, signing, insertImage]);
 
   const runFind = (query: string, opts: { again?: boolean; previous?: boolean; caseSensitive?: boolean; entireWord?: boolean }) =>
     busRef.current!.dispatch("find", {
@@ -1393,6 +1429,14 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
                 onClick={() => contentEditing ? leaveEditMode() : chooseTool("select", true)}>
                 <Icon name={contentEditing ? "check" : "edit"} size={16} /><span>{contentEditing ? "Exit edit mode" : "Edit mode"}</span>
               </button>
+              {contentEditing && <>
+                <button data-insert-image="" aria-label="Insert image" title={keys("Insert a PNG or JPEG, or paste with Ctrl+V")}
+                  onClick={() => imageFile.current?.click()}><Icon name="camera" size={16} /><span>Insert image</span></button>
+                <input hidden ref={imageFile} type="file" accept="image/png,image/jpeg" aria-label="Image to insert" onChange={event => {
+                  const file = event.target.files?.[0]; event.target.value = "";
+                  if (file) void insertImage(file);
+                }} />
+              </>}
               {(doc.sourceId || editorDirty) && <button aria-label="Save copy" title="Save edited copy" onClick={download}><Icon name="download" size={16} /><span>Save copy</span></button>}
             </div>
           )}
@@ -1481,7 +1525,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             <div ref={innerRef} className="pdfViewer" />
           </div>
           {contentEditing && doc && <ContentEditor key={doc.pdf.loadingTask.docId} ref={contentRef} nextSelection={nextSelection} pdf={doc.pdf} viewer={viewerRef.current!} bus={busRef.current!}
-            onDirty={setEditorDirty} snapshot={async () => {
+            imageDraft={imageDraft} setImageDraft={setImageDraft} onDirty={setEditorDirty} snapshot={async () => {
               if (doc.password || await doc.pdf.getPermissions() || (await doc.pdf.getSignatures())?.length) throw new Error("Editing requires an unsigned, unencrypted PDF.");
               const copy = await currentBytes(doc, []);
               if (!copy || docRef.current !== doc) throw new Error("The document changed. Try again.");

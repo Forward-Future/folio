@@ -6,7 +6,7 @@ function Changes({ changes }: { changes: PdfChange[] }) {
   return <ul className="version-changes">{changes.map((change, i) =>
     <li key={i}>
       <div className="version-change-heading"><Icon size={14} name={change.kind === "text" ? "text" : change.kind === "image" ? "camera" : change.kind === "pages" ? "grid" : "pen"} />
-        {change.kind === "text" ? change.after ? "Edited text" : "Removed text" : change.kind === "image" ? "Replaced image" :
+        {change.kind === "text" ? change.after ? "Edited text" : "Removed text" : change.kind === "image" ? change.inserted ? "Inserted image" : "Replaced image" :
           change.kind === "pages" ? "Reordered pages" : "Updated annotations or fields"}
         {"page" in change && <span>Page {change.page}</span>}
       </div>

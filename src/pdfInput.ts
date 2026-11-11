@@ -81,3 +81,11 @@ export async function readPdfResponse(response: Response, signal: AbortSignal, l
     reader?.releaseLock();
   }
 }
+
+export function checkImageFileSize(bytes: number) {
+  if (bytes > 24 * 1024 * 1024) throw new Error("Choose an image smaller than 24 MB.");
+}
+
+export function checkImageDimensions(width: number, height: number) {
+  if (width * height > 20_000_000) throw new Error("Choose an image under 20 megapixels.");
+}
