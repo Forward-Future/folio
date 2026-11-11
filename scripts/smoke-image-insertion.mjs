@@ -156,9 +156,16 @@ export async function checkImageInsertion(app, page, folder, shots) {
   }
   assert.ok(bounds[0].sun[0] > 220 && bounds[0].sun[1] > 220 && bounds[0].sun[2] < 240, "camera JPEG lost its orientation");
   assert.deepEqual(bounds[1].clear,[255,255,255,255]);
+  await page.window.waitForFunction(() => document.title.startsWith("Field notes (edited).pdf"));
   await open("Reopened images.pdf",bytes);
   await page.window.waitForFunction(() => document.title.startsWith("Reopened images.pdf"));
   await edit.click();
-  await page.locator('.page[data-page-number="1"]').getByRole("button",{name:"Image 1",exact:true}).waitFor();
+  // Folio restores the saved position. Edit targets appear when their page is in view.
+  const pageNumber = page.getByLabel("Page number", { exact: true });
+  for (const number of [1, 2]) {
+    await pageNumber.fill(String(number));
+    await pageNumber.press("Enter");
+    await page.locator(`.page[data-page-number="${number}"]`).getByRole("button", { name: "Image 1", exact: true }).waitFor();
+  }
   console.log("ok  JPEG and pasted transparent PNG match the dragged and resized previews after save, including on a rotated cropped page");
 }
