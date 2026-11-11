@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { hasRightToLeft, RIGHT_TO_LEFT_MESSAGE } from "../src/textDirection.ts";
+import { hasRightToLeft, unsupportedDirection, RIGHT_TO_LEFT_MESSAGE } from "../src/textDirection.ts";
 
 const at = (...points) => String.fromCodePoint(...points);
 
@@ -31,4 +31,9 @@ test("left-to-right text is left alone", () => {
 
 test("the message says what can't be edited", () => {
   assert.match(RIGHT_TO_LEFT_MESSAGE, /right-to-left/);
+});
+
+test("Arabic editing accepts Arabic and mixed Latin lines and preserves the protection for other RTL scripts", () => {
+  for (const text of ["مَرْحَبًا 2026", "PDF (العربية)", "Original"]) assert.equal(unsupportedDirection(text), false);
+  for (const text of ["שלום", "العربية שלום", "ܫܠܡܐ"]) assert.equal(unsupportedDirection(text), true);
 });

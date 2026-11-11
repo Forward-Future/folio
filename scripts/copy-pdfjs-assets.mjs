@@ -16,5 +16,6 @@ for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) {
 // Worker-only packages aren't included in Vite's renderer license report.
 for (const [pkg, license] of [
   ["@embedpdf/pdfium", "LICENSE"], ["@embedpdf/pdfium", "LICENSE.pdfium"], ["pdf-lib", "LICENSE.md"],
+  ["dejavu-fonts-ttf", "LICENSE"], ["bidi-js", "LICENSE.txt"],
   ["@pdf-lib/standard-fonts", "LICENSE.md"], ["@pdf-lib/upng", "LICENSE"], ["pako", "LICENSE"], ["tslib", "LICENSE.txt"],
 ]) cpSync(resolve(root, "node_modules", pkg, license), resolve(dest, "editor-licenses", pkg, license));

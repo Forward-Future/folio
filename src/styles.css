@@ -1675,3 +1675,6 @@ kbd {
 @media (max-width: 760px) {
   .version-panel { position: absolute; inset: 0 0 0 auto; width: min(340px, 92%); z-index: 12; box-shadow: var(--shadow-md); }
 }
+
+@font-face { font-family: FolioArabic; src: url("dejavu-fonts-ttf/ttf/DejaVuSans.ttf"); }
+@font-face { font-family: FolioArabic; font-weight: 700; src: url("dejavu-fonts-ttf/ttf/DejaVuSans-Bold.ttf"); }

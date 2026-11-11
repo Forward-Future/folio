@@ -5,7 +5,7 @@ import type { PDFDocumentProxy } from "./pdf";
 import type { EventBus, PDFViewer } from "./viewer";
 import type { Change, EditorReply, EditorRequest, EditTarget } from "./contentEditor.worker";
 import type { PdfChange } from "./versionHistory";
-import { hasRightToLeft, RIGHT_TO_LEFT_MESSAGE } from "./textDirection";
+import { isArabicText, unsupportedDirection, RIGHT_TO_LEFT_MESSAGE } from "./textDirection";
 
 export interface ContentEditorHandle { finish: () => Promise<boolean>; deselect: () => boolean }
 interface Surface { page: number; host: HTMLDivElement; viewport: PageViewport }
@@ -37,10 +37,11 @@ function inputStyle(t: EditTarget, v: PageViewport, paper: string): CSSPropertie
   const size = Math.max(1, Math.hypot(ux-ox,uy-oy));
   const angle = Math.atan2(ey-oy,ex-ox), box = rectangle(t,v);
   const width = Math.abs(Math.cos(angle))*box.width + Math.abs(Math.sin(angle))*box.height;
-  return { left: ox, top: oy, minWidth: Math.max(width+4, size), fontSize: size,
+  const anchor = s.anchor ? v.convertToViewportPoint(s.anchor[0], s.anchor[1]) : [ox,oy];
+  return { left: anchor[0], top: anchor[1], minWidth: Math.max(width+4, size), fontSize: size,
     fontFamily: s.flags & 1 ? "monospace" : s.flags & 2 ? "serif" : "sans-serif",
     fontWeight: s.bold ? 700 : 400, fontStyle: s.flags & 64 ? "italic" : "normal", color: s.color, background: paper,
-    transform: 'rotate(' + angle + 'rad) translateY(-0.88em)' };
+    transform: 'rotate(' + angle + 'rad) ' + (s.anchor ? 'translate(-100%, -0.88em)' : 'translateY(-0.88em)') };
 }
 
 export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, apply, onDirty }: {
@@ -159,13 +160,12 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
 
   const pick = (s: Surface, target: EditTarget) => {
     if (pending.current) return;
-    // Opening right-to-left text in the editor would show it reversed and then refuse every change.
-    if (target.kind === "text" && hasRightToLeft(target.label)) {
+    if (target.kind === "text" && unsupportedDirection(target.label)) {
       selectedRef.current = null; setSelected(null); setError(RIGHT_TO_LEFT_MESSAGE);
       return;
     }
     setError(""); setValue(target.label); setSelected({ page: s.page, target, paper: target.style ? paperColor(s,target) : "" });
-    if (!target.style) return;
+    if (!target.style || target.fitted || isArabicText(target.label)) return;
     // Use the same embedded or system font as the page renderer while the caret is visible.
     const origin = target.style.origin;
     void pdf.getPage(s.page).then(async page => {
@@ -211,7 +211,7 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
   return <>
     {surfaces.map(s => createPortal(<>
       {(targets.get(s.page) ?? []).map(t => <button key={t.index} type="button" className="folio-content-target"
-        data-kind={t.kind} data-locked={t.kind === "text" && hasRightToLeft(t.label) ? "" : undefined}
+        data-kind={t.kind} data-locked={t.kind === "text" && unsupportedDirection(t.label) ? "" : undefined}
         aria-label={t.label} aria-pressed={selected?.page === s.page && selected.target === t}
         disabled={busy} style={rectangle(t,s.viewport)} onClick={() => pick(s,t)}
         onPointerDown={e => {
@@ -222,9 +222,10 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
         }} />)}
       {selected?.page === s.page && (selected.target.kind === "text" ? <>
         <div className="folio-old-text" style={{ ...rectangle(selected.target,s.viewport), background: selected.paper }} />
-        <input ref={input} className="folio-inline-text" aria-label="Edit text on page" maxLength={32767}
+        <input ref={input} className="folio-inline-text" dir="auto" aria-label="Edit text on page" maxLength={32767}
           style={{ ...inputStyle(selected.target,s.viewport,selected.paper),
-            ...(face?.target === selected.target ? { fontFamily: face.family } : {}) }} value={value} readOnly={busy}
+            ...(selected.target.fitted || isArabicText(selected.target.label) || isArabicText(value)
+              ? { fontFamily: "FolioArabic, sans-serif" } : face?.target === selected.target ? { fontFamily: face.family } : {}) }} value={value} readOnly={busy}
           onChange={e => { setValue(e.target.value); setError(""); }}
           onKeyDown={e => {
             if (e.nativeEvent.isComposing) return;
