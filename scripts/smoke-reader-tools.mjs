@@ -451,6 +451,59 @@ async function checkContentEditing(app, page, folder, shots) {
   console.log("ok  fragmented embedded-font text in Folio's sample edits as a line and reopens in the reader");
 }
 
+async function checkRightToLeftEditing(app, page, shots) {
+  // A plain Latin run above a run whose font maps the letters a to d to Hebrew.
+  const stream = s => `<< /Length ${s.length} >>\nstream\n${s}\nendstream`;
+  const toHebrew = [
+    "/CIDInit /ProcSet findresource begin", "12 dict begin", "begincmap",
+    "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def",
+    "/CMapName /Adobe-Identity-UCS def", "/CMapType 2 def",
+    "1 begincodespacerange", "<00> <FF>", "endcodespacerange",
+    "4 beginbfchar", "<61> <05E9>", "<62> <05DC>", "<63> <05D5>", "<64> <05DD>", "endbfchar",
+    "endcmap", "CMapName currentdict /CMap defineresource pop", "end", "end",
+  ].join("\n");
+  const file = testPdf([
+    "<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F 4 0 R /H 5 0 R >> >> /Contents 7 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>",
+    stream(toHebrew),
+    stream("BT /F 16 Tf 12 170 Td (Latin) Tj ET BT /H 16 Tf 12 140 Td (abcd) Tj ET"),
+  ]);
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Right to left.pdf", data: Buffer.from(data) }), file);
+  await page.window.waitForFunction(() => document.title.startsWith("Right to left.pdf"));
+  await page.getByRole("button", { name: "Edit mode", exact: true }).click();
+  const sheet = page.locator('.page[data-page-number="1"]');
+  const latin = sheet.getByRole("button", { name: "Latin", exact: true });
+  const input = sheet.getByRole("textbox", { name: "Edit text on page" });
+  const message = page.getByText(/Folio can.t edit right-to-left text/);
+  await latin.waitFor();
+  // PDFium may hand the Hebrew back in either order, so find the run by its lock, not its label.
+  const locked = sheet.locator(".folio-content-target[data-locked]");
+  assert.equal(await locked.count(), 1);
+  assert.equal(await sheet.locator(".folio-content-target").count(), 2);
+  await locked.click();
+  await message.waitFor();
+  assert.equal(await input.count(), 0);
+  await page.screenshot({ path: path.join(shots, "right-to-left-read-only.png") });
+  // Other text still opens, and the message goes away with the click.
+  await latin.click();
+  await input.waitFor();
+  assert.equal(await message.count(), 0);
+  // Typing right-to-left text into a left-to-right run is refused too, and the run keeps its text.
+  await input.fill(String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)); await input.press("Enter");
+  await message.waitFor();
+  await input.press("Escape");
+  assert.equal(await input.count(), 0);
+  await latin.waitFor();
+  assert.equal(await locked.count(), 1);
+  await page.getByRole("button", { name: "Exit edit mode" }).click();
+  await page.getByRole("button", { name: "Edit mode", exact: true }).waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  console.log("ok  right-to-left text is read-only in Edit mode and can't be typed into other text");
+}
+
 export function linkHistoryPdf() {
   const content = "BT /F 16 Tf 40 1100 Td (Follow a PDF link, then go Back.) Tj ET";
   return testPdf([
@@ -906,6 +959,7 @@ export async function checkReaderTools(app, page, folder, shots) {
   console.log("ok  the normal Save shortcut and Open reordered copy preserve filled form fields");
   await checkScanSelection(app, page);
   await checkContentEditing(app, page, folder, shots);
+  await checkRightToLeftEditing(app, page, shots);
   await checkLinkHistory(app, page, shots);
   await checkPageExport(app, page, folder, shots);
   await checkPenDrawing(app, page, folder, shots);
