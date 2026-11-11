@@ -6,7 +6,7 @@
 // - Claude: the person's own, unmodified Claude Code CLI, signed in with their Claude subscription
 //   through Anthropic's own flow. Folio never sees or stores Claude credentials; it runs `claude -p`
 //   with every tool disabled and reads the streamed answer.
-const { app, net, safeStorage, shell } = require("electron");
+const { app, net, safeStorage, session: sessions, shell } = require("electron");
 const { spawn, execFile } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -15,6 +15,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { chatRequest, claudePrompt } = require("./ai-prompt.cjs");
 const { createOpenRouter } = require("./openrouter.cjs");
+const { createCustomEndpoint } = require("./custom-endpoint.cjs");
+const { guardSession, resolveDestination } = require("./network.cjs");
 const { claudeChildPath, findClaude: lookUpClaude } = require("./claude-path.cjs");
 
 const AUTH_ISSUER = "https://auth.openai.com";
@@ -29,12 +31,46 @@ const REFRESH_FAILURES = new Set(["invalid_grant", "invalid_refresh_token", "tok
 const dir = () => path.join(app.getPath("userData"), "ai");
 const file = (name) => path.join(dir(), name);
 const openRouter = createOpenRouter({ net, safeStorage, file, writeAtomic });
+// Set by register(): main.cjs owns the window, so it shows the local-address question.
+let confirmLocalAddress = async () => false;
+const customEndpoint = createCustomEndpoint({ fetch: endpointFetch, resolve: (url) => resolveDestination(url, sessions.defaultSession),
+  confirmLocal: (url, addresses) => confirmLocalAddress(url, addresses), safeStorage, file, writeAtomic });
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
 function writeAtomic(name, contents) {
   fs.mkdirSync(dir(), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file(name) + ".tmp", contents, { mode: 0o600 });
   fs.renameSync(file(name) + ".tmp", file(name));
+}
+
+// ── Custom endpoints ───────────────────────────────────────────────────────────────────────
+// Each request gets its own in-memory session behind network.cjs's guard, the one URL downloads use: Folio connects
+// to the addresses it resolved itself, and reaches this computer or the local network only at the origin and
+// addresses the person approved. A plain http address can't reach anywhere else, even if its name later resolves to
+// a public address. The guard closes once the answer has been read.
+async function endpointFetch(url, options, approvedLocal) {
+  const ses = sessions.fromPartition(`folio-endpoint-${crypto.randomUUID()}`); // in-memory only
+  const guard = await guardSession(ses, sessions.defaultSession, approvedLocal, app, { localOnly: url.startsWith("http:") });
+  let response;
+  try { response = await ses.fetch(url, options); }
+  catch (error) {
+    guard.close();
+    if (guard.refusedLocal()) throw Object.assign(new Error("Local address not approved"), { code: "local_refused" });
+    if (guard.refusedPublic()) throw Object.assign(new Error("Plain http to a public address"), { code: "public_refused" });
+    throw error;
+  }
+  if (!response.body) { guard.close(); return response; }
+  const reader = response.body.getReader();
+  const body = new ReadableStream({
+    async pull(controller) {
+      try {
+        const { value, done } = await reader.read();
+        if (done) { guard.close(); controller.close(); } else controller.enqueue(value);
+      } catch (error) { guard.close(); controller.error(error); }
+    },
+    cancel(reason) { guard.close(); return reader.cancel(reason); },
+  });
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 // ── ChatGPT credentials (encrypted with Windows' per-user data protection) ──────────────────
@@ -509,8 +545,8 @@ const active = new Map();
 const MAX_CHARS = 1_500_000;
 
 function validRequest(req) {
-  return req && typeof req.id === "string" && req.id.length < 100 && ["chatgpt", "claude", "openrouter"].includes(req.provider)
-    && typeof req.model === "string" && req.model.length <= (req.provider === "openrouter" ? 256 : 99)
+  return req && typeof req.id === "string" && req.id.length < 100 && ["chatgpt", "claude", "openrouter", "custom"].includes(req.provider)
+    && typeof req.model === "string" && req.model.length <= (req.provider === "openrouter" || req.provider === "custom" ? 256 : 99)
     && typeof req.document?.name === "string" && typeof req.document.text === "string" && typeof req.document.truncated === "boolean" && typeof req.document.recognized === "boolean"
     && Array.isArray(req.messages) && req.messages.length > 0 && req.messages.length < 200
     && req.messages.every((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
@@ -520,9 +556,11 @@ function validRequest(req) {
 
 const MAX_ACTIVE = 2;
 
-function register(handle, send) {
+function register(handle, send, { confirmLocal } = {}) {
+  if (confirmLocal) confirmLocalAddress = confirmLocal;
   cleanStaleClaudeFolders();
-  handle("folio:ai-status", async () => ({ chatgpt: await chatgptStatus(), claude: await claudeStatus(), openrouter: openRouter.status() }));
+  handle("folio:ai-status", async () => ({ chatgpt: await chatgptStatus(), claude: await claudeStatus(), openrouter: openRouter.status(),
+    custom: customEndpoint.status() }));
   handle("folio:ai-router-key", async (_event, action, key) => {
     try {
       if (action === "save") await openRouter.save(key);
@@ -535,6 +573,19 @@ function register(handle, send) {
   handle("folio:ai-router-models", async () => {
     try { return { ok: true, models: await openRouter.models() }; }
     catch { return { ok: false, error: "Couldn't load OpenRouter models. Check your key and connection, or enter a model ID." }; }
+  });
+  handle("folio:ai-custom-endpoint", async (_event, action, input) => {
+    try {
+      if (action === "save") await customEndpoint.save(input);
+      else if (action === "remove") await customEndpoint.remove();
+      else if (action === "check") await customEndpoint.check();
+      else throw new Error("Unknown endpoint action.");
+      return { ok: true, status: customEndpoint.status() };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+  handle("folio:ai-custom-models", async () => {
+    try { return { ok: true, models: await customEndpoint.models() }; }
+    catch (error) { return { ok: false, error: error.message + " You can still enter a model ID." }; }
   });
   handle("folio:ai-chatgpt-signin", async () => {
     try { return { ok: true, status: await signInChatGPT() }; } catch (e) { return { ok: false, error: e.message }; }
@@ -557,7 +608,7 @@ function register(handle, send) {
     const controller = new AbortController();
     active.set(req.id, controller);
     const emit = (text) => send("folio:ai-event", { id: req.id, type: "delta", text });
-    const ask = { chatgpt: askChatGPT, claude: askClaude, openrouter: openRouter.ask }[req.provider];
+    const ask = { chatgpt: askChatGPT, claude: askClaude, openrouter: openRouter.ask, custom: customEndpoint.ask }[req.provider];
     const { name, text, truncated, recognized } = req.document;
     const messages = req.messages.map(({ role, content, context }) => context
       ? { role, content, context: { text: context.text, page: context.page } } : { role, content });

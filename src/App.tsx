@@ -101,6 +101,7 @@ interface OpenDoc {
   /** The file's size; its bytes live in pdf.js's worker (pdf.getData()) rather than in a second copy here. */
   size: number;
   pdf: PDFDocumentProxy;
+  markupReady: Promise<void>;
   /** Used only in memory when reopening an annotated snapshot for page reordering. */
   password?: string;
   /** Original library entry while content edits are held in memory. */
@@ -472,8 +473,6 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         setOcr(session);
 
         const prev = docRef.current;
-        const next: OpenDoc = { id, name, size: data.byteLength, pdf, password, sourceId: revision?.sourceId ?? revision?.id, historyAllowed, edits };
-        docRef.current = next;
         // Password-protected documents aren't stored by Folio (same rule as Recent).
         const reading = previous ? markupRef.current!.state : undefined;
         if (reading?.bookmarkedPages && exportedOrder) {
@@ -481,7 +480,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
           reading.bookmarkedPages = exportedOrder.flatMap((n, i) => bookmarks.has(n) ? [i + 1] : []);
         }
         persistRef.current = !password && !revision;
-        void markupRef.current!.load(id, persistRef.current, reading);
+        const markupReady = markupRef.current!.load(id, persistRef.current, reading);
+        const next: OpenDoc = { id, name, size: data.byteLength, pdf, password, markupReady, sourceId: revision?.sourceId ?? revision?.id, historyAllowed, edits };
+        docRef.current = next;
         setNoteBox(null);
         setPinned(null);
         setAiContext(null);
@@ -906,6 +907,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     const storage = doc.pdf.annotationStorage;
     const keys: string[] = [];
     try {
+      await doc.markupReady;
+      if (docRef.current !== doc) return null;
       const unrendered = await markupRef.current!.unrenderedMarks(doc.pdf);
       for (const data of unrendered) {
         const key = `pdfjs_internal_editor_folio-unrendered-${keys.length}`;
@@ -943,8 +946,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const exportNotes = async (format: "markdown" | "json") => {
     if (!doc) return;
     const controller = markupRef.current!;
-    controller.sync();
     try {
+      await doc.markupReady;
+      if (docRef.current !== doc) return;
+      controller.sync();
       if (format === "markdown") {
         const ok = await copyText(notesMarkdown(doc.name, controller.state));
         if (docRef.current === doc) flash(ok ? "Markdown copied" : "Copy failed");

@@ -228,7 +228,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   }, [messages]);
 
   const connected = { chatgpt: chatgptConnected, claude: !!status?.claude.installed && status.claude.loggedIn,
-    openrouter: !!status?.openrouter?.configured && !!model };
+    openrouter: !!status?.openrouter?.configured && !!model, custom: !!status?.custom?.configured && !!model };
   const ready = loaded && connected[provider];
 
   // Closing the panel, entering focus mode, or opening another document ends an answer in progress the way Stop does.
@@ -271,7 +271,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     onClearContext();
     try {
       const session = ocrSession(pdf);
-      const doc = provider === "openrouter" && context
+      const doc = (provider === "openrouter" || provider === "custom") && context
         ? { text: "", truncated: true, recognized: !!session && (session.embedded.has(context.page) || !!session.pages.get(context.page)?.length) }
         : await documentText(pdf);
       if (preparing.current !== id) return;
@@ -356,6 +356,12 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
           <div className="ai-card">
             <h3>Connect OpenRouter</h3>
             <p>{status.openrouter?.configured ? "Choose a model for your questions." : "Use your own API key and choose a model in Settings."}</p>
+            <button className="btn primary" onClick={onSettings}>Open Ask AI settings</button>
+          </div>
+        ) : provider === "custom" && !connected.custom ? (
+          <div className="ai-card">
+            <h3>Connect an endpoint</h3>
+            <p>{status.custom?.configured ? "Choose a model for your questions." : "Enter your server's address, an optional key, and a model in Settings."}</p>
             <button className="btn primary" onClick={onSettings}>Open Ask AI settings</button>
           </div>
         ) : (
@@ -456,13 +462,15 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
         </form>
         {ready && (
           <div className="ai-meta">
-            {provider === "openrouter" ? <button className="link small router-model-link" title={model} onClick={onSettings}>{model}</button> :
+            {provider === "openrouter" || provider === "custom" ? <button className="link small router-model-link" title={model} onClick={onSettings}>{model}</button> :
             <select value={model} onChange={(e) => saveAiPreference(modelKey, e.target.value)} aria-label="Model">
               {(provider === "chatgpt" ? models : CLAUDE_MODELS).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>}
             {provider === "chatgpt" ? (
               <span>Using ChatGPT plan · <a href={USAGE_URL} target="_blank" rel="noreferrer">Manage usage</a></span>
-            ) : provider === "openrouter" ? <span>Billed by OpenRouter</span> : (
+            ) : provider === "openrouter" ? <span>Billed by OpenRouter</span> : provider === "custom" ? (
+              <span title={status?.custom.baseUrl}>Sent to {status?.custom.configured ? new URL(status.custom.baseUrl).host : "your endpoint"}</span>
+            ) : (
               <span>{status?.claude.subscription ? "Using your Claude subscription via Claude Code" : "Using Claude Code"}</span>
             )}
           </div>

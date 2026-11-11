@@ -16,6 +16,7 @@ import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
 import { checkSignatureTargets } from "./smoke-signature-targets.mjs";
 import { checkOpenRouter } from "./smoke-openrouter.mjs";
+import { checkCustomEndpoint } from "./smoke-custom-endpoint.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -137,6 +138,7 @@ try {
   assert.equal(await page.getByRole("dialog").count(), 0);
   console.log("ok  shortcuts wait while a dialog is open");
   await checkOpenRouter(app, page);
+  await checkCustomEndpoint(app, page);
 
   const toolbar = page.getByRole("toolbar", { name: "Tools" });
   for (const name of ["Select", "Highlight", "Draw", "Text", "Sign", "Edit mode"]) await toolbar.getByRole("button", { name, exact: true }).waitFor();
@@ -466,8 +468,23 @@ try {
   await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
   await page.waitForTimeout(800);
   await page.keyboard.press("ControlOrMeta+w");
+  await page.getByRole("button", { name: /Try a sample/ }).waitFor();
+  // A slow notes read can finish after the reopened PDF is already usable. Hold the result until Save is pressed.
+  await page.evaluate(() => {
+    const transaction = IDBDatabase.prototype.transaction;
+    IDBDatabase.prototype.transaction = function(stores, mode, ...args) {
+      const tx = transaction.call(this, stores, mode, ...args);
+      if (mode !== "readonly" || !tx.objectStoreNames.contains("notes")) return tx;
+      IDBDatabase.prototype.transaction = transaction;
+      Object.defineProperty(tx, "oncomplete", { set(handler) {
+        tx.addEventListener("complete", event => { window.releaseSavedMarks = () => handler.call(tx, event); });
+      } });
+      return tx;
+    };
+  });
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30_000 });
+  await page.waitForFunction(() => typeof window.releaseSavedMarks === "function");
   const copy = path.join(env.FOLIO_TEST_USER_DATA, "copy.pdf");
   await app.evaluate(({ session }, file) => {
     globalThis.folioCopySaved = new Promise((resolve) => session.defaultSession.once("will-download", (_event, item) => {
@@ -476,6 +493,7 @@ try {
     }));
   }, copy);
   await page.keyboard.press("ControlOrMeta+s");
+  await page.evaluate(() => window.releaseSavedMarks());
   assert.equal(await app.evaluate(() => globalThis.folioCopySaved), "completed");
   assert.equal(readFileSync(copy, "latin1").match(/\/Subtype\s*\/Highlight\b/g)?.length, 4);
   const savedInk = await page.evaluate(async bytes => {
