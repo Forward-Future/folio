@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./icons";
 import { copyText } from "./clipboard";
@@ -8,8 +8,8 @@ import { ocrSession } from "./lib/ocr";
 import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, subscribeAiPreferences, USAGE_URL } from "./ai";
 import { Modal } from "./Dialogs";
 import { readSetting } from "./preferences";
-import { MAX_DOC_CHARS, type DocText } from "./aiAttachments";
-import type { DocumentTabs } from "./documentTabs";
+import { documentNotes, MAX_DOC_CHARS, shareBudget, type Attachment, type DocText } from "./aiAttachments";
+import type { DocumentTabs, OpenDocument } from "./documentTabs";
 
 export type { DocText };
 
@@ -65,7 +65,7 @@ export function documentText(pdf: PDFDocumentProxy) {
 
 // ── Panel ─────────────────────────────────────────────────────────────────────────────────
 // Keep partial replies and provider errors when the panel closes. Protected documents are session-only.
-const conversations = new Map<string, { messages: Message[]; generation: number; persist: boolean }>();
+const conversations = new Map<string, { messages: Message[]; generation: number; persist: boolean; attachments: Attachment[] }>();
 let lastChatClear = 0;
 export function forgetClearedChats(generation: number) {
   lastChatClear = Math.max(lastChatClear, generation);
@@ -74,8 +74,8 @@ export function forgetClearedChats(generation: number) {
   }
 }
 
-function rememberChat(id: string, persist: boolean, messages: Message[], generation: number) {
-  if (!persist || generation >= lastChatClear) conversations.set(id, { messages, generation, persist });
+function rememberChat(id: string, persist: boolean, messages: Message[], generation: number, attachments: Attachment[]) {
+  if (!persist || generation >= lastChatClear) conversations.set(id, { messages, generation, persist, attachments });
 }
 
 function CopyResponse({ text }: { text: string }) {
@@ -141,7 +141,7 @@ interface Props {
   tabKey: number;
 }
 
-export function AiPanel({ pdf, docId, persist, docName, context, onClearContext, onGoToPage, onSettings, onClose }: Props) {
+export function AiPanel({ pdf, docId, persist, docName, context, onClearContext, onGoToPage, onSettings, onClose, tabs, tabKey }: Props) {
   const ai = window.folioDesktop?.ai;
   const [status, setStatus] = useState<AiStatus | null>(null);
   const provider = useSyncExternalStore(subscribeAiPreferences, savedProvider);
@@ -150,7 +150,19 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const modelKey = `folio:ai-model:${provider}`;
   const savedModel = useSyncExternalStore(subscribeAiPreferences, () => readSetting(modelKey) ?? "");
   const model = provider === "chatgpt" && models.length && !models.some(m => m.id === savedModel) ? models[0].id : savedModel;
+  // The picker lists what is open in other tabs right now, so it follows tabs opening and closing.
+  const tabRevision = useSyncExternalStore(tabs.subscribe, tabs.snapshot);
+  const openDocs = useMemo(() => tabs.documents(tabKey), [tabs, tabKey, tabRevision]);
   const [messages, setMessages] = useState<Message[]>(() => conversations.get(docId)?.messages ?? []);
+  const [attachments, setAttachments] = useState<Attachment[]>(() => conversations.get(docId)?.attachments ?? []);
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  // Adding a password-protected document makes the conversation session-only, like the protected document itself.
+  // A remembered conversation that stopped saving while its document can save was made session-only that way.
+  const [sessionOnly, setSessionOnly] = useState(() => persist && conversations.get(docId)?.persist === false);
+  const keep = persist && !sessionOnly;
+  const [notes, setNotes] = useState<string[]>([]);
+  const [addOpen, setAddOpen] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
@@ -160,6 +172,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const preparing = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const addRef = useRef<HTMLDivElement>(null);
   const newConversationRef = useRef<HTMLButtonElement>(null);
   const cancelNew = () => { setConfirmNew(false); newConversationRef.current?.focus(); };
 
@@ -169,25 +182,41 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   useEffect(() => {
     if (loaded) return;
     let cancelled = false;
-    void getAiHistory(docId).then(({ messages, generation }) => {
+    void getAiHistory(docId).then(({ messages, attachments, generation }) => {
       if (cancelled) return;
       setMessages(messages);
+      setAttachments(current => current.length ? current : attachments);
       setGeneration(generation);
     });
     return () => { cancelled = true; };
   }, [docId, loaded]);
   useEffect(() => {
     if (generation === null) return;
-    rememberChat(docId, persist, messages, generation);
+    rememberChat(docId, keep, messages, generation, attachmentsRef.current);
     // Save once an answer has finished (not on every streamed word).
-    if (persist && !busy) void saveAiHistory(docId, storedMessages(messages), generation);
-  }, [docId, messages, busy, generation, persist]);
+    if (keep && !busy) void saveAiHistory(docId, storedMessages(messages), generation, attachmentsRef.current);
+  }, [docId, messages, busy, generation, keep]);
   useEffect(() => {
     let current = true;
     void ai?.status().then(value => { if (current) setStatus(value); }).catch(() => { if (current) setSetupError("Couldn't check AI connections."); });
     return () => { current = false; };
   }, [ai, keyRevision]);
   useEffect(() => { if (context) inputRef.current?.focus(); }, [context]);
+
+  // The document picker closes the way the More menu does: on Escape, or a click anywhere else.
+  useEffect(() => {
+    if (!addOpen) return;
+    const close = (event: MouseEvent) => !addRef.current?.contains(event.target as Node) && setAddOpen(false);
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.stopPropagation(); setAddOpen(false); }
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", key, true);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, [addOpen]);
 
   // ChatGPT's model list depends on the signed-in account.
   const chatgptConnected = !!status?.chatgpt.connected;
@@ -241,6 +270,31 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   // Otherwise it keeps running unseen, holds one of the two answers allowed at a time, and comes back never finishing.
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+
+  // The single place attachments change, so the remembered conversation keeps them when the panel closes.
+  // Saved history keeps them too, unless one of them is password-protected.
+  const updateAttachments = useCallback((next: Attachment[], locked = false) => {
+    setAttachments(next);
+    if (locked) setSessionOnly(true);
+    const keepNow = keep && !locked;
+    if (generation === null) return;
+    rememberChat(docId, keepNow, messagesRef.current, generation, next);
+    if (keepNow && messagesRef.current.length) void saveAiHistory(docId, storedMessages(messagesRef.current), generation, next);
+  }, [docId, keep, generation]);
+  const addAttachment = (doc: OpenDocument) => updateAttachments([...attachments, { name: doc.name, contentId: doc.contentId }], doc.locked);
+  const removeAttachment = (contentId: string) => updateAttachments(attachments.filter((a) => a.contentId !== contentId));
+
+  // Answers can cite this document or an attached one; a page reference jumps to the tab that has it.
+  const citedFiles = useMemo(() => [docName, ...attachments.map((attachment) => attachment.name)], [attachments, docName]);
+  const openPage = useCallback((page: number, file?: string) => {
+    if (file === undefined || file === docName) onGoToPage(page);
+    else {
+      const attachment = attachments.find((a) => a.name === file);
+      // showPage is false when the document is no longer open; there is nothing to show then.
+      if (attachment) tabs.showPage(attachment.contentId, page);
+    }
+  }, [attachments, docName, onGoToPage, tabs]);
+
   useEffect(() => () => {
     preparing.current = null;
     const id = busyRef.current;
@@ -251,10 +305,10 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     const last = list[list.length - 1];
     const kept = last?.role === "assistant" && !last.content && !last.error ? list.slice(0, -1) : list;
     if (generation !== null) {
-      rememberChat(docId, persist, kept, generation);
-      if (persist) void saveAiHistory(docId, storedMessages(kept), generation);
+      rememberChat(docId, keep, kept, generation, attachmentsRef.current);
+      if (keep) void saveAiHistory(docId, storedMessages(kept), generation, attachmentsRef.current);
     }
-  }, [ai, docId, persist, generation]);
+  }, [ai, docId, keep, generation]);
   const stop = () => {
     if (!busy) return;
     if (preparing.current !== busy) { void ai?.cancel(busy); return; }
@@ -277,12 +331,27 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     onClearContext();
     try {
       const session = ocrSession(pdf);
-      const doc = (provider === "openrouter" || provider === "custom") && context
-        ? { text: "", truncated: true, recognized: !!session && (session.embedded.has(context.page) || !!session.pages.get(context.page)?.length) }
-        : await documentText(pdf);
+      // The attached tabs are read alongside this document, so one slow scan doesn't wait on another.
+      const [doc, attachedTexts] = await Promise.all([
+        (provider === "openrouter" || provider === "custom") && context
+          ? { text: "", truncated: true, recognized: !!session && (session.embedded.has(context.page) || !!session.pages.get(context.page)?.length) }
+          : documentText(pdf),
+        Promise.all(attachments.map((attachment) => tabs.documentText(attachment.contentId))),
+      ]);
       if (preparing.current !== id) return;
       preparing.current = null;
-      await ai.ask({ id, provider, model, document: { name: docName, ...doc },
+      if (attachedTexts.some((text) => text?.locked)) setSessionOnly(true);
+      // A closed tab reads as null; its document is skipped until it is opened again.
+      const attached = attachments.flatMap((attachment, i) => {
+        const text = attachedTexts[i];
+        return text ? [{ name: attachment.name, text: text.text, truncated: text.truncated, recognized: text.recognized }] : [];
+      });
+      const [mainDoc, ...others] = shareBudget([{ name: docName, ...doc }, ...attached]);
+      // With a passage selected, OpenRouter and custom endpoints send only that passage of this document by design.
+      const passageOnly = (provider === "openrouter" || provider === "custom") && !!context;
+      const skipped = attachments.filter((_, i) => !attachedTexts[i]).map((a) => `${a.name} isn't open, so it was left out.`);
+      setNotes(attachments.length ? [...documentNotes(passageOnly ? others : [mainDoc, ...others]), ...skipped] : []);
+      await ai.ask({ id, provider, model, document: mainDoc, ...(others.length ? { attachments: others } : {}),
         messages: history.map(({ role, content, context }) => ({ role, content, ...(context ? { context } : {}) })) });
     } catch {
       if (busyRef.current !== id) return;
@@ -295,7 +364,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
         return next;
       });
     }
-  }, [ai, pdf, context, messages, provider, model, docName, onClearContext, ready]);
+  }, [ai, pdf, context, messages, provider, model, docName, attachments, tabs, onClearContext, ready]);
 
   const signIn = async () => {
     if (!ai) return;
@@ -306,6 +375,10 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     setSetupError(result.error);
     setStatus(result.status);
   };
+
+  const attachedIds = new Set(attachments.map((a) => a.contentId));
+  const addable = openDocs.filter((doc) => !attachedIds.has(doc.contentId));
+  const openIds = new Set(openDocs.map((doc) => doc.contentId));
 
   const placeholder = !ready ? "Connect an AI provider to ask questions"
     : context ? "Ask about the selected passage…" : "Ask about this document…";
@@ -342,7 +415,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
               {signingIn ? "Open the sign-in page again" : "Continue with ChatGPT"}
             </button>
             {signingIn && <p className="fine">Finish signing in in your browser, then come back here.</p>}
-            <p className="fine">When you ask, Folio sends your question and the document's text to OpenAI. Nothing is sent otherwise.</p>
+            <p className="fine">When you ask, Folio sends your question and the text of this document and any documents you add to OpenAI. Nothing is sent otherwise.</p>
           </div>
         ) : provider === "claude" && !(status.claude.installed && status.claude.loggedIn) ? (
           <div className="ai-card">
@@ -356,7 +429,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
               {!status.claude.installed && <a className="btn ghost" href={CLAUDE_CODE_URL} target="_blank" rel="noreferrer">Get Claude Code</a>}
               <button className="btn primary" onClick={async () => setStatus({ ...status, claude: await ai.recheckClaude() })}>Check again</button>
             </div>
-            <p className="fine">Folio never sees your Claude password or tokens. When you ask, it sends your question and the document's text to Anthropic through Claude Code.</p>
+            <p className="fine">Folio never sees your Claude password or tokens. When you ask, it sends your question and the text of this document and any documents you add to Anthropic through Claude Code.</p>
           </div>
         ) : provider === "openrouter" && !connected.openrouter ? (
           <div className="ai-card">
@@ -383,7 +456,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
             )}
             {messages.length === 0 && (
               <div className="ai-empty">
-                <p>Ask anything about <strong>{docName.replace(/\.pdf$/i, "")}</strong>, or select text in the document and choose <em>Ask AI</em>.</p>
+                <p>Ask anything about <strong>{docName.replace(/\.pdf$/i, "")}</strong>, or select text in the document and choose <em>Ask AI</em>. Add other open documents with <strong>+</strong>.</p>
                 <div className="suggestions">
                   {(context ? ["Explain this in simple terms", "Why does this matter?", "Summarize this passage"]
                     : ["Summarize this document", "What are the key takeaways?", "What questions does this leave open?"]).map((q) => (
@@ -412,7 +485,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
                 ) : m.content ? (
                   <>
                     <Suspense fallback={<p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}>
-                      <AiMarkdown text={m.content} onPage={onGoToPage} />
+                      <AiMarkdown text={m.content} files={citedFiles} onPage={openPage} />
                     </Suspense>
                     {(!busy || i < messages.length - 1) && <CopyResponse text={m.content} />}
                   </>
@@ -435,6 +508,39 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
             </button>
           </div>
         )}
+        {notes.length > 0 && <div className="ai-notes" role="status">{notes.map((note) => <p key={note}>{note}</p>)}</div>}
+        <div className="ai-attachments">
+          <div className="ai-add" ref={addRef}>
+            <button className="pill-btn" aria-haspopup="menu" aria-expanded={addOpen} aria-label="Add open document" title="Add open document"
+              disabled={!!busy} onClick={() => setAddOpen(open => !open)}>
+              <Icon name="plus" size={14} />
+            </button>
+            {addOpen && (
+              <div className="menu dropdown" role="menu" aria-label="Open documents">
+                {addable.length ? addable.map(doc => (
+                  <button key={doc.contentId} role="menuitem" title={doc.name}
+                    onClick={() => { setAddOpen(false); addAttachment(doc); }}>
+                    <Icon name="file" size={15} />
+                    <span className="menu-label">{doc.name.replace(/\.pdf$/i, "")}</span>
+                  </button>
+                )) : <button disabled role="menuitem">Open another PDF in a tab to add it</button>}
+              </div>
+            )}
+          </div>
+          {attachments.map(attachment => {
+            const open = openIds.has(attachment.contentId);
+            return (
+              <div key={attachment.contentId} className={open ? "context-chip attachment" : "context-chip attachment missing"}
+                title={open ? attachment.name : "Not open: it will be skipped until this document is opened again"}>
+                <span>{attachment.name.replace(/\.pdf$/i, "")}</span>
+                <button disabled={!!busy} aria-label={`Remove ${attachment.name}`} title="Remove"
+                  onClick={() => removeAttachment(attachment.contentId)}>
+                  <Icon name="close" size={12} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
         <form
           className="composer"
           onSubmit={(e) => {
@@ -485,6 +591,8 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
       {confirmNew && createPortal(<NewConversationDialog onCancel={cancelNew} onConfirm={() => {
         setConfirmNew(false);
         setMessages([]);
+        setNotes([]);
+        updateAttachments([]);
         inputRef.current?.focus();
       }} />, document.body)}
     </aside>

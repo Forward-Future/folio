@@ -21,7 +21,7 @@ export interface Reader {
 }
 
 /** An open document that Ask AI can add to another tab's conversation. */
-export interface OpenDocument { key: number; name: string; contentId: string }
+export interface OpenDocument { key: number; name: string; contentId: string; locked: boolean }
 
 export interface ReaderContext { tabs: DocumentTabs; key: number }
 export interface ReaderFrame extends HTMLIFrameElement { readerContext?: ReaderContext; disposeReader?: () => void }
@@ -67,7 +67,7 @@ export class DocumentTabs {
   /** Documents open in other tabs. Tabs are identified by content, so a closed and reopened file matches again. */
   documents(except: number): OpenDocument[] {
     return this.entries.filter(tab => tab.key !== except && !tab.closing && tab.contentId && tab.reader?.text)
-      .map(tab => ({ key: tab.key, name: tab.name, contentId: tab.contentId! }));
+      .map(tab => ({ key: tab.key, name: tab.name, contentId: tab.contentId!, locked: !!tab.reader?.locked?.() }));
   }
   private byContent(contentId: string) { return this.entries.find(tab => !tab.closing && tab.contentId === contentId); }
   /** The current text of an open document, or null when no tab shows it any more. */

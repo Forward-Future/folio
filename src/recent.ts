@@ -1,4 +1,5 @@
 // Recently opened files, kept locally in IndexedDB so they can be reopened with one click.
+import type { Attachment } from "./aiAttachments";
 
 export interface RecentFile {
   id: string;
@@ -301,10 +302,15 @@ export interface StoredAiMessage {
 }
 
 export async function getAiHistory(id: string) {
-  const { value, generation } = await readStored<{ messages: StoredAiMessage[] }>(AI, id);
-  return { messages: Array.isArray(value?.messages) ? value.messages : [], generation };
+  const { value, generation } = await readStored<{ messages: StoredAiMessage[]; attachments?: Attachment[] }>(AI, id);
+  // Attached documents are kept by name and content id only; their text is read again from open tabs.
+  const attachments = Array.isArray(value?.attachments)
+    ? value.attachments.filter((a) => typeof a?.name === "string" && typeof a.contentId === "string") : [];
+  return { messages: Array.isArray(value?.messages) ? value.messages : [], attachments, generation };
 }
 
-export function saveAiHistory(id: string, messages: StoredAiMessage[], generation: number) {
-  return saveStored(AI, id, messages.length ? { id, messages, updatedAt: Date.now() } : undefined, generation);
+export function saveAiHistory(id: string, messages: StoredAiMessage[], generation: number, attachments: Attachment[] = []) {
+  return saveStored(AI, id, messages.length
+    ? { id, messages, ...(attachments.length ? { attachments: attachments.map(({ name, contentId }) => ({ name, contentId })) } : {}), updatedAt: Date.now() }
+    : undefined, generation);
 }
