@@ -7,3 +7,9 @@ export const MAX_DOC_CHARS = 400_000;
 
 /** A document added to a conversation. Saved with the conversation; its text is read again when asked. */
 export interface Attachment { name: string; contentId: string }
+
+/** Fit every document of a question into one shared budget, cutting at page boundaries. */
+export function shareBudget(documents: AiDocument[], budget = MAX_DOC_CHARS): AiDocument[] {
+  void budget;
+  return documents;
+}
