@@ -8,6 +8,7 @@ they cover, and Electron's and Chromium's licenses are in the app's installation
 | Component | License | Source |
 | --- | --- | --- |
 | [pdf.js](https://github.com/mozilla/pdf.js) (`pdfjs-dist`) | Apache-2.0 | Mozilla Foundation |
+| [DejaVu Sans](https://dejavu-fonts.github.io/), [fontkit](https://github.com/Hopding/fontkit) and [bidi-js](https://github.com/lojjic/bidi-js) (Arabic editing) | Bitstream Vera and Arev font licenses, MIT libraries | DejaVu, fontkit and bidi-js contributors |
 | [EmbedPDF PDFium](https://github.com/embedpdf/embed-pdf-viewer/tree/main/packages/pdfium) and [pdf-lib](https://github.com/Hopding/pdf-lib) (content editing) | MIT wrappers, PDFium and bundled dependency notices in `pdfjs/editor-licenses/` | EmbedPDF, PDFium and pdf-lib contributors |
 | [Tesseract.js](https://github.com/naptha/tesseract.js), its WebAssembly core and [recognition models](https://github.com/naptha/tessdata) | Apache-2.0, worker dependency notices in `ocr/worker.min.js.LICENSE.txt` | Tesseract.js and Tesseract OCR contributors |
 | pdf.js JBIG2 decoder (from PDFium) | BSD-3-Clause | The PDFium Authors |
@@ -17,6 +18,9 @@ they cover, and Electron's and Chromium's licenses are in the app's installation
 | pdf.js standard fonts: Liberation | Liberation font license (GPLv2 with font exception) | Red Hat, Inc. |
 | pdf.js CMaps | BSD-3-Clause | Adobe Systems Incorporated |
 | pdf.js ICC profile | CC0-1.0 | |
+| [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) via [tesseract.js](https://github.com/naptha/tesseract.js) and `tesseract.js-core` | Apache-2.0 | Tesseract OCR authors, tesseract.js contributors |
+| Tesseract English language data (`@tesseract.js-data/eng`) | MIT (wrapper); model from `tessdata_best`, Apache-2.0 | tesseract.js contributors, Tesseract OCR authors |
+| [pdf-lib](https://github.com/Hopding/pdf-lib) and its dependencies (`pako`, `@pdf-lib/standard-fonts`, `@pdf-lib/upng`, `tslib`) | MIT, Zlib, 0BSD | pdf-lib contributors, Nodeca (pako), and others |
 | [React](https://react.dev) and React DOM | MIT | Meta Platforms, Inc. and affiliates |
 | [react-markdown](https://github.com/remarkjs/react-markdown), [remark-math / rehype-katex](https://github.com/remarkjs/remark-math) and their unified parsing dependencies | MIT and ISC | unified contributors |
 | [KaTeX](https://github.com/KaTeX/KaTeX), including its bundled fonts | MIT | Khan Academy and other contributors |
@@ -32,6 +36,30 @@ The sample document (`public/sample.pdf`) was written for Folio and is covered b
 (The MIT License)
 
 Copyright (c) Junyoung Choi <fluke8259@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## fontkit
+
+MIT License
+
+Copyright (c) 2014-present Devon Govett
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

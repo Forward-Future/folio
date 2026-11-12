@@ -1,7 +1,9 @@
+import { clearRecognizedText } from "./recent";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Modal } from "./Dialogs";
 import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
 import { OpenRouterSettings } from "./OpenRouterSettings";
+import { CustomEndpointSettings } from "./CustomEndpointSettings";
 import { updateSummary } from "./updates";
 import { readSignatures } from "./signatures";
 import { ScanLanguagePicker } from "./ScanLanguagePicker";
@@ -152,6 +154,7 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
   const desktop = window.folioDesktop;
   const ai = desktop?.ai;
   const [error, setError] = useState<string | null>(null);
+  const [ocrCleared, setOcrCleared] = useState(false);
   const [section, setSection] = useState<"General" | "Ask AI" | "Storage">(initialSection);
 
   // Updates
@@ -254,10 +257,21 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
             </Row>}
             {provider === "openrouter" && (aiStatus ? <OpenRouterSettings ai={ai} configured={!!aiStatus.openrouter?.configured}
               onConfigured={configured => setAiStatus({ ...aiStatus, openrouter: { configured } })} /> : <p className="settings-hint">Checking connection…</p>)}
+            {provider === "custom" && (aiStatus ? <CustomEndpointSettings ai={ai} status={aiStatus.custom}
+              onStatus={custom => setAiStatus({ ...aiStatus, custom })} /> : <p className="settings-hint">Checking connection…</p>)}
           </section>
         )}
 
-        {section === "Storage" && <><StoredData /><Section title="Signatures">
+        {section === "Storage" && <><StoredData /><Section title="Recognized text">
+          <Row label="Saved recognized text" hint={ocrCleared ? "Saved recognized text has been removed." : "Recognized text is stored on this device so you can search it later."}>
+            <button className="btn ghost" onClick={async () => {
+              try { await clearRecognizedText(); setOcrCleared(true); setError(null); }
+              catch { setError("Couldn't clear saved recognized text. Please try again."); }
+            }}>Clear saved text</button>
+          </Row>
+        </Section>
+
+        <Section title="Signatures">
           <p className="search-hint">{signatures.length ? "Saved on this device without encryption." : "No saved signatures. You can remember one when you sign a document."}</p>
           {signatures.map(signature => <Row key={signature.key} label={signature.name}
             hint={<img className="settings-signature-preview" src={signature.url} alt="" />}>

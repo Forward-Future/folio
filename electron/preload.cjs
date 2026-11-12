@@ -66,6 +66,8 @@ contextBridge.exposeInMainWorld("folioDesktop", {
     recheckClaude: () => ipcRenderer.invoke("folio:ai-claude-recheck"),
     openRouterKey: (action, key) => ipcRenderer.invoke("folio:ai-router-key", action, key),
     openRouterModels: () => ipcRenderer.invoke("folio:ai-router-models"),
+    customEndpoint: (action, input) => ipcRenderer.invoke("folio:ai-custom-endpoint", action, input),
+    customModels: () => ipcRenderer.invoke("folio:ai-custom-models"),
     ask: (request) => ipcRenderer.invoke("folio:ai-ask", request),
     cancel: (id) => ipcRenderer.invoke("folio:ai-cancel", id),
     /** Called with { id, type: "delta" | "done" | "error", text?, message?, code?, link? } for every answer. */

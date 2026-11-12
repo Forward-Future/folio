@@ -116,7 +116,8 @@ The editor works with unsigned, unencrypted PDFs.
 - **Draw on a page:** choose **Draw** (`D`) for a freehand pen, rectangle, oval, or arrow. With **Pen** selected,
   choose **Thin**, **Medium**, or **Thick** for your next strokes. Pick a color, then drag on the page.
   Drawings can be undone and are included when you save a PDF copy.
-- **Text boxes:** choose **Text** (`T`) to add text to a page, using the same ink palette.
+- **Text boxes:** choose **Text** (`T`) to add text to a page, using the same ink palette. Click outside the box to
+  finish editing and return to Select. Choose Text again to add another box.
 - **Undo and redo** annotation edits with the usual keyboard shortcuts; choose **Done**, `V`, or `Esc` to leave a
   drawing/text tool and return to selection.
 - **Notes tab:** review highlights, their notes, and text boxes; click an entry to jump to it, edit a highlight's note,
@@ -152,7 +153,8 @@ Choose **Sign** in the toolbar to add a signature.
 ### Ask AI about a document
 
 - **Choose a provider:** use your ChatGPT plan, your Claude subscription through
-  [Claude Code](https://claude.com/claude-code), or your own OpenRouter API key.
+  [Claude Code](https://claude.com/claude-code), your own OpenRouter API key, or any OpenAI-compatible endpoint, such as
+  another provider's API or a model running on your computer.
 - **Whole-document or passage questions:** open the Ask AI panel from the toolbar, select text and choose **Ask AI**,
   or ask about an existing highlight.
 - **Streaming answers** with clickable page citations that jump back to the source page.
@@ -181,7 +183,7 @@ Ask AI is optional and desktop-only. See [Using Ask AI](#using-ask-ai) for setup
 ### Pick up where you left off
 
 - **Recent library:** keep up to eight recently opened PDFs with thumbnail previews and the last page read; reopen
-  with one click, remove individual entries, or choose **Clear all**.
+  with one click, remove individual entries, or choose **Clear all**. Removing entries also removes their saved recognized text; **Clear all** removes all saved recognized text. You can also clear saved recognized text from Settings without removing documents.
 - **Startup restore:** reopen the last active document automatically when it is still in the recent library.
 - **Reading state:** remember each document's page, scroll position, zoom, rotation, sidebar visibility, and two-page
   mode.
@@ -247,8 +249,9 @@ On macOS, use `⌘` wherever this table says `Ctrl`. Press `?` with a document o
 
 ### Current limits
 
-- Automatic OCR adds a selection layer in the reader. The source PDF stays intact. Document-wide search,
-  signature-label detection, and whole-document AI questions use the PDF’s embedded text.
+- Automatic OCR reads scanned pages on your device using the scan languages selected in Settings. Recognized text becomes available for selection,
+  document search and Ask AI. Saving a copy adds a searchable text layer when the file can safely be rewritten.
+  Pages whose text the export font cannot represent stay available for recognition when reopened.
 - Ask AI uses extracted text, not page images, and includes up to about 400,000 characters of document text. Long
   documents may be truncated; AI answers can be wrong, so check the cited pages.
 - Folio opens PDFs up to 300 MiB and 10,000 pages. Webpage conversion uses a separate session, so pages behind a
@@ -274,6 +277,12 @@ Then pick a provider at the top of the panel:
   Search the text models or enter a model ID. OpenRouter bills your key. Reopen this section to check the connection,
   replace the key, or remove it. If a model's context is too small for a document, choose a larger model or ask about
   a selected passage. For passage questions Folio sends the selected passage, page number, filename and conversation.
+- **Custom endpoint:** under **Settings → Ask AI**, choose Custom endpoint and enter the base URL of any server that
+  accepts OpenAI-style Chat Completions (for example `https://api.example.com/v1`, or `http://localhost:11434/v1` for
+  Ollama), plus its API key if it needs one. Then pick a model from the server's list or enter a model ID. The address
+  must use `https://`, except for this computer or your local network. Folio asks before it connects to an address there,
+  and later requests reach only the local addresses you approved. A plain `http://` address is never used to send to the
+  internet, even if its name later points there. That server's own terms and billing apply.
 
 Ask AI is available in the desktop app only, not the browser version.
 
@@ -285,14 +294,16 @@ network requests only to:
 - check GitHub for updates (installed copies; can be turned off in **Settings**),
 - download the scan language packs you choose in **Settings** from the Tesseract.js project on GitHub,
 - verify an OpenRouter key or retrieve model names during OpenRouter setup,
+- check a custom endpoint and retrieve its model names when you connect it in **Settings**,
 - open a link you give it (a webpage is loaded in a hidden, sandboxed window with its own temporary session, so no
   cookies or sign-ins are shared, and every permission is denied; its scripts run while it loads, as in any browser,
   and it's then printed to PDF), and
 - answer a question you ask in **Ask AI**. Only then, the document's text (up to about 400,000 characters), any passage
   you selected, and the conversation go to the provider you chose: OpenAI for ChatGPT, or Anthropic through your
-  installed Claude Code, or OpenRouter and the provider serving your chosen OpenRouter model. Their privacy terms apply to that data.
+  installed Claude Code, OpenRouter and the provider serving your chosen OpenRouter model, or the custom endpoint you
+  entered. Their privacy terms apply to that data.
 
-Folio stores an OpenRouter key only with operating-system credential protection. If secure storage is unavailable,
+Folio stores an OpenRouter key or a custom endpoint's key only with operating-system credential protection. If secure storage is unavailable,
 enable or unlock your system key store to connect. For ChatGPT, Folio stores its sign-in tokens in its data folder (below, under `ai`), encrypted with the system's
 credential protection (Windows data protection, the macOS Keychain, or the Linux secret store; if a Linux desktop has
 no secret store, you sign in again each time Folio starts), and never exposes them to the page. For Claude, Folio runs your own Claude Code with every tool disabled;
@@ -334,7 +345,7 @@ terminal has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
   custom `app://` protocol with a strict Content Security Policy, runs the page sandboxed with context isolation, opens
   PDFs from the file manager, keeps a single window, downloads links, and handles updates. `webpage.cjs` converts
   webpages to PDF. `ai.cjs` runs Ask AI (ChatGPT
-  sign-in and requests, OpenRouter keys and requests, and Claude Code). Stored credentials stay in the main process.
+  sign-in and requests, OpenRouter and custom endpoint keys and requests, and Claude Code). Stored credentials stay in the main process.
 - `scripts/release.mjs` and `.github/workflows/release-build.yml`: the release pipeline (see
   [CONTRIBUTING.md](CONTRIBUTING.md#releasing)). `scripts/smoke-test.mjs` is the cross-platform smoke test CI runs.
   `scripts/screenshots.mjs` retakes the Ask AI, highlights, and search screenshots at the top of this README (`npm run build`, then `node scripts/screenshots.mjs`).

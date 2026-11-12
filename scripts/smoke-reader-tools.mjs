@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { checkImageInsertion } from "./smoke-image-insertion.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
@@ -49,7 +50,7 @@ async function checkScanSelection(app, page) {
   const image = deflateSync(Buffer.from(pixels)).toString("hex") + ">";
   // The scan is upright when displayed, on a rotated, offset page with a non-default unit.
   const draw = "q 0 400 -200 0 220 30 cm /Scan Do Q";
-  const native = draw + "\nBT /F 12 Tf 30 50 Td (Embedded text) Tj ET";
+  const native = draw + "\nBT /F 12 Tf 30 50 Td (Embedded text) Tj " + "0 20 Td (More embedded text) Tj ".repeat(9) + "ET";
   const pageDict = "/Type /Page /Parent 2 0 R /MediaBox [20 30 220 430] /Rotate 90 /UserUnit 1.25";
   const resources = scan => `/Resources << /XObject << /Scan ${scan} 0 R >> /Font << /F 8 0 R >> >>`;
   const imageObject = kind => `<< /Type /XObject /Subtype /Image /Width 1000 /Height 500 ${kind} /BitsPerComponent 1 /Filter [/ASCIIHexDecode /FlateDecode] /Length ${image.length} >>\nstream\n${image}\nendstream`;
@@ -87,10 +88,12 @@ async function checkScanSelection(app, page) {
   const status = page.locator(".page-text-status");
   const waitForJob = n => page.waitForFunction(n => window.ocrJob === n, n, { timeout: 45_000 });
   await waitForJob(1);
+  await page.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: "Recognize text" }).click();
   assert.equal(await pageNumber.inputValue(), "1");
   const mixed = page.locator('.page[data-page-number="1"] .textLayer');
-  await mixed.getByText("Embedded text", { exact: true }).waitFor();
-  assert.equal((await mixed.innerText()).trim(), "Embedded text");
+  await mixed.getByText("Embedded text", { exact: true }).first().waitFor();
+  assert.match((await mixed.innerText()).trim(), /^Embedded text/);
   await goTo(2);
   await status.filter({ hasText: "Recognizing text on page 2…" }).waitFor();
   await page.evaluate(() => window.resumeOcr());
@@ -129,7 +132,7 @@ async function checkScanSelection(app, page) {
   await waitForJob(3);
   assert.equal(await status.innerText(), "Recognizing text on page 5…");
   await page.evaluate(() => window.resumeOcr());
-  await page.locator('.page[data-page-number="5"] .ocr-word').first().waitFor();
+  await page.locator('.page[data-page-number="5"] .textLayer span:not(.markedContent)').first().waitFor();
   assert.equal(await status.innerText(), "");
   await goTo(3);
   await page.locator('.page[data-page-number="3"] .textLayer').getByText("Select", { exact: true }).waitFor();
@@ -137,10 +140,14 @@ async function checkScanSelection(app, page) {
   await goTo(4);
   await page.evaluate(() => window.failOcr());
   await status.filter({ hasText: "Text unavailable on page 4." }).waitFor();
-  await goTo(3);
-  await goTo(4);
-  await page.locator('.page[data-page-number="4"] .ocr-word').first().waitFor();
+  await page.getByRole("button", { name: "Try again" }).click();
+  await page.locator('.page[data-page-number="4"] .textLayer span:not(.markedContent)').first().waitFor();
   assert.equal(await status.innerText(), "");
+  const interceptsPageClicks = await status.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === el;
+  });
+  assert.equal(interceptsPageClicks, false, "the empty OCR status blocks clicks on the page");
   console.log("ok  background OCR prepares unvisited scans, prioritizes page jumps, and shows selectable text in dark mode");
 
   // Exercise the real desktop download and checksum path without reaching GitHub from CI.
@@ -196,6 +203,9 @@ async function checkScanSelection(app, page) {
   await page.keyboard.press(settingsShortcut);
   await picker.click();
   await languages.getByRole("checkbox", { name: "German", exact: true }).uncheck();
+  // Use an uncached selection so this run must encode a scan before we interrupt it.
+  await search.fill("English");
+  await languages.getByRole("checkbox", { name: "English", exact: true }).check();
   // Change languages again while the preceding run's scan image is still being encoded.
   await page.evaluate(() => {
     const toBlob = HTMLCanvasElement.prototype.toBlob;
@@ -211,6 +221,8 @@ async function checkScanSelection(app, page) {
   await picker.click();
   await search.fill("German");
   await languages.getByRole("checkbox", { name: "German", exact: true }).check();
+  await search.fill("English");
+  await languages.getByRole("checkbox", { name: "English", exact: true }).uncheck();
   await apply.click();
   await languages.waitFor({ state: "hidden" });
   await page.evaluate(() => window.finishScanEncoding());
@@ -218,8 +230,33 @@ async function checkScanSelection(app, page) {
   await currentScan.getByText("Grüße", { exact: true }).waitFor({ timeout: 45_000 });
   assert.deepEqual(await app.evaluate(() => globalThis.finishModelDownloads()), ["spa.traineddata.gz", "spa.traineddata.gz", "deu.traineddata.gz"]);
   await goTo(1);
-  assert.equal((await mixed.innerText()).trim(), "Embedded text");
+  assert.match((await mixed.innerText()).trim(), /^Embedded text/);
   console.log("ok  scan languages verify downloads, retry a corrupt pack, and reuse saved models for mixed-language scans");
+
+  // A mixed 12-page document still exposes a document-level action when the only scan is on page 1.
+  const mixedKids = Array.from({ length: 12 }, (_, i) => `${i + 3} 0 R`).join(" ");
+  const mixedResources = `/Resources << /XObject << /Scan 15 0 R >> /Font << /F 18 0 R >> >>`;
+  const stamped = draw + "\nBT /F 12 Tf 30 50 Td (Stamp) Tj ET";
+  const mixedTwelve = testPdf([
+    "<< /Type /Catalog /Pages 2 0 R >>", `<< /Type /Pages /Count 12 /Kids [${mixedKids}] >>`,
+    `<< ${pageDict} ${mixedResources} /Contents 19 0 R >>`,
+    ...Array.from({ length: 11 }, () => `<< ${pageDict} ${mixedResources} /Contents 17 0 R >>`),
+    imageObject("/ColorSpace /DeviceGray"),
+    `<< /Length ${draw.length} >>\nstream\n${draw}\nendstream`,
+    `<< /Length ${native.length} >>\nstream\n${native}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${stamped.length} >>\nstream\n${stamped}\nendstream`,
+  ]);
+  await app.evaluate(({ BrowserWindow }, bytes) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Twelve page mixed.pdf", data: Buffer.from(bytes) }), mixedTwelve);
+  await page.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: "Recognize text" }).click();
+  await page.waitForFunction(() => window.ocrJob === 1, null, { timeout: 45_000 });
+  await page.evaluate(() => window.resumeOcr());
+  const stampedLayer = page.locator('.page[data-page-number="1"] .textLayer');
+  await stampedLayer.getByText("Stamp", { exact: true }).waitFor({ timeout: 45_000 });
+  await stampedLayer.getByText("Select", { exact: true }).waitFor({ timeout: 45_000 });
+  console.log("ok  recognition preserves native text on a stamped scan in a mixed 12-page PDF");
 }
 
 async function captureDownload(app, file) {
@@ -433,11 +470,15 @@ async function checkPenDrawing(app, page, folder, shots) {
       await page.getByRole("menuitem", { name: "Fit width" }).click();
       await layer.waitFor();
     }
+    const size = await layer.boundingBox();
+    const position = { x: Math.floor(size.width * 0.2), y: Math.floor(size.height * (0.3 + index * 0.15)) };
+    // Wait for the ink layer to receive the pointer after a page opens or changes scale.
+    await layer.hover({ position });
     const box = await layer.boundingBox();
-    const x = box.x + box.width * 0.2;
-    const y = box.y + box.height * (0.3 + index * 0.15);
-    await page.mouse.move(x, y);
+    const x = box.x + position.x;
+    const y = box.y + position.y;
     await page.mouse.down();
+    assert.ok(await layer.evaluate(el => el.classList.contains("drawing")), `${name} pen did not start a stroke`);
     await page.mouse.move(x + 25, y - 10);
     await page.mouse.move(x + 50, y + 10);
     await page.mouse.move(x + 100, y);
@@ -632,6 +673,113 @@ async function checkContentEditing(app, page, folder, shots) {
   await page.window.waitForFunction(() => document.title.startsWith("Text runs (edited).pdf"));
   await page.locator('.page[data-page-number="1"] .textLayer').getByText("A tour of Folio", { exact: true }).waitFor();
   console.log("ok  fragmented embedded-font text in Folio's sample edits as a line and reopens in the reader");
+}
+
+async function checkRightToLeftEditing(app, page, shots) {
+  // A plain Latin run above a run whose font maps the letters a to d to Hebrew.
+  const stream = s => `<< /Length ${s.length} >>\nstream\n${s}\nendstream`;
+  const toHebrew = [
+    "/CIDInit /ProcSet findresource begin", "12 dict begin", "begincmap",
+    "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def",
+    "/CMapName /Adobe-Identity-UCS def", "/CMapType 2 def",
+    "1 begincodespacerange", "<00> <FF>", "endcodespacerange",
+    "4 beginbfchar", "<61> <05E9>", "<62> <05DC>", "<63> <05D5>", "<64> <05DD>", "endbfchar",
+    "endcmap", "CMapName currentdict /CMap defineresource pop", "end", "end",
+  ].join("\n");
+  const file = testPdf([
+    "<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F 4 0 R /H 5 0 R >> >> /Contents 7 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>",
+    stream(toHebrew),
+    stream("BT /F 16 Tf 12 170 Td (Latin) Tj ET BT /H 16 Tf 12 140 Td (abcd) Tj ET"),
+  ]);
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Right to left.pdf", data: Buffer.from(data) }), file);
+  await page.window.waitForFunction(() => document.title.startsWith("Right to left.pdf"));
+  await page.getByRole("button", { name: "Edit mode", exact: true }).click();
+  const sheet = page.locator('.page[data-page-number="1"]');
+  const latin = sheet.getByRole("button", { name: "Latin", exact: true });
+  const input = sheet.getByRole("textbox", { name: "Edit text on page" });
+  const message = page.getByText(/Folio can.t edit right-to-left text/);
+  await latin.waitFor();
+  // PDFium may hand the Hebrew back in either order, so find the run by its lock, not its label.
+  const locked = sheet.locator(".folio-content-target[data-locked]");
+  assert.equal(await locked.count(), 1);
+  assert.equal(await sheet.locator(".folio-content-target").count(), 2);
+  await locked.click();
+  await message.waitFor();
+  assert.equal(await input.count(), 0);
+  await page.screenshot({ path: path.join(shots, "right-to-left-read-only.png") });
+  // Other text still opens, and the message goes away with the click.
+  await latin.click();
+  await input.waitFor();
+  assert.equal(await message.count(), 0);
+  // Typing right-to-left text into a left-to-right run is refused too, and the run keeps its text.
+  await input.fill(String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)); await input.press("Enter");
+  await message.waitFor();
+  await input.press("Escape");
+  assert.equal(await input.count(), 0);
+  await latin.waitFor();
+  assert.equal(await locked.count(), 1);
+  await page.getByRole("button", { name: "Exit edit mode" }).click();
+  await page.getByRole("button", { name: "Edit mode", exact: true }).waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  console.log("ok  Hebrew text remains protected in Edit mode");
+}
+
+async function checkArabicEditing(app, page, folder, shots) {
+  // This synthetic PDF has subset fonts, Arabic ligatures, and separately positioned glyphs.
+  const source = readFileSync(path.join(import.meta.dirname, "fixtures", "arabic-editing.pdf"));
+  const open = (name, bytes) => app.evaluate(({ BrowserWindow }, { name, bytes }) =>
+    BrowserWindow.getAllWindows()[0].webContents.send("folio:open-file", { name, data: Buffer.from(bytes) }),
+    { name, bytes: Array.from(bytes) });
+  await open("Arabic editing.pdf", source);
+  await page.window.waitForFunction(() => document.title.startsWith("Arabic editing.pdf"));
+  const edit = page.getByRole("button", { name: "Edit mode", exact: true });
+  await edit.click();
+  const sheet = page.locator('.page[data-page-number="1"]');
+  const text = label => sheet.getByRole("button", { name: label, exact: true });
+  const input = sheet.getByRole("textbox", { name: "Edit text on page" });
+  await text("مراد ناصر").click();
+  assert.equal(await input.inputValue(), "مراد ناصر");
+  assert.equal(await input.evaluate(el => getComputedStyle(el).direction), "rtl");
+  const greeting = "مَرْحَبًا 2026";
+  await input.fill(greeting);
+  await page.screenshot({ path: path.join(shots, "arabic-edit-after.png") });
+  // Switching directly to another run commits the first edit and selects the second.
+  await text("شركة الخطوط يويو").click();
+  await page.waitForFunction(() => document.querySelector(".folio-inline-text")?.value === "شركة الخطوط يويو");
+  await input.fill("شركة الخطوط");
+  await sheet.click({ position: { x: 5, y: 5 } });
+  await text("شركة الخطوط").waitFor();
+  await text(greeting).waitFor();
+  const file = path.join(folder, "arabic-copy.pdf");
+  await captureDownload(app, file);
+  await page.getByRole("button", { name: "Save copy", exact: true }).click();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  const bytes = readFileSync(file);
+  const extracted = await page.evaluate(async bytes => {
+    const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
+    try {
+      const content = await (await (await task.promise).getPage(1)).getTextContent();
+      return content.items.map(item => item.str || "").join(" ").normalize("NFKC");
+    } finally { await task.destroy(); }
+  }, Array.from(bytes));
+  assert.ok(extracted.includes("شركة الخطوط"), extracted);
+  assert.ok(extracted.includes(greeting) && !extracted.includes("يويو"), extracted);
+  await open("Reopened Arabic.pdf", bytes);
+  await page.window.waitForFunction(() => document.title.startsWith("Reopened Arabic.pdf"));
+  await edit.click();
+  await text(greeting).click();
+  assert.equal(await input.inputValue(), greeting);
+  await input.fill("أهلا");
+  await input.press("Enter");
+  await text("أهلا").waitFor();
+  await captureDownload(app, path.join(folder, "arabic-edited-again.pdf"));
+  await page.getByRole("button", { name: "Save copy", exact: true }).click();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  console.log("ok  Arabic ligatures, diacritics, and numbers survive editing, saving, and reopening");
 }
 
 export function linkHistoryPdf() {
@@ -850,6 +998,10 @@ export async function checkReaderTools(app, page, folder, shots) {
     el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, ...options })), options);
   const atPage = n => page.waitForFunction(n => document.querySelector('[aria-label="Page number"]').value === String(n), n);
   await settings();
+  await page.getByRole("button", { name: "Storage", exact: true }).click();
+  await page.getByRole("button", { name: "Clear saved text" }).click();
+  await page.getByText("Saved recognized text has been removed.").waitFor();
+  await page.getByRole("button", { name: "General", exact: true }).click();
   assert.equal(await wheelSwitch.getAttribute("aria-checked"), "false");
   await wheelSwitch.click();
   await page.keyboard.press("Escape");
@@ -1090,6 +1242,9 @@ export async function checkReaderTools(app, page, folder, shots) {
   await checkSignatureFields(app, page, folder);
   await checkScanSelection(app, page);
   await checkContentEditing(app, page, folder, shots);
+  await checkImageInsertion(app, page, folder, shots);
+  await checkRightToLeftEditing(app, page, shots);
+  await checkArabicEditing(app, page, folder, shots);
   await checkLinkHistory(app, page, shots);
   await checkPageExport(app, page, folder, shots);
   await checkPenDrawing(app, page, folder, shots);

@@ -599,6 +599,7 @@ kbd {
   font-size: 12px;
   pointer-events: none;
 }
+.page-text-status button { margin-left: 8px; pointer-events: auto; }
 .page-text-status:empty { opacity: 0; }
 /* Only the page drawing is darkened; images are restored on top by an unfiltered overlay (nightImages.ts). */
 .app[data-night] .pdfViewer .page .canvasWrapper > canvas:not(.folio-image-overlay),
@@ -613,20 +614,22 @@ kbd {
   background-color: #1e1e1e;
 }
 
-/* Let a drag start beside the scanned ink without enlarging the rectangles used for highlights. */
-.textLayer > .ocr-word::before,
-.textLayer > .ocr-word::after {
+/* Extend OCR hit targets so selection can start beside the scanned ink. */
+.textLayer.ocr-text > span::before,
+.textLayer.ocr-text > span::after {
   content: "";
   position: absolute;
   inset: -0.2em 50% -0.2em 0;
   z-index: -1;
 }
-.textLayer > .ocr-word::after {
+.textLayer.ocr-text > span::after {
   left: 50%;
   right: -0.7em;
 }
-.textLayer > .ocr-line-start::before {
-  left: -0.7em;
+.textLayer.ocr-text > span:first-child::before,
+.textLayer.ocr-text > .textLayerImages + span::before,
+.textLayer.ocr-text > br + span::before {
+  inset: -0.7em 50% -0.7em -0.7em;
 }
 
 /* Selection colours inside the text layer */
@@ -917,6 +920,19 @@ kbd {
 }
 .search-status.miss {
   color: var(--accent-text);
+}
+.search-progress {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  max-width: min(300px, 90vw);
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-2);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
 }
 .chip {
   height: 26px;
@@ -1634,6 +1650,7 @@ body:has(.signature-field-picker) .signature-suggestion { display: none; }
 .folio-content-target, .folio-old-text, .folio-inline-text, .folio-image-actions { position: absolute; }
 .folio-content-target { border: 0; padding: 0; border-radius: 0; background: transparent; cursor: text; }
 .folio-content-target[data-kind=image] { cursor: pointer; }
+.folio-content-target[data-locked] { cursor: not-allowed; }
 .folio-content-target:is(:hover, :focus-visible, [aria-pressed=true]) { outline: 1.5px solid #3377ac; outline-offset: 1px; background: #3a86bc0b; }
 .folio-old-text { pointer-events: none; }
 .app[data-night] :is(.folio-old-text, .folio-inline-text) { filter: invert(0.88) hue-rotate(180deg) contrast(0.92); }
@@ -1673,3 +1690,17 @@ body:has(.signature-field-picker) .signature-suggestion { display: none; }
 @media (max-width: 760px) {
   .version-panel { position: absolute; inset: 0 0 0 auto; width: min(340px, 92%); z-index: 12; box-shadow: var(--shadow-md); }
 }
+
+@font-face { font-family: FolioArabic; src: url("dejavu-fonts-ttf/ttf/DejaVuSans.ttf"); }
+@font-face { font-family: FolioArabic; font-weight: 700; src: url("dejavu-fonts-ttf/ttf/DejaVuSans-Bold.ttf"); }
+
+.folio-image-placement { position: absolute; z-index: 2; cursor: move; outline: 2px solid #3377ac; touch-action: none; user-select: none; }
+.folio-image-placement img { position: absolute; left: 50%; top: 50%; max-width: none; pointer-events: none; }
+.folio-image-placement .image-corner { position: absolute; width: 13px; height: 13px; padding: 0; background: white; border: 2px solid #3377ac; border-radius: 3px; touch-action: none; }
+.image-corner.nw, .image-corner.sw { left: -6px; }
+.image-corner.ne, .image-corner.se { right: -6px; }
+.image-corner.nw, .image-corner.ne { top: -6px; }
+.image-corner.sw, .image-corner.se { bottom: -6px; }
+.image-corner.nw, .image-corner.se { cursor: nwse-resize; }
+.image-corner.ne, .image-corner.sw { cursor: nesw-resize; }
+.folio-place-actions { position: absolute; z-index: 11; left: 50%; bottom: 76px; transform: translateX(-50%); display: flex; gap: 6px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow-sm); }
