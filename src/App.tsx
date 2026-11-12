@@ -120,9 +120,10 @@ function changesForCopy(doc: OpenDoc, annotated: boolean, pages?: DraftPage[]) {
   if (annotated && !changes.some(change => change.kind === "annotations")) changes.push({ kind: "annotations" });
   if (pages) {
     const order = pages.map(p => p.page);
+    const rotated = pages.filter(p => p.rotation).map(p => p.page);
     const kept = new Set(order);
     const deleted = Array.from({ length: doc.pdf.numPages }, (_, i) => i + 1).filter(n => !kept.has(n));
-    changes.push({ kind: "pages", order, ...deleted.length && { deleted } });
+    changes.push({ kind: "pages", order, ...(rotated.length && { rotated }), ...deleted.length && { deleted } });
   }
   return changes;
 }
@@ -962,7 +963,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       // Marks on deleted pages don't reach the copy. Form values don't carry their page here, so they always count.
       const kept = pages && keptIndexes(pages);
       const annotated = [...storage].some(([, value]) => !kept || typeof value?.pageIndex !== "number" || kept.has(value.pageIndex));
-      if (pages?.length) return { bytes: await copyPdfPages(doc.pdf, pages.map(p => p.page), signal, doc.password), annotated };
+      if (pages?.length) return { bytes: await copyPdfPages(doc.pdf, pages, signal, doc.password), annotated };
       return { bytes: annotated ? await doc.pdf.saveDocument() : await doc.pdf.getData(), annotated };
     } finally {
       for (const key of keys) storage.remove(key);

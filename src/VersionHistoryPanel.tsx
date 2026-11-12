@@ -29,6 +29,7 @@ function Changes({ changes }: { changes: PdfChange[] }) {
       </div>}
       {change.kind === "image" && <p>{change.fileName}</p>}
       {change.kind === "pages" && reordered(change.order) && <p>New order: {pageRanges(change.order)}</p>}
+      {change.kind === "pages" && change.rotated && <p>Rotated {pageList(change.rotated)}</p>}
       {change.kind === "pages" && change.deleted && <p>Deleted {pageList(change.deleted)}</p>}
     </li>)}</ul>;
 }
