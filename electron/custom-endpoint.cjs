@@ -137,13 +137,18 @@ function createCustomEndpoint({ fetch, resolve, confirmLocal, safeStorage, file,
       fs.rmSync(file(LEGACY_KEY_FILE), { force: true });
     }),
     models: async () => listModels(await connection()),
-    ask: async ({ model, document, messages }, emit, signal) => {
+    ask: async ({ model, document, attachments, messages }, emit, signal) => {
       if (!validModel(model)) throw new Error("Choose a model for your custom endpoint in Settings.");
       const endpoint = await connection();
       const passage = messages.at(-1)?.context;
-      if (document.truncated && !passage) throw new Error("This document exceeds Folio’s whole-document limit. Select a passage and ask again.");
+      const oversized = [document, ...(attachments ?? [])].find((d) => d.truncated);
+      // Attachments share one budget, so a document that fits alone can still be cut short in company.
+      if (oversized && !passage) throw new Error(attachments?.length
+        ? `“${oversized.name}” doesn’t fit in Folio’s whole-document limit alongside the other documents. Remove a document, or select a passage and ask again.`
+        : "This document exceeds Folio’s whole-document limit. Select a passage and ask again.");
+      // A selected passage replaces only the conversation's own document; attachments are still sent in full.
       const { instructions, input } = chatRequest(model, passage
-        ? { ...document, text: `[Page ${passage.page}]\n${passage.text}`, truncated: true } : document, messages);
+        ? { ...document, text: `[Page ${passage.page}]\n${passage.text}`, truncated: true } : document, messages, attachments);
       const body = JSON.stringify({ model, messages: [{ role: "system", content: instructions }, ...input], stream: true });
       const name = nameOf(endpoint.baseUrl), timer = AbortSignal.timeout(5 * 60_000);
       try {

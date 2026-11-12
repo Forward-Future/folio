@@ -66,12 +66,17 @@ function createOpenRouter({ net, safeStorage, file, writeAtomic }) {
         .map(m => ({ id: m.id, name: typeof m.name === "string" ? m.name.slice(0, 160) : m.id,
           contextLength: Number.isSafeInteger(m.context_length) && m.context_length > 0 ? m.context_length : null }));
     },
-    ask: async ({ model, document, messages }, emit, signal) => {
+    ask: async ({ model, document, attachments, messages }, emit, signal) => {
       if (!validModel(model)) throw new Error("Choose an OpenRouter model in Settings.");
       const passage = messages.at(-1)?.context;
-      if (document.truncated && !passage) throw new Error("This document exceeds Folio’s whole-document limit. Select a passage and ask again.");
+      const oversized = [document, ...(attachments ?? [])].find((d) => d.truncated);
+      // Attachments share one budget, so a document that fits alone can still be cut short in company.
+      if (oversized && !passage) throw new Error(attachments?.length
+        ? `“${oversized.name}” doesn’t fit in Folio’s whole-document limit alongside the other documents. Remove a document, or select a passage and ask again.`
+        : "This document exceeds Folio’s whole-document limit. Select a passage and ask again.");
+      // A selected passage replaces only the conversation's own document; attachments are still sent in full.
       const { instructions, input } = chatRequest(model, passage
-        ? { ...document, text: `[Page ${passage.page}]\n${passage.text}`, truncated: true } : document, messages);
+        ? { ...document, text: `[Page ${passage.page}]\n${passage.text}`, truncated: true } : document, messages, attachments);
       // Small-context endpoints can otherwise silently drop the middle of the document.
       const body = JSON.stringify({ model, messages: [{ role: "system", content: instructions }, ...input], stream: true,
         plugins: [{ id: "context-compression", enabled: false }] });

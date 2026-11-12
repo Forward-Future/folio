@@ -338,8 +338,8 @@ async function chatgptModels() {
     .filter((m) => typeof m.id === "string");
 }
 
-async function askChatGPT({ model, document, messages }, emit, signal) {
-  const body = JSON.stringify(chatRequest(model, document, messages));
+async function askChatGPT({ model, document, attachments, messages }, emit, signal) {
+  const body = JSON.stringify(chatRequest(model, document, messages, attachments));
   const send = (token) => net.fetch(`${API}/responses`, {
     method: "POST", signal, body,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "text/event-stream" },
@@ -466,11 +466,11 @@ function cleanStaleClaudeFolders() {
   } catch {}
 }
 
-async function askClaude({ model, document, messages }, emit, signal) {
+async function askClaude({ model, document, attachments, messages }, emit, signal) {
   const exe = await findClaude();
   if (!exe) throw new Error("Claude Code isn't installed.");
   if (signal.aborted) return;
-  const prompt = claudePrompt(document, messages);
+  const prompt = claudePrompt(document, messages, attachments);
   // Claude reads and answers from a private working folder with settings, MCP servers, slash commands and tools disabled.
   const cwd = makeClaudeDir();
   const cleanup = () => { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch {} };
@@ -543,15 +543,21 @@ async function askClaude({ model, document, messages }, emit, signal) {
 // ── IPC surface ────────────────────────────────────────────────────────────────────────────
 const active = new Map();
 const MAX_CHARS = 1_500_000;
+const MAX_ATTACHMENTS = 20;
+
+const validDocument = (doc) => typeof doc?.name === "string" && typeof doc.text === "string" && typeof doc.truncated === "boolean" && typeof doc.recognized === "boolean";
 
 function validRequest(req) {
+  const attachments = req?.attachments ?? [];
   return req && typeof req.id === "string" && req.id.length < 100 && ["chatgpt", "claude", "openrouter", "custom"].includes(req.provider)
     && typeof req.model === "string" && req.model.length <= (req.provider === "openrouter" || req.provider === "custom" ? 256 : 99)
-    && typeof req.document?.name === "string" && typeof req.document.text === "string" && typeof req.document.truncated === "boolean" && typeof req.document.recognized === "boolean"
+    && validDocument(req.document)
+    && Array.isArray(attachments) && attachments.length <= MAX_ATTACHMENTS && attachments.every(validDocument)
     && Array.isArray(req.messages) && req.messages.length > 0 && req.messages.length < 200
     && req.messages.every((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
       && (m.context === undefined || (m.role === "user" && typeof m.context?.text === "string" && Number.isSafeInteger(m.context.page) && m.context.page >= 1)))
-    && req.document.name.length + req.document.text.length + req.messages.reduce((n, m) => n + m.content.length + (m.context?.text.length ?? 0), 0) < MAX_CHARS;
+    && req.document.name.length + req.document.text.length + attachments.reduce((n, a) => n + a.name.length + a.text.length, 0)
+      + req.messages.reduce((n, m) => n + m.content.length + (m.context?.text.length ?? 0), 0) < MAX_CHARS;
 }
 
 const MAX_ACTIVE = 2;
@@ -609,10 +615,11 @@ function register(handle, send, { confirmLocal } = {}) {
     active.set(req.id, controller);
     const emit = (text) => send("folio:ai-event", { id: req.id, type: "delta", text });
     const ask = { chatgpt: askChatGPT, claude: askClaude, openrouter: openRouter.ask, custom: customEndpoint.ask }[req.provider];
-    const { name, text, truncated, recognized } = req.document;
+    // Copy only the fields a document carries, so nothing else from the page crosses IPC.
+    const copy = ({ name, text, truncated, recognized }) => ({ name, text, truncated, recognized });
     const messages = req.messages.map(({ role, content, context }) => context
       ? { role, content, context: { text: context.text, page: context.page } } : { role, content });
-    Promise.resolve(ask({ model: req.model, document: { name, text, truncated, recognized }, messages }, emit, controller.signal))
+    Promise.resolve(ask({ model: req.model, document: copy(req.document), attachments: (req.attachments ?? []).map(copy), messages }, emit, controller.signal))
       .then(() => send("folio:ai-event", { id: req.id, type: "done" }))
       .catch((e) => send("folio:ai-event", controller.signal.aborted ? { id: req.id, type: "done" }
         : { id: req.id, type: "error", message: e.message || "Something went wrong.", code: e.code ?? "", link: e.link ?? "" }))
@@ -622,4 +629,4 @@ function register(handle, send, { confirmLocal } = {}) {
   handle("folio:ai-cancel", (_event, id) => { active.get(id)?.abort(); return true; });
 }
 
-module.exports = { register };
+module.exports = { register, validRequest };
