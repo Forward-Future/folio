@@ -1,21 +1,30 @@
 import { AnnotationEditorType } from "pdfjs-dist";
 import type { PDFDocumentProxy } from "./pdf";
 import type { PDFViewer } from "./viewer";
+import { printedSignatureTargets } from "./printedSignatureLines";
 
 export interface SignatureImage { url: string; width: number; height: number }
-export interface SignatureTarget { id: string; label: string; rect: number[]; kind: "field" | "label" }
+export interface SavedSignature extends SignatureImage { key: string; name: string }
+export interface SignatureTarget { id: string; label: string; rect: number[]; kind: "field" | "line" | "label" }
 const cache = new WeakMap<PDFDocumentProxy, Map<number, Promise<SignatureTarget[]>>>();
 
-export function detectSignatureTargets(pdf: PDFDocumentProxy, pageNumber: number) {
+export function uncoveredTargets(targets: SignatureTarget[], stamps: number[][]) {
+  return targets.filter(({ rect }) => !stamps.some(stamp =>
+    stamp[0] < rect[2] && stamp[2] > rect[0] && stamp[1] < rect[3] && stamp[3] > rect[1]));
+}
+
+export async function detectSignatureTargets(pdf: PDFDocumentProxy, pageNumber: number) {
   let pages = cache.get(pdf);
   if (!pages) cache.set(pdf, pages = new Map());
   let result = pages.get(pageNumber);
   if (!result) {
-    result = (async () => {
+    result = (async (): Promise<SignatureTarget[]> => {
       const page = await pdf.getPage(pageNumber);
       const annotations = await page.getAnnotations();
       const signedFields = await pdf.getSignatures();
       if (signedFields?.length) return [];
+      const stamps = annotations.filter(annotation => annotation.subtype === "Stamp" && annotation.rect?.length === 4)
+        .map(annotation => annotation.rect);
       const fields: SignatureTarget[] = annotations.filter(annotation => annotation.subtype === "Widget"
         && annotation.fieldType === "Sig" && !annotation.fieldValue && !(annotation.fieldFlags & 1)
         && !(annotation.annotationFlags & 35) && annotation.rect.length === 4 && annotation.rect.every(Number.isFinite))
@@ -23,18 +32,11 @@ export function detectSignatureTargets(pdf: PDFDocumentProxy, pageNumber: number
           rect: [Math.max(page.view[0], annotation.rect[0]), Math.max(page.view[1], annotation.rect[1]),
             Math.min(page.view[2], annotation.rect[2]), Math.min(page.view[3], annotation.rect[3])], kind: "field" }))
         .filter(target => target.rect[2] - target.rect[0] > 4 && target.rect[3] - target.rect[1] > 4);
-      if (fields.length) return fields;
-      const text = await page.getTextContent();
-      return text.items.flatMap((item, index): SignatureTarget[] => {
-        // A word in a paragraph is not a signing caption. Keep this fallback conservative;
-        // native PDF signature fields above are the authoritative targets.
-        if (!("str" in item) || !/^(?:(?:your|applicant(?:['’]s)?|signer(?:['’]s)?|authorized|witness(?:['’]s)?|client|customer)\s+)?(?:signature|sign here|signed by)\s*[:_\s]*$/i.test(item.str.trim())) return [];
-        const [left, bottom, right, top] = page.view;
-        const positionX = Math.max(left, Math.min(item.transform[4], right - Math.min(180, right - left)));
-        const positionY = Math.max(bottom, Math.min(item.transform[5] + Math.max(item.height, 10) + 3, top - 42));
-        return [{ id: "label-" + index, label: item.str.trim().slice(0, 80) + " (suggested)",
-          rect: [positionX, positionY, Math.min(right, positionX + 180), Math.min(top, positionY + 42)], kind: "label" }];
-      }).slice(0, 12);
+      // A printed caption for a native control must never create a second hit area, including over a locked field.
+      const widgets = annotations.filter(annotation => annotation.subtype === "Widget" && annotation.rect?.length === 4);
+      const printed = await printedSignatureTargets(page).catch(() => []);
+      const clear = uncoveredTargets(printed, [...stamps, ...widgets.map(widget => widget.rect)]);
+      return [...uncoveredTargets(fields, stamps), ...clear.filter(target => !fields.length || target.kind === "line")];
     })();
     pages.set(pageNumber, result);
     result.catch(() => pages!.delete(pageNumber));
@@ -53,9 +55,18 @@ export function fitSignature(signature: SignatureImage, bounds: number[]) {
   return [positionX, positionY, positionX + fittedWidth, positionY + fittedHeight];
 }
 
-export async function placeSignature(viewer: PDFViewer, pdf: PDFDocumentProxy, pageNumber: number, signature: SignatureImage, rect: number[]) {
+export function positionSignature(signature: SignatureImage, size: number, center: number[], viewBox: number[]) {
+  const [left, bottom, right, top] = viewBox;
+  const width = Math.min(size, right - left, (top - bottom) * signature.width / signature.height);
+  const height = width * signature.height / signature.width;
+  const x = Math.max(left, Math.min(right - width, center[0] - width / 2));
+  const y = Math.max(bottom, Math.min(top - height, center[1] - height / 2));
+  return [x, y, x + width, y + height];
+}
+
+export async function placeSignature(viewer: PDFViewer, pdf: PDFDocumentProxy, pageNumber: number, signature: SignatureImage, rect: number[], navigate = true) {
   if (viewer.pdfDocument !== pdf) throw new Error("The document changed. Open Sign again.");
-  viewer.currentPageNumber = pageNumber;
+  if (navigate) viewer.currentPageNumber = pageNumber;
   viewer.annotationEditorMode = { mode: AnnotationEditorType.STAMP };
   try {
     let layer;
@@ -111,11 +122,42 @@ export function cleanSignature(source: HTMLCanvasElement, crop: number[], thresh
   return { url: trimmed.toDataURL("image/png"), width: trimmed.width, height: trimmed.height };
 }
 
-export function readSignature(): SignatureImage | null {
+const signatureKey = "folio:signature";
+
+function readSavedSignature(key: string): SavedSignature | null {
   try {
-    const value = JSON.parse(localStorage.getItem("folio:signature") || "null");
+    const value = JSON.parse(localStorage.getItem(key) || "null");
+    const name = key === signatureKey ? "Signature 1" : value?.name;
     return value && typeof value.url === "string" && value.url.startsWith("data:image/png;base64,")
       && value.url.length < 4000000 && Number.isFinite(value.width) && Number.isFinite(value.height)
-      && value.width > 0 && value.height > 0 ? value : null;
+      && value.width > 0 && value.height > 0 && typeof name === "string" && name.trim()
+      ? { key, name, url: value.url, width: value.width, height: value.height } : null;
   } catch { return null; }
+}
+
+export function readSignatures(): SavedSignature[] {
+  const signatures: SavedSignature[] = [];
+  try {
+    // Keep the original single signature in place. Each new image has its own key so tabs can save independently.
+    for (const key of Object.keys(localStorage)) {
+      if (key !== signatureKey && !key.startsWith(signatureKey + ":")) continue;
+      const signature = readSavedSignature(key);
+      if (signature) signatures.push(signature);
+    }
+  } catch { /* Signing still works when storage is unavailable. */ }
+  return signatures.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+}
+
+export function nextSignatureName(signatures: SavedSignature[]) {
+  let number = 1;
+  while (signatures.some(signature => signature.name === "Signature " + number)) number++;
+  return "Signature " + number;
+}
+
+export function rememberSignature(image: SignatureImage, name: string) {
+  const signatures = readSignatures();
+  if (signatures.some(signature => signature.url === image.url)) return;
+  localStorage.setItem(signatureKey + ":" + crypto.randomUUID(), JSON.stringify({
+    ...image, name: name.trim() || nextSignatureName(signatures),
+  }));
 }

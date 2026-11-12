@@ -194,8 +194,21 @@ try {
   console.log("ok  a sidebar bookmark persists on its own and toggling it leaves the current page in place");
   console.log("ok  Bookmarked filters the sidebar, jumps to the original page, and updates as bookmarks are removed");
 
-  // A signature is an unsaved edit that must survive a tab switch.
-  const photo = await page.evaluate(() => {
+  const saveCopy = async (name) => {
+    const file = path.join(env.FOLIO_TEST_USER_DATA, name);
+    await app.evaluate(({ session }, file) => {
+      globalThis.folioCopySaved = new Promise((resolve) => session.defaultSession.once("will-download", (_event, item) => {
+        item.setSavePath(file);
+        item.once("done", (_done, state) => resolve(state));
+      }));
+    }, file);
+    await page.keyboard.press("ControlOrMeta+s");
+    assert.equal(await app.evaluate(() => globalThis.folioCopySaved), "completed");
+    return readFileSync(file, "latin1");
+  };
+
+  // A signature remembered by an earlier Folio can be used alongside a newly captured one.
+  const photos = await page.evaluate(() => {
     const canvas = Object.assign(document.createElement("canvas"), { width: 600, height: 200 });
     const g = canvas.getContext("2d");
     g.fillStyle = "#fff";
@@ -204,17 +217,68 @@ try {
     g.beginPath();
     g.moveTo(40, 150);
     g.bezierCurveTo(150, 10, 250, 190, 350, 60);
+    g.stroke();
+    const initials = canvas.toDataURL();
+    localStorage.setItem("folio:signature", JSON.stringify({ url: initials, width: canvas.width, height: canvas.height }));
     g.lineTo(560, 120);
     g.stroke();
-    return canvas.toDataURL("image/png").split(",")[1];
+    return { initials, fullName: canvas.toDataURL() };
   });
-  await page.getByTitle("Add a signature").click();
-  await page.locator('input[aria-label="Upload signature photo"]').setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(photo, "base64") });
+  const sign = page.getByTitle("Add a signature");
+  const picker = page.getByRole("combobox", { name: "Saved signature" });
+  const uploadPhoto = async (url) => {
+    await page.getByLabel("Upload signature photo").setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(url.split(",")[1], "base64") });
+    await page.getByRole("button", { name: "Adjust crop and ink" }).waitFor();
+  };
+  const placeAt = async (x, y) => {
+    await page.getByRole("combobox", { name: "Signature placement" }).selectOption("manual");
+    await page.getByRole("button", { name: "Place signature on page 1" }).click({ position: { x, y } });
+  };
+  const approve = async () => {
+    await page.getByRole("button", { name: "Approve and add signature" }).click();
+    await page.getByRole("dialog", { name: "Sign page 1" }).waitFor({ state: "hidden" });
+  };
+  await sign.click();
+  assert.equal(await picker.locator("option:checked").textContent(), "Signature 1");
+  const originalPage = await page.getByRole("img", { name: "Page 1 placement preview", exact: true }).getAttribute("src");
+  await uploadPhoto(photos.fullName);
+  const remember = page.getByRole("checkbox", { name: /Remember this signature/ });
+  await remember.check();
+  await page.getByLabel("Signature name", { exact: true }).fill("Full name");
+  const fullName = await page.getByRole("img", { name: "Your signature preview", exact: true }).getAttribute("src");
+  await placeAt(70, 70);
+  await approve();
+  await sign.click();
+  assert.ok(await page.getByRole("img", { name: "Page 1 placement preview", exact: true }).getAttribute("src") !== originalPage, "the preview omitted the first stamp");
+  await picker.selectOption({ label: "Full name" });
+  assert.ok(await page.getByRole("img", { name: "Your signature preview", exact: true }).getAttribute("src") === fullName);
+  await placeAt(145, 180);
+  const proposedWidth = () => page.getByRole("img", { name: "Proposed signature location", exact: true }).evaluate(image => image.style.width);
+  const width = await proposedWidth();
+  await picker.selectOption({ label: "Signature 1" });
+  assert.ok(await page.getByRole("img", { name: "Your signature preview", exact: true }).getAttribute("src") !== fullName);
+  assert.equal(await proposedWidth(), width);
+  await approve();
+  assert.equal((await saveCopy("signed.pdf")).match(/\/Subtype\s*\/Stamp\b/g)?.length, 2);
+
+  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Storage", exact: true }).click();
+  await page.getByRole("button", { name: "Forget Signature 1", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await sign.click();
+  assert.deepEqual(await picker.locator("option").allTextContents(), ["Full name"]);
+  await uploadPhoto(photos.initials);
+  await page.getByRole("button", { name: "Adjust crop and ink" }).click();
+  await page.getByLabel("Crop signature photo").waitFor();
   await page.getByRole("button", { name: /Use this signature/ }).click();
-  await page.locator('select[aria-label="Signature placement"]').selectOption("manual");
-  await page.locator('[aria-label^="Place signature on page"]').click();
-  await page.getByRole("button", { name: /Approve and add signature/ }).click();
+  await remember.check();
+  await placeAt(100, 130);
+  await approve();
+  await sign.click();
+  assert.deepEqual(await picker.locator("option:enabled").allTextContents(), ["Full name", "Signature 1"]);
+  await page.getByRole("button", { name: "Cancel" }).click();
   await page.locator(".dirty-dot").waitFor();
+  console.log("ok  saved signatures can be selected, exported together, and forgotten individually");
 
   // Stub the PDF viewer handoff in this renderer so printing cannot open a system dialog.
   await page.evaluate(interceptPdfPrint);
@@ -253,7 +317,8 @@ try {
   await select("Folio sample.pdf");
   assert.equal(await page.getByLabel("Page number", { exact: true }).inputValue(), "2");
   await page.getByTitle("Previous page").click();
-  await page.locator(".stampEditor").waitFor();
+  await page.locator(".stampEditor").first().waitFor();
+  assert.equal(await page.locator(".stampEditor").count(), 3);
   assert.deepEqual(await page.window.evaluate(() => window.tabPrompts), []);
   await select("Another.pdf");
   const closeSigned = docs.getByRole("button", { name: "Close Folio sample.pdf, unsaved changes" });
@@ -467,6 +532,9 @@ try {
   await page.evaluate(() => { Worker.prototype.postMessage = window.folioPostMessage; });
   await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
   await page.waitForTimeout(800);
+  const firstPageMarks = '.page[data-page-number="1"] .annotationEditorLayer [id^="pdfjs_internal_editor_"]';
+  const marksBefore = await page.locator(firstPageMarks).count();
+  assert.equal(marksBefore, 6);
   await page.keyboard.press("ControlOrMeta+w");
   await page.getByRole("button", { name: /Try a sample/ }).waitFor();
   // A slow notes read can finish after the reopened PDF is already usable. Hold the result until Save is pressed.
@@ -1128,10 +1196,17 @@ try {
 
   // Asked again at the end: the windows that convert a webpage or a Word document didn't bring it forward either.
   await checkStaysHidden();
-  await checkSignatureTargets(app, page, photo, shots);
+  await checkSignatureTargets(app, page, photos.fullName.split(",")[1], shots);
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {
+  // A failed interaction can leave a dirty tab. Closing the disposable profile must not wait on a native prompt.
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.removeAllListeners("will-prevent-unload");
+      win.webContents.on("will-prevent-unload", event => event.preventDefault());
+    }
+  }).catch(() => {});
   await app.close();
 }
 

@@ -67,7 +67,7 @@ Known limitations:
   (`01AF 1CBF 971E 5482 C064 1A6E EE00 67F5 E3B5 48FC`). These keys are installed by the .deb as
   `/usr/share/keyrings/folio-archive-keyring.gpg` and used only for Folio's source (`signed-by`). apt rejects any
   repository metadata not signed with it.
-- Local data (recent files, reading positions, an optionally remembered signature) is stored unencrypted in your user
+- Local data (recent files, reading positions, and any signatures you choose to remember) is stored unencrypted in your user
   profile. See [Privacy](README.md#privacy).
 - Word and LibreOffice convert documents with your own permissions and aren't sandboxed further by Folio. Word is
   driven through automation, which doesn't use its Protected View. Neither is cut off from the network.

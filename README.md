@@ -138,17 +138,17 @@ The editor works with unsigned, unencrypted PDFs.
 Choose **Sign** in the toolbar to add a signature.
 
 - **Capture on paper:** sign with dark ink on white paper, then use your camera or upload a PNG, JPEG, or WebP photo.
-- **Clean up the image:** crop to the signature and adjust ink sensitivity to remove the paper background. Capture
-  and image processing stay on your device.
-- **Suggested placement:** Folio checks the current page for empty PDF signature fields and likely signature labels,
-  then offers places to sign. Detection is a suggestion, not a guarantee that every field will be found.
+- **Clean up the image:** Folio removes the paper background and trims the image on your device. Use **Adjust crop and ink** if you need to refine it.
+- **Sign a detected field:** click an empty PDF signature field, then choose your saved signature or initials from the picker beside it. The chosen image fits the field. If you have no saved signatures yet, clicking the field opens capture with that field selected. A page with a single field also offers a signing shortcut at the bottom.
+- **Suggested placement:** On PDFs with selectable text, click a printed line labeled **Signature** or **Initials** to pick a saved mark beside it. Folio recognizes drawn rules and underscores. When it finds only a possible signing area, **Review signature** lets you check the placement.
 - **Preview and position:** review the actual page, pick a suggestion or place the signature manually, and adjust its
   width before approving.
-- **Explicit approval:** nothing is added until you click **Approve and add signature**. Signatures are visual stamps,
+- **Explicit approval:** click the sign button on a detected field or **Approve and add signature** in the preview. Signatures are visual stamps,
   not certificate-based digital signatures. Use **Save a copy** to keep a signed PDF; placed signatures are not part
   of Folio's automatic annotation restoration.
-- **Optional reuse:** choose to remember a signature on this computer; remove the saved image in
-  **Settings → Storage → Signature → Forget**.
+- **Optional reuse:** select **Remember this signature** and give it a name, such as “Initials”.
+  Open **Sign** again to choose a saved signature or capture another. Remove individual signatures in
+  **Settings → Storage → Signatures**.
 
 ### Ask AI about a document
 
@@ -314,8 +314,8 @@ is there when you reopen the document; the **+** button in the panel starts over
 Stored locally in your user profile (`%APPDATA%\Folio` on Windows, `~/Library/Application Support/Folio` on macOS,
 `~/.config/Folio` on Linux): recently opened PDFs and their thumbnails (up to 8,
 removable from the home screen with **Clear all**; password-protected PDFs are never kept), highlights, notes, and
-Ask AI conversations for each document (except password-protected ones), reading positions, preferences, and, only if you choose to remember
-it, your signature image. Apart from provider credentials, this data isn't encrypted, so anyone with access to your
+Ask AI conversations for each document (except password-protected ones), reading positions, preferences, and any
+signature images you choose to remember. Apart from provider credentials, this data isn't encrypted, so anyone with access to your
 user account can read it.
 
 ## Building from source

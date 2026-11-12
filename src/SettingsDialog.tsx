@@ -5,6 +5,7 @@ import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChat
 import { OpenRouterSettings } from "./OpenRouterSettings";
 import { CustomEndpointSettings } from "./CustomEndpointSettings";
 import { updateSummary } from "./updates";
+import { readSignatures } from "./signatures";
 import { ScanLanguagePicker } from "./ScanLanguagePicker";
 import type { ScanLanguage } from "./scanLanguage";
 import { Icon } from "./icons";
@@ -186,10 +187,7 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
     return () => { current = false; };
   }, [ai, section]);
 
-  // Signature
-  const [savedSignature, setSavedSignature] = useState(() => {
-    try { return !!localStorage.getItem("folio:signature"); } catch { return false; }
-  });
+  const [signatures, setSignatures] = useState(readSignatures);
 
   return (
     <Modal title="Settings" onClose={onClose}>
@@ -273,15 +271,15 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
           </Row>
         </Section>
 
-        <Section title="Signature">
-          <Row label="Remembered signature" hint={savedSignature
-            ? "Saved on this computer (unencrypted) for quick signing."
-            : "None. You can choose to remember one when you sign a document."}>
-            <button className="btn ghost" disabled={!savedSignature} onClick={() => {
-              try { localStorage.removeItem("folio:signature"); setSavedSignature(false); }
+        <Section title="Signatures">
+          <p className="search-hint">{signatures.length ? "Saved on this device without encryption." : "No saved signatures. You can remember one when you sign a document."}</p>
+          {signatures.map(signature => <Row key={signature.key} label={signature.name}
+            hint={<img className="settings-signature-preview" src={signature.url} alt="" />}>
+            <button className="btn ghost" aria-label={`Forget ${signature.name}`} onClick={() => {
+              try { localStorage.removeItem(signature.key); setSignatures(readSignatures()); setError(null); }
               catch { setError("Couldn't forget the signature. Please try again."); }
             }}>Forget</button>
-          </Row>
+          </Row>)}
         </Section></>}
 
         {desktop && section === "General" && (
