@@ -8,7 +8,7 @@ import { ocrSession } from "./lib/ocr";
 import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, subscribeAiPreferences, USAGE_URL } from "./ai";
 import { Modal } from "./Dialogs";
 import { readSetting } from "./preferences";
-import { documentNotes, MAX_DOC_CHARS, shareBudget, type Attachment, type DocText } from "./aiAttachments";
+import { documentNotes, MAX_ATTACHMENTS, MAX_DOC_CHARS, shareBudget, type Attachment, type DocText } from "./aiAttachments";
 import type { DocumentTabs, OpenDocument } from "./documentTabs";
 
 export type { DocText };
@@ -60,6 +60,8 @@ export function documentText(pdf: PDFDocumentProxy) {
     return { text, truncated, recognized };
   })();
   textCache.set(pdf, { version, text });
+  // A failed read is tried again next time.
+  text.catch(() => { if (textCache.get(pdf)?.text === text) textCache.delete(pdf); });
   return text;
 }
 
@@ -173,6 +175,8 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const addRef = useRef<HTMLDivElement>(null);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const newConversationRef = useRef<HTMLButtonElement>(null);
   const cancelNew = () => { setConfirmNew(false); newConversationRef.current?.focus(); };
 
@@ -206,9 +210,10 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   // The document picker closes the way the More menu does: on Escape, or a click anywhere else.
   useEffect(() => {
     if (!addOpen) return;
+    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
     const close = (event: MouseEvent) => !addRef.current?.contains(event.target as Node) && setAddOpen(false);
     const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.stopPropagation(); setAddOpen(false); }
+      if (event.key === "Escape") { event.stopPropagation(); setAddOpen(false); addButtonRef.current?.focus(); }
     };
     window.addEventListener("mousedown", close);
     window.addEventListener("keydown", key, true);
@@ -270,6 +275,11 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   // Otherwise it keeps running unseen, holds one of the two answers allowed at a time, and comes back never finishing.
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  // Read when the panel closes; send() can make the conversation session-only without ending its own answer.
+  const keepRef = useRef(keep);
+  keepRef.current = keep;
+  const generationRef = useRef(generation);
+  generationRef.current = generation;
 
   // The single place attachments change, so the remembered conversation keeps them when the panel closes.
   // Saved history keeps them too, unless one of them is password-protected.
@@ -285,7 +295,10 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const removeAttachment = (contentId: string) => updateAttachments(attachments.filter((a) => a.contentId !== contentId));
 
   // Answers can cite this document or an attached one; a page reference jumps to the tab that has it.
-  const citedFiles = useMemo(() => [docName, ...attachments.map((attachment) => attachment.name)], [attachments, docName]);
+  // Citations of a document that is no longer open stay plain text, since there is nothing to show.
+  const openIds = useMemo(() => new Set(openDocs.map((doc) => doc.contentId)), [openDocs]);
+  const citedFiles = useMemo(() => [docName, ...attachments.filter((a) => openIds.has(a.contentId)).map((a) => a.name)],
+    [attachments, docName, openIds]);
   const openPage = useCallback((page: number, file?: string) => {
     if (file === undefined || file === docName) onGoToPage(page);
     else {
@@ -304,11 +317,12 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     const list = messagesRef.current;
     const last = list[list.length - 1];
     const kept = last?.role === "assistant" && !last.content && !last.error ? list.slice(0, -1) : list;
+    const generation = generationRef.current, keep = keepRef.current;
     if (generation !== null) {
       rememberChat(docId, keep, kept, generation, attachmentsRef.current);
       if (keep) void saveAiHistory(docId, storedMessages(kept), generation, attachmentsRef.current);
     }
-  }, [ai, docId, keep, generation]);
+  }, [ai, docId]);
   const stop = () => {
     if (!busy) return;
     if (preparing.current !== busy) { void ai?.cancel(busy); return; }
@@ -336,7 +350,8 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
         (provider === "openrouter" || provider === "custom") && context
           ? { text: "", truncated: true, recognized: !!session && (session.embedded.has(context.page) || !!session.pages.get(context.page)?.length) }
           : documentText(pdf),
-        Promise.all(attachments.map((attachment) => tabs.documentText(attachment.contentId))),
+        // One unreadable document is left out (undefined) instead of failing the question; a closed one reads as null.
+        Promise.all(attachments.map((attachment) => tabs.documentText(attachment.contentId).catch(() => undefined))),
       ]);
       if (preparing.current !== id) return;
       preparing.current = null;
@@ -349,7 +364,8 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
       const [mainDoc, ...others] = shareBudget([{ name: docName, ...doc }, ...attached]);
       // With a passage selected, OpenRouter and custom endpoints send only that passage of this document by design.
       const passageOnly = (provider === "openrouter" || provider === "custom") && !!context;
-      const skipped = attachments.filter((_, i) => !attachedTexts[i]).map((a) => `${a.name} isn't open, so it was left out.`);
+      const skipped = attachments.flatMap((a, i) => attachedTexts[i] === null ? [`${a.name} isn't open, so it was left out.`]
+        : attachedTexts[i] === undefined ? [`Folio couldn't read ${a.name}, so it was left out.`] : []);
       setNotes(attachments.length ? [...documentNotes(passageOnly ? others : [mainDoc, ...others]), ...skipped] : []);
       await ai.ask({ id, provider, model, document: mainDoc, ...(others.length ? { attachments: others } : {}),
         messages: history.map(({ role, content, context }) => ({ role, content, ...(context ? { context } : {}) })) });
@@ -377,8 +393,8 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   };
 
   const attachedIds = new Set(attachments.map((a) => a.contentId));
-  const addable = openDocs.filter((doc) => !attachedIds.has(doc.contentId));
-  const openIds = new Set(openDocs.map((doc) => doc.contentId));
+  const full = attachments.length >= MAX_ATTACHMENTS;
+  const addable = full ? [] : openDocs.filter((doc) => !attachedIds.has(doc.contentId));
 
   const placeholder = !ready ? "Connect an AI provider to ask questions"
     : context ? "Ask about the selected passage…" : "Ask about this document…";
@@ -508,22 +524,30 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
             </button>
           </div>
         )}
-        {notes.length > 0 && <div className="ai-notes" role="status">{notes.map((note) => <p key={note}>{note}</p>)}</div>}
+        {notes.length > 0 && <div className="ai-notes" role="status">{notes.map((note, i) => <p key={i}>{note}</p>)}</div>}
         <div className="ai-attachments">
           <div className="ai-add" ref={addRef}>
-            <button className="pill-btn" aria-haspopup="menu" aria-expanded={addOpen} aria-label="Add open document" title="Add open document"
-              disabled={!!busy} onClick={() => setAddOpen(open => !open)}>
+            <button ref={addButtonRef} className="pill-btn" aria-haspopup="menu" aria-expanded={addOpen} aria-label="Add open document" title="Add open document"
+              disabled={!!busy || !loaded} onClick={() => setAddOpen(open => !open)}>
               <Icon name="plus" size={14} />
             </button>
             {addOpen && (
-              <div className="menu dropdown" role="menu" aria-label="Open documents">
+              <div ref={menuRef} className="menu dropdown" role="menu" aria-label="Open documents" onKeyDown={event => {
+                if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                event.preventDefault();
+                const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+                const at = items.indexOf(document.activeElement as HTMLElement);
+                items[(at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
+              }}>
                 {addable.length ? addable.map(doc => (
                   <button key={doc.contentId} role="menuitem" title={doc.name}
-                    onClick={() => { setAddOpen(false); addAttachment(doc); }}>
+                    onClick={() => { setAddOpen(false); addAttachment(doc); addButtonRef.current?.focus(); }}>
                     <Icon name="file" size={15} />
                     <span className="menu-label">{doc.name.replace(/\.pdf$/i, "")}</span>
                   </button>
-                )) : <button disabled role="menuitem">Open another PDF in a tab to add it</button>}
+                )) : <button role="menuitem" aria-disabled="true" className="disabled">
+                  {full ? `You can add up to ${MAX_ATTACHMENTS} documents` : "Open another PDF in a tab to add it"}
+                </button>}
               </div>
             )}
           </div>
@@ -532,7 +556,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
             return (
               <div key={attachment.contentId} className={open ? "context-chip attachment" : "context-chip attachment missing"}
                 title={open ? attachment.name : "Not open: it will be skipped until this document is opened again"}>
-                <span>{attachment.name.replace(/\.pdf$/i, "")}</span>
+                <span>{attachment.name.replace(/\.pdf$/i, "")}{!open && " (not open)"}</span>
                 <button disabled={!!busy} aria-label={`Remove ${attachment.name}`} title="Remove"
                   onClick={() => removeAttachment(attachment.contentId)}>
                   <Icon name="close" size={12} />

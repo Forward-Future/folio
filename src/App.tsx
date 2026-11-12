@@ -506,6 +506,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         };
 
         setDoc(next);
+        if (revision) tabs.revised(tabKey, id);
         if (!revision) { nextSelection.current = null; setContentEditing(false); }
         setEditorDirty(false);
         setImageDraft(null);

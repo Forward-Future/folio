@@ -89,4 +89,10 @@ describe("documentNotes", () => {
       "scan.pdf has no readable text yet. If it's a scan, wait for text recognition to finish.",
     ]);
   });
+
+  it("says when none of a document fit", () => {
+    expect(documentNotes([doc("huge.pdf", "", true)])).toEqual([
+      "huge.pdf is too long to include alongside the other documents, so none of it was sent.",
+    ]);
+  });
 });

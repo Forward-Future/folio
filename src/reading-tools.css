@@ -584,8 +584,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ai-add .menu button:disabled {
+.ai-add .menu button:disabled,
+.ai-add .menu button[aria-disabled="true"] {
   color: var(--text-3);
+  cursor: default;
 }
 .context-chip.attachment {
   display: inline-flex;

@@ -5,6 +5,9 @@ export type DocText = { text: string; truncated: boolean; recognized: boolean };
 /** Characters of document text sent with a question, shared by every document in it. */
 export const MAX_DOC_CHARS = 400_000;
 
+/** Documents that can be added to one conversation; the main process accepts no more. */
+export const MAX_ATTACHMENTS = 20;
+
 /** A document added to a conversation. Saved with the conversation; its text is read again when asked. */
 export interface Attachment { name: string; contentId: string }
 
@@ -40,6 +43,7 @@ export function shareBudget(documents: AiDocument[], budget = MAX_DOC_CHARS): Ai
 /** Notes to show under the chat for documents the question could not fully include. */
 export function documentNotes(documents: AiDocument[]): string[] {
   return documents.flatMap(doc => {
+    if (doc.truncated && doc.text === "") return [`${doc.name} is too long to include alongside the other documents, so none of it was sent.`];
     if (doc.truncated) return [`Only the first pages of ${doc.name} were sent.`];
     if (doc.text === "") return [`${doc.name} has no readable text yet. If it's a scan, wait for text recognition to finish.`];
     return [];

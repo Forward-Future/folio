@@ -30,6 +30,8 @@ interface Tab {
   key: number;
   name: string;
   contentId?: string;
+  /** Content of the bytes on screen. An in-place edit changes it while contentId keeps the opened file. */
+  liveId?: string;
   dirty: boolean;
   frame?: ReaderFrame;
   reader?: Reader;
@@ -64,12 +66,13 @@ export class DocumentTabs {
   snapshot = () => this.revision;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
 
-  /** Documents open in other tabs. Tabs are identified by content, so a closed and reopened file matches again. */
+  /** Documents open in other tabs. Tabs are identified by content, so a closed and reopened file matches again,
+   * and an edited document no longer matches what was added before the edit. */
   documents(except: number): OpenDocument[] {
-    return this.entries.filter(tab => tab.key !== except && !tab.closing && tab.contentId && tab.reader?.text)
-      .map(tab => ({ key: tab.key, name: tab.name, contentId: tab.contentId!, locked: !!tab.reader?.locked?.() }));
+    return this.entries.filter(tab => tab.key !== except && !tab.closing && tab.liveId && tab.reader?.text)
+      .map(tab => ({ key: tab.key, name: tab.name, contentId: tab.liveId!, locked: !!tab.reader?.locked?.() }));
   }
-  private byContent(contentId: string) { return this.entries.find(tab => !tab.closing && tab.contentId === contentId); }
+  private byContent(contentId: string) { return this.entries.find(tab => !tab.closing && tab.liveId === contentId); }
   /** The current text of an open document, or null when no tab shows it any more. */
   async documentText(contentId: string): Promise<(DocText & { name: string; locked: boolean }) | null> {
     const tab = this.byContent(contentId);
@@ -170,10 +173,16 @@ export class DocumentTabs {
     }
     tab.name = name;
     tab.contentId = id;
+    tab.liveId = id;
     if (tab.frame) tab.frame.title = name;
     if (this.active === key) setActiveDocument(id);
     this.changed();
     return true;
+  }
+  /** The tab now shows an edited version of its document. */
+  revised(key: number, id: string) {
+    const tab = this.entry(key);
+    if (tab && !tab.closing && tab.liveId !== id) { tab.liveId = id; this.changed(); }
   }
   markDirty(key: number, dirty: boolean) {
     const tab = this.entry(key);
