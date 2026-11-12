@@ -8,6 +8,10 @@ import { ocrSession } from "./lib/ocr";
 import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, subscribeAiPreferences, USAGE_URL } from "./ai";
 import { Modal } from "./Dialogs";
 import { readSetting } from "./preferences";
+import { MAX_DOC_CHARS, type DocText } from "./aiAttachments";
+import type { DocumentTabs } from "./documentTabs";
+
+export type { DocText };
 
 const AiMarkdown = lazy(() => import("./AiMarkdown").then((module) => ({ default: module.AiMarkdown })));
 
@@ -21,7 +25,6 @@ interface Message extends AiMessage {
   error?: { message: string; code?: string; link?: string };
 }
 
-const MAX_DOC_CHARS = 400_000;
 const CLAUDE_MODELS = [
   { id: "", name: "Default model" },
   { id: "sonnet", name: "Sonnet" },
@@ -30,7 +33,6 @@ const CLAUDE_MODELS = [
 ];
 
 // ── Document text ───────────────────────────────────────────────────────────────────────
-export type DocText = { text: string; truncated: boolean; recognized: boolean };
 // Keyed by the OCR version too: pages of a scan gain text while it is being recognized.
 const textCache = new WeakMap<PDFDocumentProxy, { version: number; text: Promise<DocText> }>();
 
@@ -133,6 +135,10 @@ interface Props {
   onGoToPage: (n: number) => void;
   onSettings: () => void;
   onClose: () => void;
+  /** Other open tabs, which can be added to the conversation. */
+  tabs: DocumentTabs;
+  /** This panel's own tab. */
+  tabKey: number;
 }
 
 export function AiPanel({ pdf, docId, persist, docName, context, onClearContext, onGoToPage, onSettings, onClose }: Props) {

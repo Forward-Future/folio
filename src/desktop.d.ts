@@ -73,13 +73,16 @@ interface FolioAi {
   openRouterModels(): Promise<{ ok: boolean; models?: OpenRouterModel[]; error?: string }>;
   customEndpoint(action: "save" | "check" | "remove", input?: { baseUrl: string; key: string }): Promise<{ ok: boolean; status?: CustomEndpointStatus; error?: string }>;
   customModels(): Promise<{ ok: boolean; models?: OpenRouterModel[]; error?: string }>;
-  ask(request: { id: string; provider: "chatgpt" | "claude" | "openrouter" | "custom"; model: string; document: { name: string; text: string; truncated: boolean; recognized: boolean };
-    messages: AiMessage[] }): Promise<boolean>;
+  /** `document` is the conversation's own document. `attachments` are other open documents added to it. */
+  ask(request: { id: string; provider: "chatgpt" | "claude" | "openrouter" | "custom"; model: string; document: AiDocument;
+    attachments?: AiDocument[]; messages: AiMessage[] }): Promise<boolean>;
   cancel(id: string): Promise<boolean>;
   onEvent(callback: (event: AiEvent) => void): () => void;
 }
 
 interface OpenRouterModel { id: string; name: string; contextLength: number | null }
+
+interface AiDocument { name: string; text: string; truncated: boolean; recognized: boolean }
 
 interface CustomEndpointStatus { configured: boolean; baseUrl: string; hasKey: boolean }
 

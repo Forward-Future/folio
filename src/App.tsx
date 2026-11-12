@@ -32,7 +32,7 @@ import { scanLanguagesFrom } from "./scanLanguage";
 import { ImageMenu, ImageViewer, type ImageTarget } from "./ImageViewer";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { IS_MAC, keys } from "./platform";
-import { AiPanel, forgetClearedChats, type AiContext } from "./AiPanel";
+import { AiPanel, documentText, forgetClearedChats, type AiContext } from "./AiPanel";
 import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
 import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
@@ -1126,8 +1126,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       markupRef.current?.sync();
       await markupRef.current?.flush();
       opening.current?.abort();
-    } });
-  }, [tabs, tabKey, openBytes, openBlob, openSample, openUrl, beginOpen, flash]);
+    }, text: () => docRef.current ? documentText(docRef.current.pdf) : null,
+    locked: () => !!docRef.current?.password, goTo });
+  }, [tabs, tabKey, openBytes, openBlob, openSample, openUrl, beginOpen, flash, goTo]);
   useEffect(() => {
     const sync = (event: StorageEvent) => {
       if (event.key === "folio:theme" && (event.newValue === "light" || event.newValue === "dark")) {
@@ -1697,6 +1698,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             onGoToPage={goTo}
             onSettings={() => setDialog("ai-settings")}
             onClose={() => setAiOpen(false)}
+            tabs={tabs}
+            tabKey={tabKey}
           />
         )}
       </div>

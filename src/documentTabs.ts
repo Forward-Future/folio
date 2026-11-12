@@ -1,5 +1,6 @@
 import { activeDocument, setActiveDocument } from "./session";
 import { getRecent } from "./recent";
+import type { DocText } from "./aiAttachments";
 
 export type OpenSource =
   | { kind: "bytes"; name: string; data: Uint8Array; note?: string; password?: string }
@@ -9,10 +10,18 @@ export type OpenSource =
   | { kind: "sample" | "converting"; name: string }
   | { kind: "error"; name: string; message: string };
 
-interface Reader {
+export interface Reader {
   open(source: OpenSource): void;
   flush(): Promise<void>;
+  /** Text of the open document for Ask AI, or null while nothing is open. */
+  text?(): Promise<DocText> | null;
+  /** True for a password-protected document, whose text must not be saved with a conversation. */
+  locked?(): boolean;
+  goTo?(page: number): void;
 }
+
+/** An open document that Ask AI can add to another tab's conversation. */
+export interface OpenDocument { key: number; name: string; contentId: string }
 
 export interface ReaderContext { tabs: DocumentTabs; key: number }
 export interface ReaderFrame extends HTMLIFrameElement { readerContext?: ReaderContext; disposeReader?: () => void }
@@ -54,6 +63,28 @@ export class DocumentTabs {
   get all(): readonly Tab[] { return this.entries; }
   snapshot = () => this.revision;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
+
+  /** Documents open in other tabs. Tabs are identified by content, so a closed and reopened file matches again. */
+  documents(except: number): OpenDocument[] {
+    return this.entries.filter(tab => tab.key !== except && !tab.closing && tab.contentId && tab.reader?.text)
+      .map(tab => ({ key: tab.key, name: tab.name, contentId: tab.contentId! }));
+  }
+  private byContent(contentId: string) { return this.entries.find(tab => !tab.closing && tab.contentId === contentId); }
+  /** The current text of an open document, or null when no tab shows it any more. */
+  async documentText(contentId: string): Promise<(DocText & { name: string; locked: boolean }) | null> {
+    const tab = this.byContent(contentId);
+    const text = tab?.reader?.text?.();
+    if (!tab || !text) return null;
+    return { ...(await text), name: tab.name, locked: !!tab.reader?.locked?.() };
+  }
+  /** Switch to the tab showing a document and go to a page. False when it is no longer open. */
+  showPage(contentId: string, page: number) {
+    const tab = this.byContent(contentId);
+    if (!tab) return false;
+    this.select(tab.key);
+    tab.reader?.goTo?.(page);
+    return true;
+  }
   private changed() {
     this.revision++;
     const selected = this.entry(this.active);
