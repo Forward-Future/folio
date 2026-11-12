@@ -846,7 +846,12 @@ async function checkOrganizePages(app, page, folder, shots) {
   await page.getByRole("tab", { name: "Pages", exact: true }).click();
   const sidebar = page.locator("aside.sidebar");
   const thumb = n => sidebar.locator(`.thumb[data-page="${n}"]`);
-  const shown = () => sidebar.locator(".thumb").evaluateAll(els => els.map(el => Number(el.dataset.page)));
+  const expectShown = async expected => {
+    await page.waitForFunction(order => {
+      const thumbs = document.querySelectorAll("aside.sidebar .thumb");
+      return thumbs.length === order.length && order.every((n, i) => Number(thumbs[i].dataset.page) === n);
+    }, expected);
+  };
   const picked = () => sidebar.locator('.thumb[aria-pressed="true"]').evaluateAll(els => els.map(el => Number(el.dataset.page)));
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -863,10 +868,10 @@ async function checkOrganizePages(app, page, folder, shots) {
   await menuDelete.click();
   const organizer = page.getByRole("complementary", { name: "Organize pages" });
   await organizer.waitFor();
-  assert.deepEqual(await shown(), [1, 4]);
+  await expectShown([1, 4]);
   await page.waitForFunction(() => document.activeElement?.matches('aside .thumb[data-key="4"]'));
   await organizer.getByRole("button", { name: "Undo", exact: true }).click();
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await expectShown([1, 2, 3, 4]);
   assert.deepEqual(await picked(), [2, 3]);
 
   // Every page selected: nothing can be deleted, by button or key.
@@ -875,7 +880,7 @@ async function checkOrganizePages(app, page, folder, shots) {
   assert.deepEqual(await picked(), [1, 2, 3, 4]);
   assert.ok(await organizer.getByRole("button", { name: "Delete 4 pages" }).isDisabled());
   await page.keyboard.press("Delete");
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await expectShown([1, 2, 3, 4]);
   await thumb(3).click({ modifiers: [modifier] });
   await thumb(1).click({ modifiers: [modifier] });
   assert.deepEqual(await picked(), [2, 4]);
@@ -883,20 +888,20 @@ async function checkOrganizePages(app, page, folder, shots) {
 
   // Delete and Backspace delete; the shortcuts undo and redo inside the organizer, not the reader's edits.
   await page.keyboard.press("Delete");
-  assert.deepEqual(await shown(), [1, 3]);
+  await expectShown([1, 3]);
   await page.keyboard.press("ControlOrMeta+z");
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await expectShown([1, 2, 3, 4]);
   await page.keyboard.press("ControlOrMeta+Shift+z");
-  assert.deepEqual(await shown(), [1, 3]);
+  await expectShown([1, 3]);
   await page.keyboard.press("ControlOrMeta+z");
   await thumb(2).click();
   await page.keyboard.press("Backspace");
-  assert.deepEqual(await shown(), [1, 3, 4]);
+  await expectShown([1, 3, 4]);
   // Dragging is covered by the reorder check; dragging here hangs Playwright on Windows CI.
   await thumb(4).click();
   await organizer.getByLabel("Move page 4 to").fill("1");
   await organizer.getByRole("button", { name: "Move", exact: true }).click();
-  assert.deepEqual(await shown(), [4, 1, 3]);
+  await expectShown([4, 1, 3]);
 
   await thumb(4).click();
   await thumb(1).click({ modifiers: ["ControlOrMeta"] });
@@ -914,7 +919,7 @@ async function checkOrganizePages(app, page, folder, shots) {
   assert.deepEqual(copy.map(p => p.text), ["Fourth page", "First page", "Third page"]);
   assert.deepEqual(copy.map(p => p.rotation), [90, 90, 0]);
   await organizer.getByRole("button", { name: "Done", exact: true }).click();
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await expectShown([1, 2, 3, 4]);
   console.log("ok  organizing pages deletes, undoes and redoes, keeps at least one page, and saves the chosen pages in order");
 }
 
