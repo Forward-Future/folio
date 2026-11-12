@@ -76,7 +76,8 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
   when you reopen a PDF, except for password-protected documents.
 - **Organize pages** from either sidebar tab. Drag thumbnails or enter a new position, or turn or delete selected pages. Ctrl-click
   (⌘-click on macOS) or Shift-click to select several, then choose **Rotate left**, **Rotate right**, or **Delete**. Undo and redo with `Ctrl+Z` and
-  `Ctrl+Shift+Z`. Right-click selected thumbnails in **Pages** to apply these actions directly. Save, then open the
+  `Ctrl+Shift+Z`. Right-click selected thumbnails in **Pages** to apply these actions directly. Use **Insert PDF…** to add another PDF before or after the selected page, at the start,
+  or at the end. You can also drop a PDF on the organizer. Insertion requires both PDFs to be unencrypted. Save, then open the
   organized PDF copy; the original file stays unchanged.
 - **Export selected pages** from the Pages sidebar. Ctrl-click thumbnails (⌘-click on macOS) to select individual pages, or Shift-click for a range. Right-click a selected thumbnail to save those pages in document order as a new PDF.
 - **Search as you type:** match case or whole words, see the current match and total count, browse per-page snippets
