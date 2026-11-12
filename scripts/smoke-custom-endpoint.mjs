@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import path from "node:path";
 import { PDFDocument } from "pdf-lib";
 
 // A real server on this computer, reached through the production IPC, local-address question, guarded session, stream
 // reader and citations. folio-local.test resolves to 127.0.0.1 (see the host resolver rules in smoke-test.mjs).
-export async function checkCustomEndpoint(app, page) {
+export async function checkCustomEndpoint(app, page, shots) {
   const served = [];
   let hold = false, cancelled = false, lastChat = null;
   const server = http.createServer((req, res) => {
@@ -21,8 +22,9 @@ export async function checkCustomEndpoint(app, page) {
       lastChat = JSON.parse(body);
       res.writeHead(200, { "content-type": "text/event-stream" });
       if (hold) { res.on("close", () => { cancelled = true; }); return res.write(": waiting\n\n"); }
+      const citation = JSON.parse(lastChat.messages[1].content).documents ? "(Ferry schedule.pdf, p. 2)." : "(p. 2).";
       res.end('data: {"choices":[{"delta":{"content":"The ferry leaves at dawn "}}]}\n\n'
-        + 'data: {"choices":[{"delta":{"content":"(p. 2)."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+        + `data: ${JSON.stringify({ choices: [{ delta: { content: citation }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
     });
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -83,11 +85,53 @@ export async function checkCustomEndpoint(app, page) {
     assert.equal(lastChat.stream, true);
     assert.match(JSON.parse(lastChat.messages[1].content).document.text, /\[Page 2\]/);
     assert.ok(served.every(s => s.auth === "Bearer fixture-only-endpoint-key"));
+    await panel.screenshot({ path: path.join(shots, "ask-ai-single-document.png") });
+    // Pick another open PDF, keep it when the panel closes, and follow its citation into the right tab.
+    const schedule = await PDFDocument.create();
+    schedule.addPage([480, 520]).drawText("Ferry schedule", { x: 38, y: 435, size: 28 });
+    schedule.addPage([480, 520]).drawText("Departure: dawn. Arrival: noon.", { x: 38, y: 435, size: 20 });
+    await app.evaluate(({ webContents }, data) => {
+      webContents.getAllWebContents().find(c => c.getURL().startsWith("app://folio/"))
+        .send("folio:open-file", { name: "Ferry schedule.pdf", data: Buffer.from(data, "base64") });
+    }, Buffer.from(await schedule.save()).toString("base64"));
+    await page.window.waitForFunction(() => document.title.startsWith("Ferry schedule.pdf"));
+    await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
+    const tabs = page.getByRole("tablist", { name: "Open documents" });
+    await tabs.getByRole("tab", { name: "Harbor log.pdf", exact: true }).click();
+    await panel.getByRole("button", { name: "Add open document", exact: true }).click();
+    await panel.getByRole("menuitem", { name: "Ferry schedule", exact: true }).click();
+    await panel.getByRole("button", { name: "Remove Ferry schedule.pdf", exact: true }).waitFor();
+    await panel.screenshot({ path: path.join(shots, "ask-ai-open-tabs.png") });
+    await panel.getByRole("button", { name: "Close Ask AI" }).click();
+    await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+    await panel.getByRole("button", { name: "Remove Ferry schedule.pdf", exact: true }).waitFor();
+    await panel.getByRole("textbox").fill("Compare the harbor log with the ferry schedule.");
+    await panel.getByRole("button", { name: "Send", exact: true }).click();
+    const fileCitation = panel.getByRole("button", { name: "(Ferry schedule.pdf, p. 2)" });
+    await fileCitation.waitFor();
+    const documents = JSON.parse(lastChat.messages[1].content).documents;
+    assert.deepEqual(documents.map(doc => doc.name), ["Harbor log.pdf", "Ferry schedule.pdf"]);
+    assert.match(documents[1].text, /Departure: dawn/);
+    await fileCitation.click();
+    await page.window.waitForFunction(() => document.title.startsWith("Ferry schedule.pdf"));
+    await page.waitForFunction(() => document.querySelector('[aria-label="Page number"]').value === "2");
+    await tabs.getByRole("button", { name: "Close Ferry schedule.pdf", exact: true }).click();
+    await page.window.waitForFunction(() => document.title.startsWith("Harbor log.pdf"));
+    await panel.locator(".attachment.missing").filter({ hasText: "Ferry schedule" }).waitFor();
+    assert.equal(await fileCitation.count(), 0, "a closed document's citation is no longer clickable");
+    await panel.getByRole("textbox").fill("Summarize the documents still open.");
+    await panel.getByRole("button", { name: "Send", exact: true }).click();
+    await panel.getByRole("status").filter({ hasText: "Ferry schedule.pdf isn't open, so it was left out." }).waitFor();
+    await panel.getByRole("button", { name: "Send", exact: true }).waitFor();
+    assert.equal(JSON.parse(lastChat.messages[1].content).documents, undefined);
+    await panel.getByRole("button", { name: "Remove Ferry schedule.pdf", exact: true }).click();
+    console.log("ok  Ask AI adds an open document, keeps its chip, sends both texts, follows its citation, and skips a closed tab");
     // Stop ends the request at the server.
+    const completed = served.filter(s => s.path.endsWith("completions")).length;
     hold = true;
     await panel.getByRole("textbox").fill("Continue");
     await panel.getByRole("button", { name: "Send", exact: true }).click();
-    for (let i = 0; i < 100 && served.filter(s => s.path.endsWith("completions")).length < 2; i++) await page.waitForTimeout(50);
+    for (let i = 0; i < 100 && served.filter(s => s.path.endsWith("completions")).length <= completed; i++) await page.waitForTimeout(50);
     await panel.getByRole("button", { name: "Stop" }).click();
     await panel.getByRole("button", { name: "Send", exact: true }).waitFor();
     for (let i = 0; i < 100 && !cancelled; i++) await page.waitForTimeout(50);

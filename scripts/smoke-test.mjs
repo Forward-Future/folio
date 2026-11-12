@@ -31,6 +31,8 @@ const executablePath = electronPath(env);
 // Containers often run as root, where Chromium's sandbox can't start. The made-up names stand in for web addresses
 // that lead to this computer (see the local network checks below).
 const args = [root, "--mute-audio", "--host-resolver-rules=MAP folio-local.test 127.0.0.1, MAP folio-rebind.test 127.0.0.1, MAP folio-pinned.test 127.0.0.2",
+  // The off-screen Windows GPU surface can stop presenting frames. Use software rendering for hidden tests.
+  ...(process.platform === "win32" && env.FOLIO_TEST_HIDDEN === "1" ? ["--disable-gpu"] : []),
   ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])];
 
 // The smallest .docx Word opens: one paragraph of `text`.
@@ -138,7 +140,7 @@ try {
   assert.equal(await page.getByRole("dialog").count(), 0);
   console.log("ok  shortcuts wait while a dialog is open");
   await checkOpenRouter(app, page);
-  await checkCustomEndpoint(app, page);
+  await checkCustomEndpoint(app, page, shots);
 
   const toolbar = page.getByRole("toolbar", { name: "Tools" });
   for (const name of ["Select", "Highlight", "Draw", "Text", "Sign", "Edit mode"]) await toolbar.getByRole("button", { name, exact: true }).waitFor();
@@ -310,7 +312,8 @@ try {
   await textLayer.waitFor();
   await page.getByRole("radio", { name: "Green" }).click();
   const dragAcross = async line => {
-    await line.scrollIntoViewIfNeeded();
+    // A line can be visible underneath the floating navigation bar. Center it so the whole drag reaches text.
+    await line.evaluate(el => el.scrollIntoView({ block: "center", inline: "nearest" }));
     const box = await line.boundingBox();
     const y = box.y + box.height / 2;
     await page.mouse.move(box.x + 1, y);

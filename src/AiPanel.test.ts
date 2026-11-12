@@ -49,6 +49,14 @@ describe("documentText", () => {
     expect(pdf.getPage).toHaveBeenCalledTimes(2);
   });
 
+  it("retries after a failed text read instead of caching the rejection", async () => {
+    const pdf = makePdf([[{ str: "recovered" }]]);
+    pdf.getPage.mockRejectedValueOnce(new Error("damaged content stream"));
+    await expect(documentText(pdf)).rejects.toThrow("damaged content stream");
+    await expect(documentText(pdf)).resolves.toMatchObject({ text: "[Page 1]\nrecovered\n\n" });
+    expect(pdf.getPage).toHaveBeenCalledTimes(2);
+  });
+
   it("reads it again once recognition has added text, so answers see the new pages", async () => {
     const session = sessionWith();
     const pdf = makePdf([[]], session);

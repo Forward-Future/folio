@@ -11,6 +11,23 @@ export const MAX_ATTACHMENTS = 20;
 /** A document added to a conversation. Saved with the conversation; its text is read again when asked. */
 export interface Attachment { name: string; contentId: string }
 
+/** Same-name PDFs need separate names in the prompt and citations; keep those names with the conversation. */
+export function distinctAttachmentNames(mainName: string, attachments: Attachment[]): Attachment[] {
+  const key = (name: string) => name.trim().replace(/\.pdf$/i, "").toLowerCase();
+  const reserved = new Set([mainName, ...attachments.map(a => a.name)].map(key));
+  const seen = new Set([key(mainName)]);
+  return attachments.map(attachment => {
+    if (!seen.has(key(attachment.name))) { seen.add(key(attachment.name)); return attachment; }
+    const extension = attachment.name.match(/\.pdf$/i)?.[0] ?? "";
+    const stem = extension ? attachment.name.slice(0, -extension.length) : attachment.name;
+    let number = 2, name: string;
+    do { name = `${stem} (${number++})${extension}`; } while (reserved.has(key(name)));
+    reserved.add(key(name));
+    seen.add(key(name));
+    return { ...attachment, name };
+  });
+}
+
 /** Fit every document of a question into one shared budget, cutting at page boundaries. */
 export function shareBudget(documents: AiDocument[], budget = MAX_DOC_CHARS): AiDocument[] {
   const blocks = documents.map(doc => pageBlocks(doc.text));

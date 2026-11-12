@@ -1,10 +1,31 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_DOC_CHARS, documentNotes, shareBudget } from "./aiAttachments";
+import { MAX_DOC_CHARS, distinctAttachmentNames, documentNotes, shareBudget } from "./aiAttachments";
 
 const page = (n: number, text: string) => `[Page ${n}]\n${text}\n\n`;
 const pages = (text: string, count: number) => Array.from({ length: count }, (_, i) => page(i + 1, text)).join("");
 const doc = (name: string, text: string, truncated = false, recognized = false): AiDocument => ({ name, text, truncated, recognized });
+
+describe("distinctAttachmentNames", () => {
+  it("keeps distinct names and content identities unchanged", () => {
+    const attachment = { name: "Other.pdf", contentId: "other" };
+    expect(distinctAttachmentNames("Main.pdf", [attachment])[0]).toBe(attachment);
+  });
+
+  it("gives same-name documents separate names for their chips and citations", () => {
+    const attachments = [{ name: "Report.pdf", contentId: "a" }, { name: "Report.pdf", contentId: "b" }];
+    expect(distinctAttachmentNames("Report.pdf", attachments)).toEqual([
+      { name: "Report (2).pdf", contentId: "a" }, { name: "Report (3).pdf", contentId: "b" },
+    ]);
+    expect(attachments.map(a => a.name)).toEqual(["Report.pdf", "Report.pdf"]);
+  });
+
+  it("matches citation spelling and preserves names that already have a number", () => {
+    expect(distinctAttachmentNames("REPORT.pdf", [
+      { name: "Report", contentId: "a" }, { name: "Report (2).pdf", contentId: "b" },
+    ])).toEqual([{ name: "Report (3)", contentId: "a" }, { name: "Report (2).pdf", contentId: "b" }]);
+  });
+});
 
 describe("shareBudget", () => {
   it("leaves documents within the budget untouched", () => {

@@ -28,7 +28,7 @@ function remarkPageReferences(files?: string[]) {
         if (child.type !== "text" || !child.value) { visit(child); return [child]; }
         const parts: MarkdownNode[] = [];
         // Plain page references like (p. 12), and file citations like (Report.pdf, p. 12).
-        const pattern = /\((?:([^,()]+),\s*)?((?:p|pp|page|pages)\.?\s*(\d+)(?:[–-]\d+)?)\)/gi;
+        const pattern = /\((?:([^,()\n]+(?:\([^()\n]*\)[^,()\n]*)*),\s*)?((?:p|pp|page|pages)\.?\s*(\d+)(?:[–-]\d+)?)\)/gi;
         let last = 0;
         for (const match of child.value.matchAll(pattern)) {
           const cited = match[1]?.trim();

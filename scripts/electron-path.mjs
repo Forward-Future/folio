@@ -1,4 +1,5 @@
-// The Electron binary a test script launches; `env` is the environment the script gives the app.
+// A custom Electron binary when a hidden macOS run needs one; otherwise let Playwright launch its default binary.
+// `env` is the environment the script gives the app.
 //
 // macOS decides whether an app gets a Dock icon from the Info.plist of the bundle its binary sits in, as the process
 // starts and before any of Folio's code runs. Launched from the ordinary Electron.app, a hidden run made the Dock open
@@ -13,8 +14,10 @@ import path from "node:path";
 const require = createRequire(import.meta.url);
 
 export function electronPath(env) {
+  // An explicit executablePath bypasses Playwright's Electron loader and its background-rendering switches.
+  // Keep that standard setup except when macOS needs the custom agent bundle below.
+  if (process.platform !== "darwin" || env.FOLIO_TEST_HIDDEN !== "1") return undefined;
   const executable = require("electron");
-  if (process.platform !== "darwin" || env.FOLIO_TEST_HIDDEN !== "1") return executable;
 
   const bundle = executable.slice(0, executable.lastIndexOf(".app/") + ".app".length);
   const version = readFileSync(path.join(path.dirname(bundle), "version"), "utf8").trim();

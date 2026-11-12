@@ -8,7 +8,7 @@ import { ocrSession } from "./lib/ocr";
 import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, subscribeAiPreferences, USAGE_URL } from "./ai";
 import { Modal } from "./Dialogs";
 import { readSetting } from "./preferences";
-import { documentNotes, MAX_ATTACHMENTS, MAX_DOC_CHARS, shareBudget, type Attachment, type DocText } from "./aiAttachments";
+import { distinctAttachmentNames, documentNotes, MAX_ATTACHMENTS, MAX_DOC_CHARS, shareBudget, type Attachment, type DocText } from "./aiAttachments";
 import type { DocumentTabs, OpenDocument } from "./documentTabs";
 
 export type { DocText };
@@ -156,7 +156,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const tabRevision = useSyncExternalStore(tabs.subscribe, tabs.snapshot);
   const openDocs = useMemo(() => tabs.documents(tabKey), [tabs, tabKey, tabRevision]);
   const [messages, setMessages] = useState<Message[]>(() => conversations.get(docId)?.messages ?? []);
-  const [attachments, setAttachments] = useState<Attachment[]>(() => conversations.get(docId)?.attachments ?? []);
+  const [attachments, setAttachments] = useState<Attachment[]>(() => distinctAttachmentNames(docName, conversations.get(docId)?.attachments ?? []));
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
   // Adding a password-protected document makes the conversation session-only, like the protected document itself.
@@ -189,11 +189,11 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     void getAiHistory(docId).then(({ messages, attachments, generation }) => {
       if (cancelled) return;
       setMessages(messages);
-      setAttachments(current => current.length ? current : attachments);
+      setAttachments(current => distinctAttachmentNames(docName, current.length ? current : attachments));
       setGeneration(generation);
     });
     return () => { cancelled = true; };
-  }, [docId, loaded]);
+  }, [docId, docName, loaded]);
   useEffect(() => {
     if (generation === null) return;
     rememberChat(docId, keep, messages, generation, attachmentsRef.current);
@@ -291,7 +291,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     rememberChat(docId, keepNow, messagesRef.current, generation, next);
     if (keepNow && messagesRef.current.length) void saveAiHistory(docId, storedMessages(messagesRef.current), generation, next);
   }, [docId, keep, generation]);
-  const addAttachment = (doc: OpenDocument) => updateAttachments([...attachments, { name: doc.name, contentId: doc.contentId }], doc.locked);
+  const addAttachment = (doc: OpenDocument) => updateAttachments(distinctAttachmentNames(docName, [...attachments, { name: doc.name, contentId: doc.contentId }]), doc.locked);
   const removeAttachment = (contentId: string) => updateAttachments(attachments.filter((a) => a.contentId !== contentId));
 
   // Answers can cite this document or an attached one; a page reference jumps to the tab that has it.
@@ -395,6 +395,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const attachedIds = new Set(attachments.map((a) => a.contentId));
   const full = attachments.length >= MAX_ATTACHMENTS;
   const addable = full ? [] : openDocs.filter((doc) => !attachedIds.has(doc.contentId));
+  const addableNames = distinctAttachmentNames(docName, [...attachments, ...addable]).slice(attachments.length);
 
   const placeholder = !ready ? "Connect an AI provider to ask questions"
     : context ? "Ask about the selected passage…" : "Ask about this document…";
@@ -539,11 +540,11 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
                 const at = items.indexOf(document.activeElement as HTMLElement);
                 items[(at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
               }}>
-                {addable.length ? addable.map(doc => (
-                  <button key={doc.contentId} role="menuitem" title={doc.name}
-                    onClick={() => { setAddOpen(false); addAttachment(doc); addButtonRef.current?.focus(); }}>
+                {addable.length ? addable.map((doc, i) => (
+                  <button key={doc.contentId} role="menuitem" title={addableNames[i].name}
+                    onClick={() => { setAddOpen(false); addAttachment({ ...doc, name: addableNames[i].name }); addButtonRef.current?.focus(); }}>
                     <Icon name="file" size={15} />
-                    <span className="menu-label">{doc.name.replace(/\.pdf$/i, "")}</span>
+                    <span className="menu-label">{addableNames[i].name.replace(/\.pdf$/i, "")}</span>
                   </button>
                 )) : <button role="menuitem" aria-disabled="true" className="disabled">
                   {full ? `You can add up to ${MAX_ATTACHMENTS} documents` : "Open another PDF in a tab to add it"}

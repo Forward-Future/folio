@@ -40,6 +40,13 @@ describe("AiMarkdown citations", () => {
     expect(onPage.mock.calls).toEqual([[3, "Notes.pdf"]]);
   });
 
+  it("keeps numbered same-name document citations separate", () => {
+    const { onPage, buttons } = render("(Report.pdf, p. 1) and (Report (2).pdf, p. 3).", ["Report.pdf", "Report (2).pdf"]);
+    expect(buttons().map(button => button.title)).toEqual(["Go to page 1 of Report.pdf", "Go to page 3 of Report (2).pdf"]);
+    buttons()[1].click();
+    expect(onPage.mock.calls).toEqual([[3, "Report (2).pdf"]]);
+  });
+
   it("keeps citations to files that are not open as plain text", () => {
     const { onPage, buttons } = render("(Mystery.pdf, p. 7) and (p. 3).", ["Report.pdf"]);
     expect(buttons().map((button) => button.title)).toEqual(["Go to page 3"]);
