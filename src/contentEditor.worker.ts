@@ -18,7 +18,8 @@ export interface EditTarget {
 }
 export type Change = { kind: "text"; index: number; text: string } | { kind: "image"; index: number; file: File }
   | { kind: "insertImage"; file: File; box: number[]; rotation: number };
-export type EditorRequest = { source: Uint8Array } | { page: number } | { page: number; change: Change; snapshot: Uint8Array };
+export type EditorRequest = { rotations: number[]; snapshot: Uint8Array; password?: string }
+  | { source: Uint8Array } | { page: number } | { page: number; change: Change; snapshot: Uint8Array };
 export type EditorReply = { page: number; targets: EditTarget[] } | { bytes: Uint8Array } | { error: string; page?: number };
 
 const ready = (async () => {
@@ -36,20 +37,24 @@ function buffer<T>(m: WrappedPdfiumModule, size: number, use: (ptr: number) => T
   try { return use(ptr); } finally { m.pdfium.wasmExports.free(ptr); }
 }
 
-async function withPage<T>(m: WrappedPdfiumModule, bytes: Uint8Array, number: number, use: (doc: number, page: number) => T | Promise<T>) {
+async function withDocument<T>(m: WrappedPdfiumModule, bytes: Uint8Array, password: string, use: (doc: number) => T | Promise<T>) {
   const ptr = m.pdfium.wasmExports.malloc(bytes.length);
   if (!ptr) throw new Error("There isn't enough memory to edit this PDF.");
   try {
     m.pdfium.HEAPU8.set(bytes, ptr);
-    const doc = m.FPDF_LoadMemDocument(ptr, bytes.length, "");
+    const doc = m.FPDF_LoadMemDocument(ptr, bytes.length, password);
     if (!doc) throw new Error("Couldn't open this PDF for editing.");
-    try {
-      if (m.EPDF_IsEncrypted(doc) || m.FPDF_GetSignatureCount(doc) > 0) throw new Error("Editing requires an unsigned, unencrypted PDF.");
-      const page = m.FPDF_LoadPage(doc, number - 1);
-      if (!page) throw new Error("Couldn't open this page.");
-      try { return await use(doc, page); } finally { m.FPDF_ClosePage(page); }
-    } finally { m.FPDF_CloseDocument(doc); }
+    try { return await use(doc); } finally { m.FPDF_CloseDocument(doc); }
   } finally { m.pdfium.wasmExports.free(ptr); }
+}
+
+async function withPage<T>(m: WrappedPdfiumModule, bytes: Uint8Array, number: number, use: (doc: number, page: number) => T | Promise<T>) {
+  return withDocument(m, bytes, "", async doc => {
+    if (m.EPDF_IsEncrypted(doc) || m.FPDF_GetSignatureCount(doc) > 0) throw new Error("Editing requires an unsigned, unencrypted PDF.");
+    const page = m.FPDF_LoadPage(doc, number - 1);
+    if (!page) throw new Error("Couldn't open this page.");
+    try { return await use(doc, page); } finally { m.FPDF_ClosePage(page); }
+  });
 }
 
 function markString(m: WrappedPdfiumModule, mark: number, key: string, scratch: number) {
@@ -299,6 +304,20 @@ self.onmessage = async ({ data }: MessageEvent<EditorRequest>) => {
   if ("source" in data) { source = data.source; return; }
   try {
     const m = await ready;
+    if ("rotations" in data) {
+      const bytes = await withDocument(m, data.snapshot, data.password ?? "", doc => {
+        for (const [index, degrees] of data.rotations.entries()) {
+          if (!degrees) continue;
+          const handle = m.FPDF_LoadPage(doc, index);
+          if (!handle) throw new Error("Couldn't open the page to rotate.");
+          try { m.FPDFPage_SetRotation(handle, (m.FPDFPage_GetRotation(handle) + degrees / 90) % 4); }
+          finally { m.FPDF_ClosePage(handle); }
+        }
+        return save(m, doc);
+      });
+      self.postMessage({ bytes } satisfies EditorReply, { transfer: [bytes.buffer as ArrayBuffer] });
+      return;
+    }
     const { page } = data;
     if (!("change" in data)) {
       const { targets } = await withPage(m, source, page, (_doc, handle) => pageView(m, handle));
@@ -321,6 +340,6 @@ self.onmessage = async ({ data }: MessageEvent<EditorRequest>) => {
     self.postMessage({ bytes } satisfies EditorReply, { transfer: [bytes.buffer as ArrayBuffer] });
   } catch (reason) {
     self.postMessage({ error: reason instanceof Error ? reason.message : "Couldn't edit this PDF.",
-      page: "change" in data ? undefined : data.page } satisfies EditorReply);
+      page: "page" in data && !("change" in data) ? data.page : undefined } satisfies EditorReply);
   }
 };

@@ -829,7 +829,7 @@ async function readCopy(page, file) {
       const pages = [];
       for (let n = 1; n <= pdf.numPages; n++) {
         const p = await pdf.getPage(n);
-        pages.push({ text: (await p.getTextContent()).items.map(i => i.str).join(" ").trim() });
+        pages.push({ rotation: p.rotate, text: (await p.getTextContent()).items.map(i => i.str).join(" ").trim() });
       }
       return pages;
     } finally { await task.destroy(); }
@@ -898,6 +898,13 @@ async function checkOrganizePages(app, page, folder, shots) {
   await organizer.getByRole("button", { name: "Move", exact: true }).click();
   assert.deepEqual(await shown(), [4, 1, 3]);
 
+  await thumb(4).click();
+  await thumb(1).click({ modifiers: ["ControlOrMeta"] });
+  await sidebar.screenshot({ path: path.join(shots, "organizer-before-rotation.png") });
+  await organizer.getByRole("button", { name: "Rotate right", exact: true }).click();
+  await organizer.getByRole("button", { name: "Rotate left", exact: true }).click();
+  await organizer.getByRole("button", { name: "Undo", exact: true }).click();
+  await sidebar.screenshot({ path: path.join(shots, "organizer-after-rotation.png") });
   const file = path.join(folder, "organized.pdf");
   await captureDownload(app, file);
   await organizer.getByRole("button", { name: "Save organized copy" }).click();
@@ -905,6 +912,7 @@ async function checkOrganizePages(app, page, folder, shots) {
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
   const copy = await readCopy(page, file);
   assert.deepEqual(copy.map(p => p.text), ["Fourth page", "First page", "Third page"]);
+  assert.deepEqual(copy.map(p => p.rotation), [90, 90, 0]);
   await organizer.getByRole("button", { name: "Done", exact: true }).click();
   assert.deepEqual(await shown(), [1, 2, 3, 4]);
   console.log("ok  organizing pages deletes, undoes and redoes, keeps at least one page, and saves the chosen pages in order");
@@ -1102,7 +1110,7 @@ export async function checkReaderTools(app, page, folder, shots) {
         const pages = [];
         for (let n = 1; n <= pdf.numPages; n++) {
           const p = await pdf.getPage(n);
-          pages.push({ text: (await p.getTextContent()).items.map(i => i.str).join(" "),
+          pages.push({ rotation: p.rotate, text: (await p.getTextContent()).items.map(i => i.str).join(" "),
             marks: (await p.getAnnotations()).map(a => a.subtype) });
         }
         const [bookmark] = await pdf.getOutline();

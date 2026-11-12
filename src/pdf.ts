@@ -2,6 +2,8 @@ import * as pdfjs from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { paintImageOverlay } from "./nightImages";
+import type { DraftPage } from "./organize";
+import type { EditorReply } from "./contentEditor.worker";
 import { checkPageCount, checkPdfSize } from "./pdfInput";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -42,9 +44,9 @@ export async function loadPdf(data: Uint8Array, signal: AbortSignal, password?: 
 }
 
 /** Writes the requested one-based pages into a new PDF, in the supplied order. */
-export async function copyPdfPages(pdf: PDFDocumentProxy, pages: number[], signal: AbortSignal, password?: string) {
+export async function copyPdfPages(pdf: PDFDocumentProxy, pages: DraftPage[], signal: AbortSignal, password?: string) {
   // pdf.js visits included pages in source order and takes each one's destination index.
-  const bySource = pages.map((page, destination) => ({ source: page - 1, destination })).sort((a, b) => a.source - b.source);
+  const bySource = pages.map((page, destination) => ({ source: page.page - 1, destination })).sort((a, b) => a.source - b.source);
   const includePages = bySource.map(entry => entry.source);
   const pageIndices = bySource.map(entry => entry.destination);
   // Extraction alone doesn't commit form values. Use a saved snapshot when there are edits.
@@ -52,7 +54,25 @@ export async function copyPdfPages(pdf: PDFDocumentProxy, pages: number[], signa
   try {
     const bytes = await snapshot.extractPages([{ document: null, includePages, pageIndices }]);
     if (!bytes?.length) throw new Error("Couldn't copy the selected pages.");
-    return bytes;
+    if (!pages.some(p => p.rotation)) return bytes;
+    const worker = new Worker(new URL("./contentEditor.worker.ts", import.meta.url), { type: "module" });
+    try {
+      signal.throwIfAborted();
+      return await new Promise<Uint8Array>((resolve, reject) => {
+        const abort = () => reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
+        worker.onmessage = ({ data }: MessageEvent<EditorReply>) => {
+          signal.removeEventListener("abort", abort);
+          if ("bytes" in data) resolve(data.bytes);
+          else reject(new Error("error" in data ? data.error : "Couldn't rotate these pages."));
+        };
+        worker.onerror = event => {
+          signal.removeEventListener("abort", abort);
+          reject(new Error(event.message));
+        };
+        worker.postMessage({ snapshot: bytes, rotations: pages.map(p => p.rotation ?? 0), password }, [bytes.buffer]);
+      });
+    } finally { worker.terminate(); }
   } finally {
     if (snapshot !== pdf) await snapshot.loadingTask.destroy();
   }
