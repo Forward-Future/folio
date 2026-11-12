@@ -846,7 +846,12 @@ async function checkOrganizePages(app, page, folder, shots) {
   await page.getByRole("tab", { name: "Pages", exact: true }).click();
   const sidebar = page.locator("aside.sidebar");
   const thumb = n => sidebar.locator(`.thumb[data-page="${n}"]`);
-  const shown = () => sidebar.locator(".thumb").evaluateAll(els => els.map(el => Number(el.dataset.page)));
+  const expectShown = async expected => {
+    await page.waitForFunction(order => {
+      const thumbs = document.querySelectorAll("aside.sidebar .thumb");
+      return thumbs.length === order.length && order.every((n, i) => Number(thumbs[i].dataset.page) === n);
+    }, expected);
+  };
   const picked = () => sidebar.locator('.thumb[aria-pressed="true"]').evaluateAll(els => els.map(el => Number(el.dataset.page)));
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -863,10 +868,10 @@ async function checkOrganizePages(app, page, folder, shots) {
   await menuDelete.click();
   const organizer = page.getByRole("complementary", { name: "Organize pages" });
   await organizer.waitFor();
-  assert.deepEqual(await shown(), [1, 4]);
+  await expectShown([1, 4]);
   await page.waitForFunction(() => document.activeElement?.matches('aside .thumb[data-key="4"]'));
   await organizer.getByRole("button", { name: "Undo", exact: true }).click();
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await expectShown([1, 2, 3, 4]);
   assert.deepEqual(await picked(), [2, 3]);
 
   // Every page selected: nothing can be deleted, by button or key.
@@ -875,7 +880,7 @@ async function checkOrganizePages(app, page, folder, shots) {
   assert.deepEqual(await picked(), [1, 2, 3, 4]);
   assert.ok(await organizer.getByRole("button", { name: "Delete 4 pages" }).isDisabled());
   await page.keyboard.press("Delete");
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await expectShown([1, 2, 3, 4]);
   await thumb(3).click({ modifiers: [modifier] });
   await thumb(1).click({ modifiers: [modifier] });
   assert.deepEqual(await picked(), [2, 4]);
@@ -883,20 +888,20 @@ async function checkOrganizePages(app, page, folder, shots) {
 
   // Delete and Backspace delete; the shortcuts undo and redo inside the organizer, not the reader's edits.
   await page.keyboard.press("Delete");
-  assert.deepEqual(await shown(), [1, 3]);
+  await expectShown([1, 3]);
   await page.keyboard.press("ControlOrMeta+z");
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await expectShown([1, 2, 3, 4]);
   await page.keyboard.press("ControlOrMeta+Shift+z");
-  assert.deepEqual(await shown(), [1, 3]);
+  await expectShown([1, 3]);
   await page.keyboard.press("ControlOrMeta+z");
   await thumb(2).click();
   await page.keyboard.press("Backspace");
-  assert.deepEqual(await shown(), [1, 3, 4]);
+  await expectShown([1, 3, 4]);
   // Dragging is covered by the reorder check; dragging here hangs Playwright on Windows CI.
   await thumb(4).click();
   await organizer.getByLabel("Move page 4 to").fill("1");
   await organizer.getByRole("button", { name: "Move", exact: true }).click();
-  assert.deepEqual(await shown(), [4, 1, 3]);
+  await expectShown([4, 1, 3]);
 
   await thumb(4).click();
   await thumb(1).click({ modifiers: ["ControlOrMeta"] });
@@ -914,8 +919,89 @@ async function checkOrganizePages(app, page, folder, shots) {
   assert.deepEqual(copy.map(p => p.text), ["Fourth page", "First page", "Third page"]);
   assert.deepEqual(copy.map(p => p.rotation), [90, 90, 0]);
   await organizer.getByRole("button", { name: "Done", exact: true }).click();
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
-  console.log("ok  organizing pages deletes, undoes and redoes, keeps at least one page, and saves the chosen pages in order");
+  await expectShown([1, 2, 3, 4]);
+  console.log("ok  organizing pages deletes and rotates selected pages, supports undo, and saves the draft order");
+
+  // Select files through the real input without showing a platform file picker during this hidden run.
+  const picker = page.getByLabel("PDF to insert", { exact: true });
+  await picker.evaluate(input => { input.click = () => {}; });
+  await thumb(2).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Insert PDF after selection…" }).click();
+  const incoming = { name: "Appendix.pdf", mimeType: "application/pdf", buffer: Buffer.from(labeledPdf(["Appendix A", "Appendix B"])) };
+  await sidebar.screenshot({ path: path.join(shots, "organizer-before-insert.png") });
+  await picker.setInputFiles(incoming);
+  const imported = sidebar.getByRole("button", { name: /from Appendix.pdf, position/ });
+  await imported.nth(1).waitFor();
+  assert.deepEqual(await imported.evaluateAll(nodes => nodes.map(n => n.getAttribute("aria-label"))),
+    ["Page 1 from Appendix.pdf, position 3", "Page 2 from Appendix.pdf, position 4"]);
+  await sidebar.screenshot({ path: path.join(shots, "organizer-after-insert.png") });
+  await organizer.getByRole("button", { name: "Undo", exact: true }).click();
+  assert.equal(await imported.count(), 0);
+  await organizer.getByRole("button", { name: "Redo", exact: true }).click();
+  await imported.first().click();
+  await organizer.getByRole("button", { name: "Rotate right", exact: true }).click();
+  await organizer.getByLabel("Move page 1 to").fill("1");
+  await organizer.getByRole("button", { name: "Move", exact: true }).click();
+  const insertedFile = path.join(folder, "with-appendix.pdf");
+  await captureDownload(app, insertedFile);
+  await organizer.getByRole("button", { name: "Save organized copy" }).click();
+  await organizer.getByRole("button", { name: "Open organized copy" }).waitFor();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  const inserted = await readCopy(page, insertedFile);
+  assert.deepEqual(inserted.map(p => p.text), ["Appendix A", "First page", "Second page", "Appendix B", "Third page", "Fourth page"]);
+  assert.deepEqual(inserted.map(p => p.rotation), [90, 0, 0, 0, 0, 0]);
+  for (const [placement, expected] of [["start", 1], ["before", 3], ["end", 7]]) {
+    await sidebar.locator('.thumb[data-key="2"]').click();
+    await organizer.getByLabel("Insert pages at").selectOption(placement);
+    await organizer.getByRole("button", { name: "Insert PDF…" }).click();
+    await picker.setInputFiles({ name: "Cover.pdf", mimeType: "application/pdf", buffer: Buffer.from(labeledPdf(["Cover"])) });
+    await sidebar.getByRole("button", { name: `Page 1 from Cover.pdf, position ${expected}`, exact: true }).waitFor();
+    await organizer.getByRole("button", { name: "Undo", exact: true }).click();
+    await sidebar.getByRole("button", { name: /from Cover.pdf/ }).waitFor({ state: "detached" });
+  }
+  await organizer.evaluate((element, bytes) => {
+    const dataTransfer = new DataTransfer();
+    for (const name of ["First dropped.pdf", "Second dropped.pdf"]) {
+      dataTransfer.items.add(new File([Uint8Array.from(bytes)], name, { type: "application/pdf" }));
+    }
+    element.dispatchEvent(new DragEvent("drop", { dataTransfer, bubbles: true, cancelable: true }));
+  }, Array.from(Buffer.from(labeledPdf(["Dropped page"]))));
+  await sidebar.getByRole("button", { name: "Page 1 from Second dropped.pdf, position 8", exact: true }).waitFor();
+  await organizer.getByRole("button", { name: "Undo", exact: true }).click();
+  const protectedPdf = readFileSync(new URL("./fixtures/protected-organizer.pdf", import.meta.url));
+  await picker.setInputFiles({ name: "Protected.pdf", mimeType: "application/pdf", buffer: protectedPdf });
+  await organizer.getByRole("alert").filter({ hasText: "Protected PDFs cannot be inserted." }).waitFor();
+  assert.equal(await imported.count(), 2);
+  await organizer.getByRole("button", { name: "Cancel", exact: true }).click();
+  // The single-page AES-256 fixture was made with PDFium EPDF_SetEncryption. Rotation must preserve its password.
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Protected.pdf", data: Buffer.from(data) }), Array.from(protectedPdf));
+  await page.locator('input[type=password]').fill("folio-test-reader");
+  await page.locator('input[type=password]').press("Enter");
+  await page.window.waitForFunction(() => document.title.startsWith("Protected.pdf"));
+  if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
+  await page.getByRole("tab", { name: "Pages", exact: true }).click();
+  await sidebar.getByRole("button", { name: "Organize pages" }).click();
+  assert.ok(await organizer.getByRole("button", { name: "Insert PDF…" }).isDisabled());
+  await organizer.getByRole("button", { name: "Rotate left" }).click();
+  const protectedCopy = path.join(folder, "protected-rotated.pdf");
+  await captureDownload(app, protectedCopy);
+  await organizer.getByRole("button", { name: "Save organized copy" }).click();
+  await organizer.getByRole("button", { name: "Open organized copy" }).waitFor();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  const protection = await page.evaluate(async bytes => {
+    const open = password => pdfjsLib.getDocument({ data: Uint8Array.from(bytes), password });
+    const locked = open(undefined);
+    try { await locked.promise; return "missing password protection"; }
+    catch (err) { if (err.name !== "PasswordException") throw err; }
+    finally { await locked.destroy(); }
+    const unlocked = open("folio-test-reader");
+    try { return (await (await unlocked.promise).getPage(1)).rotate; }
+    finally { await unlocked.destroy(); }
+  }, Array.from(readFileSync(protectedCopy)));
+  assert.equal(protection, 270);
+  await organizer.getByRole("button", { name: "Done", exact: true }).click();
+  console.log("ok  PDF insertion, selection, rotation, history, and password protection");
 }
 
 export async function checkReaderTools(app, page, folder, shots) {

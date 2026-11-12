@@ -1,6 +1,7 @@
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
+import { isEncrypted, loadPdf, renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
+import { checkPageCount, readPdfBlob } from "./pdfInput";
 import { Icon } from "./icons";
 import { deletePages, draftChanged, movePage, pageKey, rotatePages, startDraft, stepDraft, withPages, type DraftPage, type PageDraft } from "./organize";
 import { IS_MAC, keys } from "./platform";
@@ -16,6 +17,7 @@ interface Props {
   onSelectDest: (dest: unknown) => void;
   draft: PageDraft | null;
   onDraft: (draft: PageDraft | null) => void;
+  onImport: (pdf: PDFDocumentProxy) => void;
   onSaveDraft: () => Promise<void>;
   onExportPages: (pages: number[]) => Promise<void>;
   onOpenCopy?: () => void;
@@ -27,9 +29,9 @@ interface Props {
 
 export type SidebarTab = "pages" | "outline" | "notes";
 
-type PageAction = "delete" | "left" | "right";
+type PageAction = "delete" | "left" | "right" | "insert";
 
-export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft, onDraft, onSaveDraft, onOpenCopy, onExportPages,
+export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft, onDraft, onImport, onSaveDraft, onOpenCopy, onExportPages,
   tab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
   const [outline, setOutline] = useState<OutlineItem[] | null>(null);
   const [bookmarkedOnly, setBookmarkedOnly] = useState(false);
@@ -39,6 +41,54 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
     setOutline(null);
     pdf.getOutline().then((o) => setOutline((o as OutlineItem[] | null) ?? []));
   }, [pdf]);
+
+  const fileInput = useRef<HTMLInputElement>(null);
+  const insertionIndex = useRef(0);
+  const importRequest = useRef<AbortController | null>(null);
+  const [insertAllowed, setInsertAllowed] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [importedKeys, setImportedKeys] = useState<string[]>([]);
+  useEffect(() => {
+    let current = true;
+    isEncrypted(pdf).then(protectedPdf => { if (current) setInsertAllowed(!protectedPdf); }, () => {});
+    return () => { current = false; };
+  }, [pdf]);
+  useEffect(() => () => importRequest.current?.abort(), [pdf, draft]);
+  const chooseFile = (index: number) => {
+    insertionIndex.current = index;
+    fileInput.current?.click();
+  };
+  const insertFiles = async (files: File[], index: number) => {
+    if (!draft || !files.length || !insertAllowed || importRequest.current) return;
+    const request = new AbortController();
+    importRequest.current = request;
+    setImporting(true);
+    setImportError("");
+    const opened: PDFDocumentProxy[] = [];
+    const added: DraftPage[] = [];
+    try {
+      for (const file of files) {
+        const source = await loadPdf(await readPdfBlob(file, request.signal), request.signal);
+        opened.push(source);
+        if (await isEncrypted(source)) throw new Error("Protected PDFs cannot be inserted.");
+        checkPageCount(draft.pages.length + added.length + source.numPages);
+        const entry = { pdf: source, name: file.name };
+        for (let page = 1; page <= source.numPages; page++) added.push({ page, source: entry });
+      }
+      request.signal.throwIfAborted();
+      for (const source of opened) onImport(source);
+      opened.length = 0;
+      setImportedKeys(added.map(pageKey));
+      onDraft(withPages(draft, [...draft.pages.slice(0, index), ...added, ...draft.pages.slice(index)]));
+    } catch (error) {
+      if (!request.signal.aborted) setImportError(error instanceof Error && error.name === "PasswordException"
+        ? "Protected PDFs cannot be inserted." : error instanceof Error ? error.message : "Couldn’t insert that PDF.");
+    } finally {
+      for (const source of opened) void source.loadingTask.destroy().catch(() => {});
+      if (importRequest.current === request) { importRequest.current = null; setImporting(false); }
+    }
+  };
 
   // The thumbnail menu opens the organizer with its change already made, so Undo can take it back.
   const organize = (pages?: number[], action?: PageAction) => {
@@ -52,15 +102,22 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
     } else if (pick && (action === "left" || action === "right")) {
       next = withPages(start, rotatePages(start.pages, new Set(pick), action === "left" ? -90 : 90));
     }
+    setImportError("");
+    setImportedKeys([]);
     setOrganizerPick(pick);
+    if (action === "insert") chooseFile(pages?.at(-1) ?? start.pages.length);
     onDraft(next);
   };
 
-  if (draft) return (
-    <PageOrganizer pdf={pdf} page={page} rotation={rotation} onSelect={onSelectPage}
-      draft={draft} onDraft={onDraft} onSave={onSaveDraft} onOpenCopy={onOpenCopy} initialPick={organizerPick} />
-  );
-  return (
+  return <>
+    <input hidden ref={fileInput} type="file" multiple aria-label="PDF to insert" accept="application/pdf,.pdf" onChange={event => {
+      const files = Array.from(event.currentTarget.files ?? []);
+      event.currentTarget.value = "";
+      void insertFiles(files, insertionIndex.current);
+    }} />
+    {draft ? <PageOrganizer pdf={pdf} page={page} rotation={rotation} onSelect={onSelectPage}
+      draft={draft} onDraft={onDraft} onSave={onSaveDraft} onOpenCopy={onOpenCopy} initialPick={organizerPick} importedKeys={importedKeys}
+      insertAllowed={insertAllowed} importing={importing} importError={importError} onChooseFile={chooseFile} onInsert={insertFiles} /> : (
     <aside className={`sidebar tab-${tab}`}>
       <div className="sidebar-tabs" role="tablist">
         <button role="tab" aria-selected={tab === "pages"} className={tab === "pages" ? "on" : ""} onClick={() => setTab("pages")}>
@@ -84,7 +141,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
           notes
         ) : tab === "pages" ? (
           <Thumbnails pdf={pdf} page={page} rotation={rotation}
-            onSelect={onSelectPage} onExportPages={onExportPages} onOrganize={organize}
+            onSelect={onSelectPage} onExportPages={onExportPages} onOrganize={organize} insertAllowed={insertAllowed}
             bookmarkedPages={bookmarkedPages} onToggleBookmark={onToggleBookmark} bookmarkedOnly={bookmarkedOnly} />
         ) : outline === null ? null : outline.length === 0 ? (
           <div className="empty-outline">
@@ -106,8 +163,8 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
           </button>
         </div>
       )}
-    </aside>
-  );
+    </aside>)}
+  </>;
 }
 
 function OutlineNode({ item, onSelect, depth }: { item: OutlineItem; onSelect: (d: unknown) => void; depth: number }) {
@@ -166,17 +223,28 @@ function extendSelection(e: ReactMouseEvent, key: string, keys: readonly string[
   return next;
 }
 
-function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, onOpenCopy, initialPick }: ThumbnailProps & {
+function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, onOpenCopy, initialPick, importedKeys, insertAllowed, importing, importError, onChooseFile, onInsert }: ThumbnailProps & {
   draft: PageDraft;
   onDraft: Props["onDraft"];
   onSave: Props["onSaveDraft"];
   onOpenCopy?: () => void;
   initialPick: string[] | null;
+  importedKeys: string[];
+  insertAllowed: boolean;
+  importing: boolean;
+  importError: string;
+  onChooseFile: (index: number) => void;
+  onInsert: (files: File[], index: number) => Promise<void>;
 }) {
   const ref = useRef<HTMLElement>(null);
   const [picked, setPicked] = useState(() => new Set(initialPick ?? [String(page)]));
   const [anchor, setAnchor] = useState<string | null>(() => initialPick?.at(-1) ?? String(page));
-  const [saving, setSaving] = useState(false);
+  const [writingCopy, setSaving] = useState(false);
+  const saving = writingCopy || importing;
+  const [placement, setPlacement] = useState("after");
+  useEffect(() => {
+    if (importedKeys.length) { setPicked(new Set(importedKeys)); setAnchor(importedKeys.at(-1)!); }
+  }, [importedKeys]);
   // A thumbnail-menu action replaces the thumbnail that had focus. Focus its page here once the list draws it.
   useEffect(() => {
     const key = initialPick?.at(-1);
@@ -196,6 +264,8 @@ function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, 
   const activeKey = anchor !== null && picked.has(anchor) && rowKeys.includes(anchor) ? anchor : selected[0];
   const position = activeKey === undefined ? 0 : rowKeys.indexOf(activeKey) + 1;
   const active = rows[position - 1] as ThumbRow | undefined;
+  const insertion = placement === "start" ? 0 : placement === "end" || !position ? rows.length
+    : placement === "before" ? position - 1 : position;
   const changed = draftChanged(draft, pdf.numPages);
   const canDelete = !saving && selected.length > 0 && selected.length < rows.length;
 
@@ -208,7 +278,8 @@ function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, 
       if (!e.shiftKey) setAnchor(key);
     } else {
       choose([key]);
-      onSelect(rows[rowKeys.indexOf(key)].page);
+      const row = rows[rowKeys.indexOf(key)];
+      if (!row.source) onSelect(row.page);
     }
   };
   const move = (key: string, to: number) => {
@@ -216,7 +287,8 @@ function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, 
     if (!next) return;
     change(next);
     choose([key]);
-    onSelect(rows[rowKeys.indexOf(key)].page);
+    const row = rows[rowKeys.indexOf(key)];
+    if (!row.source) onSelect(row.page);
   };
   const remove = () => {
     if (!canDelete) return;
@@ -263,7 +335,13 @@ function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, 
   }, []);
 
   return (
-    <aside ref={ref} className="sidebar" aria-label="Organize pages">
+    <aside ref={ref} className="sidebar sidebar-organizer" aria-label="Organize pages"
+      onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
+      onDrop={event => {
+        if (!event.dataTransfer.files.length) return;
+        event.preventDefault();
+        if (!saving && insertAllowed) void onInsert(Array.from(event.dataTransfer.files), insertion);
+      }}>
       <div className="organize-head">
         <strong>Organize pages</strong>
         <p>Drag a page to move it. {keys("Ctrl")}-click or Shift-click to select several pages. Save the result as a new PDF.</p>
@@ -286,6 +364,18 @@ function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, 
             <Icon name="redo" size={16} />
           </button>
         </div>
+        <div className="organize-insert">
+          <button className="link small" disabled={!insertAllowed || saving} onClick={() => onChooseFile(insertion)}>
+            {importing ? "Inserting…" : "Insert PDF…"}
+          </button>
+          <select aria-label="Insert pages at" value={placement} disabled={!insertAllowed || saving}
+            onChange={event => setPlacement(event.target.value)}>
+            <option value="after">After selected page</option><option value="before">Before selected page</option>
+            <option value="start">Start of document</option><option value="end">End of document</option>
+          </select>
+        </div>
+        {!insertAllowed && <p>Inserting pages requires an unencrypted PDF.</p>}
+        {importError && <p role="alert">{importError}</p>}
         {active && <form className="page-field" onSubmit={e => {
           e.preventDefault();
           move(active.key, (e.currentTarget.elements.namedItem("position") as HTMLInputElement).valueAsNumber);
@@ -313,8 +403,8 @@ function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, 
 
 type PageMenuTarget = { x: number; y: number; thumbnail: HTMLButtonElement };
 
-function PageMenu({ target, count, all, onExport, onOrganize, onClose }: {
-  target: PageMenuTarget; count: number; all: boolean; onExport: () => void; onOrganize: (action: PageAction) => void; onClose: () => void;
+function PageMenu({ target, count, all, insertAllowed, onExport, onOrganize, onClose }: {
+  target: PageMenuTarget; count: number; all: boolean; insertAllowed: boolean; onExport: () => void; onOrganize: (action: PageAction) => void; onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -347,6 +437,7 @@ function PageMenu({ target, count, all, onExport, onOrganize, onClose }: {
       const at = items.indexOf(document.activeElement as HTMLButtonElement);
       items[(at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
     }}>
+      <button role="menuitem" disabled={!insertAllowed} onClick={run(() => onOrganize("insert"))}><Icon name="plus" size={16} />Insert PDF after selection…</button>
       <button role="menuitem" onClick={run(() => onOrganize("left"))}><Icon name="rotateLeft" size={16} />Rotate left</button>
       <button role="menuitem" onClick={run(() => onOrganize("right"))}><Icon name="rotate" size={16} />Rotate right</button>
       <button role="menuitem" onClick={run(() => onOrganize("delete"))} disabled={all}
@@ -360,7 +451,7 @@ function PageMenu({ target, count, all, onExport, onOrganize, onClose }: {
     </div>, document.body);
 }
 
-function Thumbnails({ pdf, page, rotation, onSelect, rows, activeKey, picks, onMove, onExportPages, onOrganize, bookmarkedPages,
+function Thumbnails({ pdf, page, rotation, onSelect, rows, activeKey, picks, onMove, onExportPages, onOrganize, insertAllowed = false, bookmarkedPages,
   onToggleBookmark, bookmarkedOnly = false }: ThumbnailProps & {
   /** The organizer's pages, in their draft order. */
   rows?: ThumbRow[];
@@ -369,6 +460,7 @@ function Thumbnails({ pdf, page, rotation, onSelect, rows, activeKey, picks, onM
   picks?: { selected: ReadonlySet<string>; onPick: (key: string, e: ReactMouseEvent) => void };
   onMove?: (key: string, to: number) => void;
   onExportPages?: Props["onExportPages"];
+  insertAllowed?: boolean;
   onOrganize?: (pages: number[], action: PageAction) => void;
   bookmarkedPages?: Props["bookmarkedPages"];
   onToggleBookmark?: Props["onToggleBookmark"];
@@ -384,6 +476,20 @@ function Thumbnails({ pdf, page, rotation, onSelect, rows, activeKey, picks, onM
     if (!bookmarkedOnly) return undefined;
     return (bookmarkedPages ?? []).filter(n => Number.isInteger(n) && n >= 1 && n <= pdf.numPages);
   }, [rows, bookmarkedOnly, bookmarkedPages, pdf.numPages]);
+  const extra = useMemo(() => [...new Set(rows?.flatMap(row => row.source ? [row.source.pdf] : []))], [rows]);
+  const sourceKey = extra.map(source => source.loadingTask.docId).sort().join(",");
+  const catalog = useMemo(() => {
+    const docs = [pdf, ...extra];
+    const offsets = new Map<PDFDocumentProxy, number>();
+    let numPages = 0;
+    for (const doc of docs) { offsets.set(doc, numPages); numPages += doc.numPages; }
+    return { offsets, numPages, getPage(number: number) {
+      const doc = docs.find(doc => number <= offsets.get(doc)! + doc.numPages)!;
+      return doc.getPage(number - offsets.get(doc)!);
+    } };
+  }, [pdf, sourceKey]);
+  const catalogPages = useMemo(() => rows?.map(row => catalog.offsets.get(row.source?.pdf ?? pdf)! + row.page) ?? pages,
+    [catalog, pdf, rows, pages]);
   const count = pages?.length ?? pdf.numPages;
   const rowKeys = useMemo(() => rows ? rows.map(row => row.key) : Array.from({ length: count }, (_, i) => String(pages?.[i] ?? i + 1)),
     [rows, pages, count]);
@@ -422,18 +528,18 @@ function Thumbnails({ pdf, page, rotation, onSelect, rows, activeKey, picks, onM
   const menuPages = () => [...selected].map(Number).sort((a, b) => a - b);
   const rangeRef = useRef(range);
   rangeRef.current = range;
-  const pagesRef = useRef(pages);
-  pagesRef.current = pages;
+  const pagesRef = useRef(catalogPages);
+  pagesRef.current = catalogPages;
   const loaderRef = useRef<ReturnType<typeof loadPageSizes> | null>(null);
   // Filtering or reordering changes which page belongs in a row, but keeps the scale of the full document.
   const layout = useMemo(() => {
     if (!rows) return thumbLayout(sizes, pdf.numPages, rotation, pages);
-    const rowSizes = rows.map(row => {
-      const size = sizes?.[row.page - 1];
+    const rowSizes = rows.map((row, i) => {
+      const size = sizes?.[catalogPages![i] - 1];
       return size && (row.rotation ?? 0) % 180 ? { width: size.height, height: size.width } : size;
     });
     return thumbLayout(rowSizes, rows.length, rotation);
-  }, [sizes, pdf, rotation, pages, rows]);
+  }, [sizes, pdf, rotation, pages, rows, catalogPages]);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const activeIndex = rows ? Math.max(0, rowKeys.indexOf(activeKey!)) : pages ? Math.max(0, pages.indexOf(page)) : page - 1;
@@ -443,9 +549,9 @@ function Thumbnails({ pdf, page, rotation, onSelect, rows, activeKey, picks, onM
   // Sizes arrive a few at a time, visible rows first, and are applied once per frame.
   useEffect(() => {
     setSizes(null);
-    const known: (PageSize | undefined)[] = new Array(pdf.numPages);
+    const known: (PageSize | undefined)[] = new Array(catalog.numPages);
     let frame = 0;
-    const loader = loadPageSizes(pdf, (index, size) => {
+    const loader = loadPageSizes(catalog, (index, size) => {
       known[index] = size;
       if (!frame) frame = requestAnimationFrame(() => {
         frame = 0;
@@ -459,11 +565,11 @@ function Thumbnails({ pdf, page, rotation, onSelect, rows, activeKey, picks, onM
       cancelAnimationFrame(frame);
       if (loaderRef.current === loader) loaderRef.current = null;
     };
-  }, [pdf]);
+  }, [catalog]);
 
   useEffect(() => {
-    loaderRef.current?.prioritize(range.start, range.end, pages);
-  }, [range, pages]);
+    loaderRef.current?.prioritize(range.start, range.end, catalogPages);
+  }, [range, catalogPages]);
 
   // As sizes arrive, rows above the viewport change height. Keep the row at the top of the list where it was
   // so the thumbnails don't drift while the reader looks at them.
@@ -568,14 +674,14 @@ function Thumbnails({ pdf, page, rotation, onSelect, rows, activeKey, picks, onM
         const index = range.start + i;
         const n = pages?.[index] ?? index + 1;
         const key = rowKeys[index];
-        return <Thumb key={`${key}-${rotation}`} pdf={pdf} n={n} rowKey={key} size={layout.frames[index]} rotation={rotation + (rows?.[index].rotation ?? 0)}
+        return <Thumb key={`${key}-${rotation}`} pdf={rows?.[index].source?.pdf ?? pdf} sourceName={rows?.[index].source?.name} n={n} rowKey={key} size={layout.frames[index]} rotation={rotation + (rows?.[index].rotation ?? 0)}
           active={rows ? key === activeKey : page === n}
           selected={onExportPages || picks ? selected.has(key) : undefined} showSelection={!!picks || picked !== null || !!menu}
           bookmarked={bookmarkedPages?.includes(n)} onToggleBookmark={onToggleBookmark}
           position={rows ? index + 1 : undefined} draggable={!!onMove} dropTarget={dropTarget === key} onSelect={select} />;
       })}
       <div aria-hidden="true" style={{ height: Math.max(0, total - (layout.tops[end] ?? total)), flexShrink: 0 }} />
-      {menu && selected.size > 0 && onExportPages && onOrganize && <PageMenu target={menu} count={selected.size}
+      {menu && selected.size > 0 && onExportPages && onOrganize && <PageMenu target={menu} count={selected.size} insertAllowed={insertAllowed}
         all={selected.size >= pdf.numPages} onClose={() => setMenu(null)}
         onExport={() => void onExportPages(menuPages())} onOrganize={action => onOrganize(menuPages(), action)} />}
     </div>
@@ -586,6 +692,7 @@ const Thumb = memo(function Thumb({
   pdf,
   n,
   rowKey,
+  sourceName,
   size,
   rotation,
   active,
@@ -601,6 +708,7 @@ const Thumb = memo(function Thumb({
   pdf: PDFDocumentProxy;
   n: number;
   rowKey: string;
+  sourceName?: string;
   size: { width: number; height: number };
   rotation: number;
   active: boolean;
@@ -646,12 +754,12 @@ const Thumb = memo(function Thumb({
         className={`thumb ${(showSelection ? selected : active) ? "on" : ""} ${dropTarget ? "drop-target" : ""}`}
         onClick={e => onSelect(rowKey, e)} aria-current={active ? "page" : undefined} aria-pressed={selected}
         aria-haspopup={selected !== undefined && !position ? "menu" : undefined}
-        aria-label={position ? `Page ${n}, position ${position}` : `Page ${n}`}>
+        aria-label={position ? `Page ${n}${sourceName ? " from " + sourceName : ""}, position ${position}` : `Page ${n}`}>
         <span className="thumb-frame" style={{ width: size.width, height: size.height, flexShrink: 0 }}>
           <canvas ref={canvasRef} style={{ opacity: ready ? 1 : 0 }} />
           {showSelection && selected && <span className="thumb-check"><Icon name="check" size={13} /></span>}
         </span>
-        {position && <span className="thumb-num">{position} · Page {n}</span>}
+        {position && <span className="thumb-num">{position} · Page {n}{sourceName && ` · ${sourceName}`}</span>}
       </button>
       {onToggleBookmark && <div className="thumb-caption">
         <label className="thumb-num" htmlFor={id} onClick={e => {

@@ -3,7 +3,7 @@ import { openFolioDatabase } from "./recent";
 export type PdfChange =
   | { kind: "text"; page: number; before: string; after: string }
   | { kind: "image"; page: number; fileName: string; inserted?: boolean }
-  | { kind: "pages"; order: number[]; deleted?: number[]; rotated?: number[] }
+  | { kind: "pages"; order: number[]; deleted?: number[]; rotated?: number[]; inserted?: number }
   | { kind: "annotations" };
 
 export interface PdfVersion {
