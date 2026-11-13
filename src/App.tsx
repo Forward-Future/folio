@@ -1122,7 +1122,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         case "error": setLoading(false); setToast(null); setError(source.message); tabs.failed(tabKey); break;
       }
     };
-    tabs.bind(tabKey, { open: source => { void open(source); }, flush: async () => {
+    tabs.bind(tabKey, { open, flush: async () => {
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       markupRef.current?.sync();
       await markupRef.current?.flush();

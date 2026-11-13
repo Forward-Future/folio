@@ -12,7 +12,7 @@ export const MAX_ATTACHMENTS = 20;
 export interface Attachment { name: string; contentId: string }
 
 /** Same-name PDFs need separate names in the prompt and citations; keep those names with the conversation. */
-export function distinctAttachmentNames(mainName: string, attachments: Attachment[]): Attachment[] {
+export function distinctAttachmentNames<T extends { name: string }>(mainName: string, attachments: T[]): T[] {
   const key = (name: string) => name.trim().replace(/\.pdf$/i, "").toLowerCase();
   const reserved = new Set([mainName, ...attachments.map(a => a.name)].map(key));
   const seen = new Set([key(mainName)]);

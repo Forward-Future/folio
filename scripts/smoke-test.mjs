@@ -275,6 +275,17 @@ try {
     buffer: Buffer.concat([other, Buffer.from(name)]) })));
   await docs.getByRole("tab", { name: "One.pdf", selected: true }).waitFor();
   assert.deepEqual(await docs.getByRole("tab").allTextContents(), ["Another.pdf", "One.pdf", "Two.pdf"]);
+  // Two has never been selected. Adding it as context loads its reader without leaving One.
+  await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
+  await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+  const batchAi = page.getByRole("complementary", { name: "Ask AI" });
+  await batchAi.getByRole("button", { name: "Add open document" }).click();
+  await batchAi.getByRole("menuitem", { name: "Two", exact: true }).click();
+  await batchAi.getByRole("button", { name: "Remove Two.pdf" }).waitFor();
+  assert.equal(await docs.getByRole("tab", { name: "One.pdf", selected: true }).count(), 1);
+  assert.equal(await batchAi.locator(".attachment.missing").count(), 0);
+  await batchAi.getByRole("button", { name: "Close Ask AI" }).click();
+  console.log("ok  Ask AI adds an unvisited batch-opened document without switching tabs");
   await select("Two.pdf");
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
   await page.locator(".document-tabs").screenshot({ path: path.join(shots, `document-tabs-${process.platform}.png`) });

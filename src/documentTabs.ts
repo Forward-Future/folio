@@ -11,7 +11,7 @@ export type OpenSource =
   | { kind: "error"; name: string; message: string };
 
 export interface Reader {
-  open(source: OpenSource): void;
+  open(source: OpenSource): void | Promise<void>;
   flush(): Promise<void>;
   /** Text of the open document for Ask AI, or null while nothing is open. */
   text?(): Promise<DocText> | null;
@@ -21,7 +21,8 @@ export interface Reader {
 }
 
 /** An open document that Ask AI can add to another tab's conversation. */
-export interface OpenDocument { key: number; name: string; contentId: string; locked: boolean }
+export interface OpenDocument { key: number; name: string; contentId?: string; locked: boolean }
+type PreparedDocument = OpenDocument & { contentId: string };
 
 export interface ReaderContext { tabs: DocumentTabs; key: number }
 export interface ReaderFrame extends HTMLIFrameElement { readerContext?: ReaderContext; disposeReader?: () => void }
@@ -36,6 +37,8 @@ interface Tab {
   frame?: ReaderFrame;
   reader?: Reader;
   source?: OpenSource;
+  opening?: Promise<void>;
+  preparing?: Set<(document: PreparedDocument | null | Promise<PreparedDocument | null>) => void>;
   closing?: boolean;
 }
 
@@ -69,8 +72,29 @@ export class DocumentTabs {
   /** Documents open in other tabs. Tabs are identified by content, so a closed and reopened file matches again,
    * and an edited document no longer matches what was added before the edit. */
   documents(except: number): OpenDocument[] {
-    return this.entries.filter(tab => tab.key !== except && !tab.closing && tab.liveId && tab.reader?.text)
-      .map(tab => ({ key: tab.key, name: tab.name, contentId: tab.liveId!, locked: !!tab.reader?.locked?.() }));
+    const seen = new Set([this.entry(except)?.liveId]);
+    return this.entries.flatMap(tab => {
+      if (tab.key === except || tab.closing || !tab.name || (tab.liveId && seen.has(tab.liveId))) return [];
+      if (tab.liveId) seen.add(tab.liveId);
+      return [{ key: tab.key, name: tab.name, ...(tab.liveId ? { contentId: tab.liveId } : {}), locked: !!tab.reader?.locked?.() }];
+    });
+  }
+  private prepared(tab: Tab): PreparedDocument | null {
+    if (!this.entries.includes(tab) || tab.closing || tab.source || tab.opening || !tab.liveId || !tab.reader?.text) return null;
+    return { key: tab.key, name: tab.name, contentId: tab.liveId, locked: !!tab.reader.locked?.() };
+  }
+  private finishPreparing(tab: Tab, document = this.prepared(tab)) {
+    for (const resolve of tab.preparing ?? []) resolve(document);
+    tab.preparing?.clear();
+  }
+  /** Load a chosen tab in the background. Wait for the reader, including password/OCR restoration, before adding it. */
+  prepareDocument(key: number): Promise<PreparedDocument | null> {
+    const tab = this.entry(key);
+    if (!tab || tab.closing) return Promise.resolve(null);
+    if (this.prepared(tab) || (tab.reader && !tab.source && !tab.opening)) return Promise.resolve(this.prepared(tab));
+    const ready = new Promise<PreparedDocument | null>(resolve => (tab.preparing ??= new Set()).add(resolve));
+    this.ensureFrame(tab);
+    return ready;
   }
   private byContent(contentId: string) { return this.entries.find(tab => !tab.closing && tab.liveId === contentId); }
   /** The current text of an open document, or null when no tab shows it any more. */
@@ -78,7 +102,9 @@ export class DocumentTabs {
     const tab = this.byContent(contentId);
     const text = tab?.reader?.text?.();
     if (!tab || !text) return null;
-    return { ...(await text), name: tab.name, locked: !!tab.reader?.locked?.() };
+    const result = await text;
+    if (!this.entries.includes(tab) || tab.closing || tab.liveId !== contentId) return null;
+    return { ...result, name: tab.name, locked: !!tab.reader?.locked?.() };
   }
   /** Switch to the tab showing a document and go to a page. False when it is no longer open. */
   showPage(contentId: string, page: number) {
@@ -100,6 +126,22 @@ export class DocumentTabs {
     this.entries.push(tab);
     return tab;
   }
+  private ensureFrame(tab: Tab) {
+    if (tab.frame) return tab.frame;
+    const frame: ReaderFrame = document.createElement("iframe");
+    frame.readerContext = { tabs: this, key: tab.key };
+    frame.className = "document-reader";
+    frame.inert = tab.key !== this.active;
+    frame.classList.toggle("active", !frame.inert);
+    frame.title = tab.name || "Library";
+    frame.name = "folio-reader-" + tab.key;
+    frame.allowFullscreen = true;
+    frame.src = new URL("index.html?reader", location.href).href;
+    frame.addEventListener("error", () => this.finishPreparing(tab, null));
+    tab.frame = frame;
+    this.root.append(frame);
+    return frame;
+  }
   select(key: number, focusTab = false) {
     const next = this.entry(key);
     if (!next || next.closing) return;
@@ -110,18 +152,7 @@ export class DocumentTabs {
       tab.frame.inert = tab !== next;
       tab.frame.classList.toggle("active", tab === next);
     }
-    if (!next.frame) {
-      const frame: ReaderFrame = document.createElement("iframe");
-      frame.readerContext = { tabs: this, key };
-      frame.className = "document-reader active";
-      frame.title = next.name || "Library";
-      frame.name = "folio-reader-" + key;
-      frame.allowFullscreen = true;
-      frame.src = new URL("index.html?reader", location.href).href;
-      next.frame = frame;
-      this.root.append(frame);
-    }
-    next.frame.focus({ preventScroll: true });
+    this.ensureFrame(next).focus({ preventScroll: true });
     setActiveDocument(next.contentId ?? null);
     this.changed();
   }
@@ -147,7 +178,21 @@ export class DocumentTabs {
     if (!tab.reader || !tab.source) return;
     const source = tab.source;
     tab.source = undefined;
-    tab.reader.open(source);
+    const opening = Promise.resolve().then(() => {
+      if (!tab.closing && this.entries.includes(tab)) return tab.reader!.open(source);
+    });
+    tab.opening = opening;
+    void opening.then(() => {
+      if (tab.opening !== opening) return;
+      tab.opening = undefined;
+      this.finishPreparing(tab);
+      this.changed();
+    }, () => {
+      if (tab.opening !== opening) return;
+      tab.opening = undefined;
+      this.failed(tab.key);
+      this.finishPreparing(tab, null);
+    });
   }
   bind(key: number, reader: Reader) {
     const tab = this.entry(key);
@@ -167,6 +212,8 @@ export class DocumentTabs {
     // Recent, notes and chat are keyed by content. Two editors for identical bytes would overwrite each other.
     const other = this.entries.find(candidate => candidate !== tab && !candidate.closing && candidate.contentId === id);
     if (other) {
+      for (const resolve of tab.preparing ?? []) resolve(this.prepareDocument(other.key));
+      tab.preparing?.clear();
       if (this.active === key) this.select(other.key);
       void this.close(key);
       return false;
@@ -196,6 +243,7 @@ export class DocumentTabs {
     const tab = this.entry(key);
     if (!tab || tab.closing || (tab.dirty && !window.confirm(`Close “${tab.name}” and discard its unsaved changes?`))) return;
     tab.closing = true;
+    this.finishPreparing(tab, null);
     try {
       await tab.reader?.flush();
     } catch {
