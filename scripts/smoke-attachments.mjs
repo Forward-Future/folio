@@ -15,6 +15,8 @@ export async function attachmentsPdf() {
   await pdf.attach(notes, "notes.txt");
   // No extension: the name offered when saving must not gain one guessed from the contents.
   await pdf.attach(notes, "README");
+  // A script: Folio shows its full name and asks before saving it.
+  await pdf.attach(notes, "Quarterly report.pdf.bat");
   return pdf.save();
 }
 
@@ -49,11 +51,19 @@ export async function checkAttachments(app, page, folder, shots) {
   await sidebar.screenshot({ path: path.join(shots, "attachments-tab.png") });
   await filesTab.click();
   const list = sidebar.getByRole("list", { name: "Attached files" });
-  assert.deepEqual(await list.locator(".attachment-name").allTextContents(), ["figures.bin", "notes.txt", "README"]);
+  assert.deepEqual(await list.locator(".attachment-name").allTextContents(), ["figures.bin", "notes.txt", "README", "Quarterly report.pdf.bat"]);
   assert.deepEqual(await list.locator(".attachment-description").allTextContents(), ["Raw figures"]);
   await sidebar.screenshot({ path: path.join(shots, "attachments-list.png") });
 
-  for (const [name, expected] of [["figures.bin", figures], ["notes.txt", notes], ["README", notes]]) {
+  const script = "Quarterly report.pdf.bat";
+  const question = page.getByRole("dialog", { name: "Save this attached file?" });
+  await list.getByRole("button", { name: `Save ${script}`, exact: true }).click();
+  assert.equal(await question.locator(".save-program-name").textContent(), script);
+  await question.screenshot({ path: path.join(shots, "attachments-program.png") });
+  await question.getByRole("button", { name: "Cancel" }).click();
+  await question.waitFor({ state: "detached" });
+
+  for (const [name, expected] of [["figures.bin", figures], ["notes.txt", notes], ["README", notes], [script, notes]]) {
     const file = path.join(folder, `saved-${name}`);
     await app.evaluate(({ session }, file) => {
       globalThis.folioAttachmentSaved = new Promise(resolve => session.defaultSession.once("will-download", (_event, item) => {
@@ -63,9 +73,10 @@ export async function checkAttachments(app, page, folder, shots) {
       }));
     }, file);
     await list.getByRole("button", { name: `Save ${name}`, exact: true }).click();
+    if (name === script) await question.getByRole("button", { name: "Save", exact: true }).click();
     assert.deepEqual(await app.evaluate(() => globalThis.folioAttachmentSaved), { state: "completed", suggested: name });
     assert.ok(Buffer.from(expected).equals(readFileSync(file)), `${name} was not saved byte for byte`);
   }
   await close("Report.pdf");
-  console.log("ok  Files lists a PDF's attached files and saves each one byte for byte; a PDF without any has no Files tab");
+  console.log("ok  Files lists a PDF's attached files and saves each one byte for byte, asking first for one that could run; a PDF without any has no Files tab");
 }
