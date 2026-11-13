@@ -57,11 +57,25 @@ export async function checkAttachments(app, page, folder, shots) {
 
   const script = "Quarterly report.pdf.bat";
   const question = page.getByRole("dialog", { name: "Save this attached file?" });
+  // A save that never starts would otherwise leave the run waiting for good.
+  const within = (promise, what) => Promise.race([promise, new Promise((_resolve, reject) =>
+    setTimeout(() => reject(new Error(`${what} didn't happen within 30 seconds`)), 30_000))]);
+  await app.evaluate(({ session }) => {
+    globalThis.folioAttachmentStray = 0;
+    globalThis.folioAttachmentCount = () => { globalThis.folioAttachmentStray++; };
+    session.defaultSession.on("will-download", globalThis.folioAttachmentCount);
+  });
   await list.getByRole("button", { name: `Save ${script}`, exact: true }).click();
   assert.equal(await question.locator(".save-program-name").textContent(), script);
   await question.screenshot({ path: path.join(shots, "attachments-program.png") });
   await question.getByRole("button", { name: "Cancel" }).click();
   await question.waitFor({ state: "detached" });
+  // Reading the file takes a moment; a save that Cancel let through would have started by then.
+  await page.waitForTimeout(1500);
+  assert.equal(await app.evaluate(({ session }) => {
+    session.defaultSession.off("will-download", globalThis.folioAttachmentCount);
+    return globalThis.folioAttachmentStray;
+  }), 0, "cancelling the question still saved the file");
 
   for (const [name, expected] of [["figures.bin", figures], ["notes.txt", notes], ["README", notes], [script, notes]]) {
     const file = path.join(folder, `saved-${name}`);
@@ -74,7 +88,7 @@ export async function checkAttachments(app, page, folder, shots) {
     }, file);
     await list.getByRole("button", { name: `Save ${name}`, exact: true }).click();
     if (name === script) await question.getByRole("button", { name: "Save", exact: true }).click();
-    assert.deepEqual(await app.evaluate(() => globalThis.folioAttachmentSaved), { state: "completed", suggested: name });
+    assert.deepEqual(await within(app.evaluate(() => globalThis.folioAttachmentSaved), `saving ${name}`), { state: "completed", suggested: name });
     assert.ok(Buffer.from(expected).equals(readFileSync(file)), `${name} was not saved byte for byte`);
   }
   await close("Report.pdf");

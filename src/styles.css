@@ -1581,8 +1581,6 @@ kbd {
   margin: 10px 0 0;
 }
 .password-form .save-program-name {
-  max-height: 9em;
-  overflow-y: auto;
   overflow-wrap: anywhere;
   color: var(--text);
   font-weight: 600;

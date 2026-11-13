@@ -21,7 +21,7 @@ import { SearchResults } from "./SearchResults";
 import { Icon, type IconName } from "./icons";
 import { Welcome } from "./Welcome";
 import { Sidebar, type SidebarTab } from "./Sidebar";
-import { AttachmentError, attachmentBytes, runsWhenOpened, type Attachment } from "./attachments";
+import { AttachmentError, readAttachment, runsWhenOpened, type Attachment } from "./attachments";
 import { MarkupController, type Mark, type MarkupState } from "./markup";
 import { HighlightMenu, NoteBox, SelectionPopover, useTextSelection, type SelectionInfo } from "./Selection";
 import { NotesPanel } from "./NotesPanel";
@@ -262,6 +262,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   /** An attached program or script that is saved only once the reader has seen its full name and agreed. */
   const [programToSave, setProgramToSave] = useState<{ file: Attachment; pdf: PDFDocumentProxy } | null>(null);
   const programAsked = programToSave?.pdf === doc?.pdf ? programToSave : null;
+  const attachmentSave = useRef<AbortController | null>(null);
+  const [savingAttachment, setSavingAttachment] = useState(false);
+  // Reading an attachment out of a large PDF can take a while; there is no one to give it to once the document is gone.
+  useEffect(() => () => attachmentSave.current?.abort(), [doc?.pdf]);
   const [ocr, setOcr] = useState<OcrSession | null>(null);
   const [ocrVersion, setOcrVersion] = useState(0);
   const [ocrPhase, setOcrPhase] = useState<"running" | "done">("done");
@@ -983,15 +987,22 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
 
   const saveAttachment = async (file: Attachment, confirmed = false) => {
     const source = docRef.current;
-    if (!source) return;
+    if (!source || attachmentSave.current) return;
     if (!confirmed && runsWhenOpened(file.name)) { setProgramToSave({ file, pdf: source.pdf }); return; }
+    const save = attachmentSave.current = new AbortController();
+    setSavingAttachment(true);
     try {
-      const bytes = await attachmentBytes(await source.pdf.getData(), file.id);
-      if (docRef.current !== source) return;
+      // (pdf.js leaves this unanswered if the document closes first; the race is what lets the next save start.)
+      const data = await Promise.race([source.pdf.getData(), new Promise<never>((_resolve, reject) => save.signal.addEventListener("abort", reject))]);
+      const bytes = await readAttachment(data, file.id, save.signal);
+      if (save.signal.aborted || docRef.current !== source) return;
       // Without a type, Chromium guesses one from the bytes and adds its extension to a name that has none.
       saveBlob(new Blob([bytes], { type: "application/octet-stream" }), file.name);
     } catch (error) {
-      if (docRef.current === source) flash(error instanceof AttachmentError ? error.message : `Couldn't save ${file.name}.`);
+      if (!save.signal.aborted && docRef.current === source) flash(error instanceof AttachmentError ? error.message : `Couldn't save ${file.name}.`);
+    } finally {
+      attachmentSave.current = null;
+      setSavingAttachment(false);
     }
   };
 
@@ -1511,7 +1522,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             onOrder={order => setPageDraft(order ? { order } : null)}
             onSaveOrder={download}
               onExportPages={exportPages}
-            onSaveAttachment={saveAttachment}
+            savingAttachment={savingAttachment} onSaveAttachment={(file) => void saveAttachment(file)}
             onOpenCopy={pageDraft?.copy ? () => {
               tabs.open([{ kind: "bytes", name: copyName, data: pageDraft.copy!, password: doc.password }]);
             } : undefined}

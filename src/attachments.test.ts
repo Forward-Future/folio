@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { PDFDocument, PDFName, PDFString } from "pdf-lib";
+import { PDFDocument, PDFHexString, PDFName, PDFRef, PDFString } from "pdf-lib";
+import DecodeStream from "pdf-lib/es/core/streams/DecodeStream";
 import { attachmentBytes, listAttachments, plainText, readWithin, runsWhenOpened, saveName } from "./attachments";
 import { protectedByOwner } from "./testing/fixtures";
 import { openPdf } from "./testing/pdfjs";
@@ -16,14 +17,15 @@ async function pdfWith(files: { name: string; bytes: Uint8Array; description?: s
 }
 
 /** A PDF whose one attached file, "file.bin", is stored as `contents` with these stream settings (its filters, say). */
-async function pdfStoring(contents: Uint8Array, settings: Record<string, unknown> = {}) {
+async function pdfStoring(contents: Uint8Array, settings: Record<string, unknown> = {}, shape: (pdf: PDFDocument, stream: PDFRef) => unknown = defaultTree) {
   const pdf = await PDFDocument.create();
   pdf.addPage([300, 300]);
   const stream = pdf.context.register(pdf.context.stream(contents, { Type: "EmbeddedFile", ...settings }));
-  const file = pdf.context.obj({ Type: "Filespec", F: PDFString.of("file.bin"), EF: { F: stream } });
-  pdf.catalog.set(PDFName.of("Names"), pdf.context.obj({ EmbeddedFiles: { Names: [PDFString.of("file.bin"), file] } }));
+  pdf.catalog.set(PDFName.of("Names"), pdf.context.obj({ EmbeddedFiles: shape(pdf, stream) } as never));
   return pdf.save();
 }
+const fileSpec = (pdf: PDFDocument, files: Record<string, PDFRef>) => pdf.context.obj({ Type: "Filespec", F: PDFString.of("file.bin"), EF: files });
+const defaultTree = (pdf: PDFDocument, stream: PDFRef) => ({ Names: [PDFString.of("file.bin"), fileSpec(pdf, { F: stream })] });
 
 const pack = async (bytes: Uint8Array) => new Uint8Array(await new Response(
   new Blob([bytes as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new CompressionStream("deflate"))).arrayBuffer());
@@ -55,11 +57,59 @@ describe("document attachments", () => {
     } finally { await pdf.loadingTask.destroy(); }
   });
 
-  it("returns a file stored without packing, or with its one filter in a list", async () => {
-    expect(await saved(attachmentBytes(await pdfStoring(binary), "file.bin"))).toEqual(Array.from(binary));
-    expect(await saved(attachmentBytes(await pdfStoring(await pack(binary), { Filter: "Fl" }), "file.bin"))).toEqual(Array.from(binary));
-    const listed = await pdfStoring(await pack(binary), { Filter: ["FlateDecode"], DecodeParms: [{ Predictor: 1 }] });
-    expect(await saved(attachmentBytes(listed, "file.bin"))).toEqual(Array.from(binary));
+  it("returns a file stored without packing, or in the ways PDF writers vary the packing", async () => {
+    const packed = await pack(binary);
+    const stored = async (contents: Uint8Array, settings?: Record<string, unknown>) => saved(attachmentBytes(await pdfStoring(contents, settings), "file.bin"));
+    expect(await stored(binary)).toEqual(Array.from(binary));
+    expect(await stored(packed, { Filter: "Fl" })).toEqual(Array.from(binary));
+    expect(await stored(packed, { Filter: ["FlateDecode"], DecodeParms: [{ Predictor: 1 }] })).toEqual(Array.from(binary));
+    expect(await stored(packed, { Filter: ["FlateDecode"], DecodeParms: [null] })).toEqual(Array.from(binary));
+    // qpdf stores an empty file as packed data of no length at all.
+    expect(await stored(new Uint8Array(), { Filter: "FlateDecode" })).toEqual([]);
+    // A line break after the data that was counted as part of it.
+    expect(await stored(Uint8Array.of(...packed, 13, 10), { Filter: "FlateDecode" })).toEqual(Array.from(binary));
+    await expect(stored(packed.subarray(0, packed.length - 8), { Filter: "FlateDecode" })).rejects.toThrow();
+  });
+
+  it("finds the file pdf.js listed: by the name it read, and the stream it would take", async () => {
+    const other = new TextEncoder().encode("the other file");
+    // A name starting with the UTF-8 mark, which pdf-lib reads differently from pdf.js.
+    const marked = await pdfStoring(binary, {}, (pdf, stream) => ({ Names: [PDFHexString.of("EFBBBF66696C65"), fileSpec(pdf, { F: stream })] }));
+    const pdf = await openPdf(marked);
+    try {
+      const [file] = await listAttachments(pdf);
+      expect(file.id).toBe("file");
+      expect(await saved(attachmentBytes(marked, file.id))).toEqual(Array.from(binary));
+    } finally { await pdf.loadingTask.destroy(); }
+    // Of a file kept under several keys, the first of pdf.js's order is the one.
+    const both = await pdfStoring(binary, {}, (pdf, stream) => ({ Names: [PDFString.of("file.bin"),
+      fileSpec(pdf, { F: pdf.context.register(pdf.context.stream(other)), UF: stream })] }));
+    expect(await saved(attachmentBytes(both, "file.bin"))).toEqual(Array.from(binary));
+    // pdf.js lists nothing from a node that has Kids, whatever else it holds.
+    const parent = await pdfStoring(binary, {}, (pdf, stream) => ({ Kids: 0, Names: [PDFString.of("file.bin"), fileSpec(pdf, { F: stream })] }));
+    await expect(attachmentBytes(parent, "file.bin")).rejects.toThrow("no content");
+  });
+
+  it("stops reading a PDF whose packed lists of objects unpack past the limit", async () => {
+    // What pdf-lib unpacks just to open the file: 8 MB here, from a few kilobytes.
+    const hidden = (pdf: PDFDocument, stream: PDFRef) => {
+      pdf.context.register(pdf.context.stream(zeros, { Type: "ObjStm", N: 0, First: 0, Filter: "FlateDecode" }));
+      return defaultTree(pdf, stream);
+    };
+    const zeros = await pack(new Uint8Array(8 * 1024 * 1024));
+    const bytes = await pdfStoring(binary, {}, hidden);
+    expect(bytes.length).toBeLessThan(100_000);
+    // How far pdf-lib's unpackers were let to grow their output.
+    const unpackers = DecodeStream.prototype as unknown as { ensureBuffer(requested: number): Uint8Array };
+    const grow = unpackers.ensureBuffer;
+    let largest = 0;
+    unpackers.ensureBuffer = function (requested) { largest = Math.max(largest, requested); return grow.call(this, requested); };
+    try {
+      await expect(attachmentBytes(bytes, "file.bin", { openLimit: 1024 * 1024 })).rejects.toThrow("too large for Folio");
+      expect(largest).toBeLessThanOrEqual(1024 * 1024);
+      expect(await saved(attachmentBytes(bytes, "file.bin", { openLimit: 32 * 1024 * 1024 }))).toEqual(Array.from(binary));
+      expect(largest).toBeGreaterThan(4 * 1024 * 1024);
+    } finally { unpackers.ensureBuffer = grow; }
   });
 
   it("lists nothing for a document without attachments", async () => {
@@ -82,9 +132,9 @@ describe("document attachments", () => {
 
   it("refuses a file that unpacks to more than the size limit", async () => {
     const bytes = await pdfWith([{ name: "figures.bin", bytes: binary }]);
-    await expect(attachmentBytes(bytes, "figures.bin", binary.length - 1)).rejects.toThrow("too large");
-    expect((await attachmentBytes(bytes, "figures.bin", binary.length)).size).toBe(binary.length);
-    await expect(attachmentBytes(await pdfStoring(binary), "file.bin", binary.length - 1)).rejects.toThrow("too large");
+    await expect(attachmentBytes(bytes, "figures.bin", { limit: binary.length - 1 })).rejects.toThrow("too large");
+    expect((await attachmentBytes(bytes, "figures.bin", { limit: binary.length })).size).toBe(binary.length);
+    await expect(attachmentBytes(await pdfStoring(binary), "file.bin", { limit: binary.length - 1 })).rejects.toThrow("too large");
   });
 
   it("stops reading once the limit is passed, without asking for the rest", async () => {
@@ -112,8 +162,12 @@ describe("document attachments", () => {
       void before.readable.pipeTo(unpacker.writable).catch(() => {});
       return { writable: before.writable, readable: unpacker.readable.pipeThrough(after) };
     };
-    await expect(attachmentBytes(await pdfStoring(zeros, { Filter: "FlateDecode" }), "file.bin", 4096, counted)).rejects.toThrow("too large");
+    await expect(attachmentBytes(await pdfStoring(zeros, { Filter: "FlateDecode" }), "file.bin", { limit: 4096, unpacker: counted })).rejects.toThrow("too large");
     expect(largest).toBe(16 * 1024);
+    expect(handed).toBeLessThanOrEqual(4 * 16 * 1024);
+    // A file refused for its size isn't tried a second time, as one that merely ends in a stray line break is.
+    handed = 0;
+    await expect(attachmentBytes(await pdfStoring(Uint8Array.of(...zeros, 10), { Filter: "FlateDecode" }), "file.bin", { limit: 4096, unpacker: counted })).rejects.toThrow("too large");
     expect(handed).toBeLessThanOrEqual(4 * 16 * 1024);
     expect(unpacked).toBeGreaterThan(4096);
     expect(unpacked).toBeLessThan(4 * 1024 * 1024);
@@ -143,7 +197,8 @@ describe("document attachments", () => {
 
   it("knows which names would run when the saved file is opened", () => {
     for (const name of ["setup.exe", "Invoice.PDF.Exe", "run.bat", "install.sh", "Tool.app", "notes.desktop", "update.msi", "report.pdf.js", "setup.exe.", "setup.exe . ",
-      "setup.exe\u200d", "setup.exe::$DATA", "notes.txt:run.exe", "Budget.xlsm", "console.msc", "disk.iso"]) {
+      "setup.exe\u200d", "setup.exe::$DATA", "notes.txt:run.exe", "Budget.xlsm", "console.msc", "disk.iso",
+      "run.vb\u017f", "setup.m\u017f\u0131", "office.rdp", "page.hta", "Slides.ppsm", "tool.snap"]) {
       expect(runsWhenOpened(name), name).toBe(true);
     }
     for (const name of ["figures.bin", "notes.txt", "README", "exe", "report.exe.pdf", "photo.jpeg", "data.json"]) {

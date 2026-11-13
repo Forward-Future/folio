@@ -18,7 +18,9 @@ interface Props {
   onOrder: (order: number[] | null) => void;
   onSaveOrder: () => Promise<void>;
   onExportPages: (pages: number[]) => Promise<void>;
-  onSaveAttachment: (file: Attachment) => Promise<void>;
+  /** A file is being read for saving: one at a time. */
+  savingAttachment: boolean;
+  onSaveAttachment: (file: Attachment) => void;
   onOpenCopy?: () => void;
   tab: SidebarTab;
   onTab: (tab: SidebarTab) => void;
@@ -29,12 +31,11 @@ interface Props {
 export type SidebarTab = "pages" | "outline" | "notes" | "files";
 
 export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order, onOrder, onSaveOrder, onOpenCopy, onExportPages,
-  onSaveAttachment, tab: chosenTab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
+  savingAttachment, onSaveAttachment, tab: chosenTab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
   const [outline, setOutline] = useState<OutlineItem[] | null>(null);
   const [bookmarkedOnly, setBookmarkedOnly] = useState(false);
 
   const [files, setFiles] = useState<Attachment[]>([]);
-  const [savingFile, setSavingFile] = useState<string | null>(null);
 
   useEffect(() => {
     setOutline(null);
@@ -51,15 +52,6 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order
 
   // Most PDFs carry no files, so the tab is there only for the ones that do.
   const tab = chosenTab === "files" && !files.length ? "pages" : chosenTab;
-  const saveFile = async (file: Attachment) => {
-    setSavingFile(file.id);
-    try {
-      await onSaveAttachment(file);
-    } finally {
-      setSavingFile(null);
-    }
-  };
-
   if (order) return (
     <PageOrganizer pdf={pdf} page={page} rotation={rotation} onSelect={onSelectPage}
       order={order} onOrder={onOrder} onSave={onSaveOrder} onOpenCopy={onOpenCopy} />
@@ -100,7 +92,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, order
                   <span className="attachment-name" title={file.name}>{file.name}</span>
                   {file.description && <span className="attachment-description">{file.description}</span>}
                 </div>
-                <button className="icon-btn" disabled={savingFile !== null} onClick={() => void saveFile(file)}
+                <button className="icon-btn" disabled={savingAttachment} onClick={() => onSaveAttachment(file)}
                   aria-label={`Save ${file.name}`} title={`Save ${file.name}`}>
                   <Icon name="download" size={15} />
                 </button>

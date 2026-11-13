@@ -244,13 +244,13 @@ export function PasswordDialog({
   );
 }
 
-/** Asks before an attached program or script goes to the save dialog, which may show only part of a long name. */
+/** Asks before an attached file that could run goes to the save dialog, which may show only part of a long name. The whole name shows here. */
 export function SaveProgramDialog({ name, onSave, onCancel }: { name: string; onSave: () => void; onCancel: () => void }) {
   return (
     <Modal title="Save this attached file?" onClose={onCancel}>
       <div className="password-form">
         <p className="save-program-name">{name}</p>
-        <p>This file can run as a program or script when it is opened. Save it only if you trust where this PDF came from.</p>
+        <p>Opening this kind of file can run or install something on your computer. Save it only if you trust where this PDF came from.</p>
         <div className="form-actions">
           <button className="btn ghost" autoFocus onClick={onCancel}>Cancel</button>
           <button className="btn primary" onClick={onSave}>Save</button>
