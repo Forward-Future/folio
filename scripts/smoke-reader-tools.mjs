@@ -377,8 +377,19 @@ async function checkContentEditing(app, page, folder, shots) {
   const item = name => sheet.getByRole("button", { name, exact: true });
   const input = sheet.getByRole("textbox", { name: "Edit text on page" });
   const save = page.getByRole("button", { name: "Save copy", exact: true });
-  await sheet.locator(".textLayer").getByText("Original", { exact: true }).first().waitFor();
+  const uneditedLine = sheet.locator(".textLayer").getByText("Original", { exact: true }).first();
+  await uneditedLine.waitFor();
   await page.screenshot({ path: path.join(shots, "before-pdf-edit.png") });
+  await page.getByRole("button", { name: "Highlight", exact: true }).click();
+  await page.keyboard.down("Shift");
+  await uneditedLine.evaluate(span => {
+    const text = span.firstChild;
+    getSelection().setBaseAndExtent(text, 0, text, text.length);
+  });
+  await page.waitForFunction(() => getSelection().toString() === "Original");
+  await page.keyboard.up("Shift");
+  await sheet.locator(".highlightEditor").waitFor();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   await openEditor();
   const rotation = page.getByTitle("Rotate (R)");
   await rotation.click();
@@ -434,17 +445,17 @@ async function checkContentEditing(app, page, folder, shots) {
         await p.render({ canvas, viewport: p.getViewport({ scale: 1 }) }).promise;
         const g = canvas.getContext("2d");
         pages.push({ text: (await p.getTextContent()).items.map(x => x.str).filter(Boolean),
-          images: [30, 45, 100].map(x => [...g.getImageData(x, 160, 1, 1).data]), annotations: (await p.getAnnotations()).length });
+          images: [30, 45, 100].map(x => [...g.getImageData(x, 160, 1, 1).data]), annotations: (await p.getAnnotations()).map(a => a.subtype) });
       }
       return pages;
     } finally { await task.destroy(); }
   }, Array.from(readFileSync(file)));
   const red = [255, 0, 0, 255], blue = [0, 0, 255, 255], white = [255, 255, 255, 255];
   assert.deepEqual(result, [
-    { text: ["Revised", "Original"], images: [blue, white, red], annotations: 0 },
-    { text: ["Original", "Original"], images: [red, white, red], annotations: 0 },
+    { text: ["Revised", "Original"], images: [blue, white, red], annotations: ["Highlight"] },
+    { text: ["Original", "Original"], images: [red, white, red], annotations: [] },
   ]);
-  console.log("ok  edited copy contains replacement text and image pixels only at the chosen placements");
+  console.log("ok  edited copy preserves the highlight and changes only the chosen text and image placements");
 
   await openEditor();
   await item("Original").click();
