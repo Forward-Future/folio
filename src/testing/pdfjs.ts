@@ -33,6 +33,11 @@ async function loadViewer() {
   return import("pdfjs-dist/legacy/web/pdf_viewer.mjs");
 }
 
+// Cold imports of the real engine can take several seconds under parallel test load. Initialize the shared fixture
+// before tests start, so each test's timeout measures its PDF operations rather than the first library import.
+await loadCore();
+if (typeof document !== "undefined") await loadViewer();
+
 export async function openPdf(bytes: Uint8Array, password?: string) {
   const pdfjsLib = await loadCore();
   return pdfjsLib.getDocument({ data: bytes.slice(), password, useSystemFonts: true }).promise;
