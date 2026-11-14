@@ -76,6 +76,7 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
   when you reopen a PDF, except for password-protected documents.
 - **Reorder pages** from either sidebar tab. Drag thumbnails or enter a new position, then save and open the reordered PDF copy.
 - **Export selected pages** from the Pages sidebar. Ctrl-click thumbnails (⌘-click on macOS) to select individual pages, or Shift-click for a range. Right-click a selected thumbnail to save those pages in document order as a new PDF.
+- **Attached files:** when a PDF has files embedded in it, a **Files** tab lists them and saves each one as it was attached.
 - **Search as you type:** match case or whole words, see the current match and total count, browse per-page snippets
   and match counts, and move between matches with `Enter` / `Shift+Enter`.
 - **Flexible views:** fit to width, fit to page, automatic sizing, preset zoom levels, zoom buttons, `Ctrl+wheel` /

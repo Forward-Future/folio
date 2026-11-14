@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { checkImageInsertion } from "./smoke-image-insertion.mjs";
+import { checkAttachments } from "./smoke-attachments.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
@@ -1063,5 +1064,6 @@ export async function checkReaderTools(app, page, folder, shots) {
   await checkArabicEditing(app, page, folder, shots);
   await checkLinkHistory(app, page, shots);
   await checkPageExport(app, page, folder, shots);
+  await checkAttachments(app, page, folder, shots);
   await checkPenDrawing(app, page, folder, shots);
 }

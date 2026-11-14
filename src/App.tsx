@@ -21,6 +21,7 @@ import { SearchResults } from "./SearchResults";
 import { Icon, type IconName } from "./icons";
 import { Welcome } from "./Welcome";
 import { Sidebar, type SidebarTab } from "./Sidebar";
+import { AttachmentError, readAttachment, runsWhenOpened, type Attachment } from "./attachments";
 import { MarkupController, type Mark, type MarkupState } from "./markup";
 import { HighlightMenu, NoteBox, SelectionPopover, useTextSelection, type SelectionInfo } from "./Selection";
 import { NotesPanel } from "./NotesPanel";
@@ -35,7 +36,7 @@ import { IS_MAC, keys } from "./platform";
 import { AiPanel, forgetClearedChats, type AiContext } from "./AiPanel";
 import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
-import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
+import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, SaveProgramDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
 import { SignatureDialog } from "./SignatureDialog";
 import { newImageDraft, type ImageDraft } from "./ImagePlacement";
 import { ContentEditor, type ContentEditorHandle, type NextSelection } from "./ContentEditor";
@@ -258,15 +259,22 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const [aiOpen, setAiOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [aiContext, setAiContext] = useState<AiContext | null>(null);
+  /** An attached program or script that is saved only once the reader has seen its full name and agreed. */
+  const [programToSave, setProgramToSave] = useState<{ file: Attachment; pdf: PDFDocumentProxy } | null>(null);
+  const programAsked = programToSave?.pdf === doc?.pdf ? programToSave : null;
+  const attachmentSave = useRef<AbortController | null>(null);
+  const [savingAttachment, setSavingAttachment] = useState(false);
+  // Reading an attachment out of a large PDF can take a while; there is no one to give it to once the document is gone.
+  useEffect(() => () => attachmentSave.current?.abort(), [doc?.pdf]);
   const [ocr, setOcr] = useState<OcrSession | null>(null);
   const [ocrVersion, setOcrVersion] = useState(0);
   const [ocrPhase, setOcrPhase] = useState<"running" | "done">("done");
 
   useLayoutEffect(() => {
-    if (active && window.folioDesktop && !focus && !dialog && !signing && !pending && !imageView) {
+    if (active && window.folioDesktop && !focus && !dialog && !signing && !pending && !imageView && !programAsked) {
       return trackTitlebar(headerRef.current!);
     }
-  }, [active, doc, focus, dialog, signing, pending, imageView]);
+  }, [active, doc, focus, dialog, signing, pending, imageView, programAsked]);
 
   useEffect(() => {
     setSigning(false); setSignatureTargets([]); setSignatureDismissed(false);
@@ -977,6 +985,27 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     }
   };
 
+  const saveAttachment = async (file: Attachment, confirmed = false) => {
+    const source = docRef.current;
+    if (!source || attachmentSave.current) return;
+    if (!confirmed && runsWhenOpened(file.name)) { setProgramToSave({ file, pdf: source.pdf }); return; }
+    const save = attachmentSave.current = new AbortController();
+    setSavingAttachment(true);
+    try {
+      // (pdf.js leaves this unanswered if the document closes first; the race is what lets the next save start.)
+      const data = await Promise.race([source.pdf.getData(), new Promise<never>((_resolve, reject) => save.signal.addEventListener("abort", reject))]);
+      const bytes = await readAttachment(data, file.id, save.signal);
+      if (save.signal.aborted || docRef.current !== source) return;
+      // Without a type, Chromium guesses one from the bytes and adds its extension to a name that has none.
+      saveBlob(new Blob([bytes], { type: "application/octet-stream" }), file.name);
+    } catch (error) {
+      if (!save.signal.aborted && docRef.current === source) flash(error instanceof AttachmentError ? error.message : `Couldn't save ${file.name}.`);
+    } finally {
+      attachmentSave.current = null;
+      setSavingAttachment(false);
+    }
+  };
+
   const exportNotes = async (format: "markdown" | "json") => {
     if (!doc) return;
     const controller = markupRef.current!;
@@ -1493,6 +1522,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             onOrder={order => setPageDraft(order ? { order } : null)}
             onSaveOrder={download}
               onExportPages={exportPages}
+            savingAttachment={savingAttachment} onSaveAttachment={(file) => void saveAttachment(file)}
             onOpenCopy={pageDraft?.copy ? () => {
               tabs.open([{ kind: "bytes", name: copyName, data: pageDraft.copy!, password: doc.password }]);
             } : undefined}
@@ -1727,6 +1757,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       {dialog === "info" && doc && <InfoDialog key={doc.pdf.loadingTask.docId} pdf={doc.pdf} name={doc.name} size={doc.size} onClose={() => setDialog(null)} />}
       {printCopy && <PrintDialog pdf={printCopy.pdf} currentPage={printCopy.page} name={printCopy.name}
         onPrint={() => { printPdfBytes(printCopy.bytes); setPrintCopy(null); }} onClose={() => setPrintCopy(null)} />}
+      {programAsked && <SaveProgramDialog name={programAsked.file.name} onCancel={() => setProgramToSave(null)} onSave={() => {
+        setProgramToSave(null);
+        if (docRef.current?.pdf === programAsked.pdf) void saveAttachment(programAsked.file, true);
+      }} />}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} />}
       {(dialog === "settings" || dialog === "ai-settings") && <SettingsDialog initialSection={dialog === "ai-settings" ? "Ask AI" : "General"}
