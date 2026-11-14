@@ -808,6 +808,108 @@ async function checkLinkHistory(app, page, shots) {
   console.log("ok  internal links and outlines support a one-time Back hint, contextual More commands, per-tab position and zoom, shortcuts and forward branching");
 }
 
+// One labeled page per entry, so a copy's pages can be told apart by their text.
+function labeledPdf(labels) {
+  const objects = ["<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Count ${labels.length} /Kids [${labels.map((_, i) => `${4 + 2 * i} 0 R`).join(" ")}] >>`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+  for (const label of labels) {
+    const text = `BT /F 24 Tf 40 300 Td (${label}) Tj ET`;
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources << /Font << /F 3 0 R >> >> /Contents ${objects.length + 2} 0 R >>`,
+      `<< /Length ${text.length} >>\nstream\n${text}\nendstream`);
+  }
+  return testPdf(objects);
+}
+
+async function readCopy(page, file) {
+  return page.evaluate(async bytes => {
+    const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
+    try {
+      const pdf = await task.promise;
+      const pages = [];
+      for (let n = 1; n <= pdf.numPages; n++) {
+        const p = await pdf.getPage(n);
+        pages.push({ text: (await p.getTextContent()).items.map(i => i.str).join(" ").trim() });
+      }
+      return pages;
+    } finally { await task.destroy(); }
+  }, Array.from(readFileSync(file)));
+}
+
+async function checkOrganizePages(app, page, folder, shots) {
+  const labels = ["First page", "Second page", "Third page", "Fourth page"];
+  await app.evaluate(({ BrowserWindow }, pdf) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Organize.pdf", data: Buffer.from(pdf) }), labeledPdf(labels));
+  await page.window.waitForFunction(() => document.title.startsWith("Organize.pdf"));
+  const toggle = page.getByRole("button", { name: /Toggle sidebar/ });
+  if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
+  await page.getByRole("tab", { name: "Pages", exact: true }).click();
+  const sidebar = page.locator("aside.sidebar");
+  const thumb = n => sidebar.locator(`.thumb[data-page="${n}"]`);
+  const shown = () => sidebar.locator(".thumb").evaluateAll(els => els.map(el => Number(el.dataset.page)));
+  const picked = () => sidebar.locator('.thumb[aria-pressed="true"]').evaluateAll(els => els.map(el => Number(el.dataset.page)));
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+
+  // The thumbnail menu opens the organizer with its change made; Undo brings the pages back, selected.
+  await thumb(2).click();
+  await thumb(3).click({ modifiers: ["Shift"] });
+  await thumb(3).click({ button: "right" });
+  const menuDelete = page.getByRole("menuitem", { name: "Delete 2 pages" });
+  await menuDelete.waitFor();
+  const panel = await sidebar.boundingBox(), popup = await page.getByRole("menu", { name: "Page actions" }).boundingBox();
+  await page.window.screenshot({ path: path.join(shots, "organize-pages-menu.png"), clip: {
+    x: panel.x, y: panel.y, width: Math.max(panel.width, popup.x + popup.width + 10 - panel.x), height: panel.height,
+  } });
+  await menuDelete.click();
+  const organizer = page.getByRole("complementary", { name: "Organize pages" });
+  await organizer.waitFor();
+  assert.deepEqual(await shown(), [1, 4]);
+  await page.waitForFunction(() => document.activeElement?.matches('aside .thumb[data-key="4"]'));
+  await organizer.getByRole("button", { name: "Undo", exact: true }).click();
+  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  assert.deepEqual(await picked(), [2, 3]);
+
+  // Every page selected: nothing can be deleted, by button or key.
+  await thumb(1).click();
+  await thumb(4).click({ modifiers: ["Shift"] });
+  assert.deepEqual(await picked(), [1, 2, 3, 4]);
+  assert.ok(await organizer.getByRole("button", { name: "Delete 4 pages" }).isDisabled());
+  await page.keyboard.press("Delete");
+  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await thumb(3).click({ modifiers: [modifier] });
+  await thumb(1).click({ modifiers: [modifier] });
+  assert.deepEqual(await picked(), [2, 4]);
+  await sidebar.screenshot({ path: path.join(shots, "organize-pages-selected.png") });
+
+  // Delete and Backspace delete; the shortcuts undo and redo inside the organizer, not the reader's edits.
+  await page.keyboard.press("Delete");
+  assert.deepEqual(await shown(), [1, 3]);
+  await page.keyboard.press("ControlOrMeta+z");
+  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  assert.deepEqual(await shown(), [1, 3]);
+  await page.keyboard.press("ControlOrMeta+z");
+  await thumb(2).click();
+  await page.keyboard.press("Backspace");
+  assert.deepEqual(await shown(), [1, 3, 4]);
+  // Dragging is covered by the reorder check; dragging here hangs Playwright on Windows CI.
+  await thumb(4).click();
+  await organizer.getByLabel("Move page 4 to").fill("1");
+  await organizer.getByRole("button", { name: "Move", exact: true }).click();
+  assert.deepEqual(await shown(), [4, 1, 3]);
+
+  const file = path.join(folder, "organized.pdf");
+  await captureDownload(app, file);
+  await organizer.getByRole("button", { name: "Save organized copy" }).click();
+  await organizer.getByRole("button", { name: "Open organized copy" }).waitFor();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  const copy = await readCopy(page, file);
+  assert.deepEqual(copy.map(p => p.text), ["Fourth page", "First page", "Third page"]);
+  await organizer.getByRole("button", { name: "Done", exact: true }).click();
+  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  console.log("ok  organizing pages deletes, undoes and redoes, keeps at least one page, and saves the chosen pages in order");
+}
+
 export async function checkReaderTools(app, page, folder, shots) {
   const settings = () => page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
   const wheelSwitch = page.getByRole("switch", { name: "Scroll one page at a time" });
@@ -980,7 +1082,7 @@ export async function checkReaderTools(app, page, folder, shots) {
   assert.equal(marks.length, 2);
   assert.ok(marks[0].includes("Highlight") && marks[0].includes("FreeText") && marks[1].includes("Highlight"));
   await page.getByRole("tab", { name: "Outline" }).click();
-  await page.getByRole("button", { name: "Reorder pages" }).click();
+  await page.getByRole("button", { name: "Organize pages" }).click();
   await thumb(1).dragTo(thumb(2));
   assert.equal(await thumb(1).getAttribute("aria-label"), "Page 1, position 2");
   await page.getByLabel("Move page 1 to").fill("3");
@@ -988,8 +1090,8 @@ export async function checkReaderTools(app, page, folder, shots) {
   assert.equal(await thumb(1).getAttribute("aria-label"), "Page 1, position 3");
   const file = path.join(folder, "reordered.pdf");
   await captureDownload(app, file);
-  await page.getByRole("button", { name: "Save reordered copy" }).click();
-  const openCopy = page.getByRole("button", { name: "Open reordered copy" });
+  await page.getByRole("button", { name: "Save organized copy" }).click();
+  const openCopy = page.getByRole("button", { name: "Open organized copy" });
   await openCopy.waitFor();
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
   const result = await page.evaluate(async bytes => {
@@ -1018,8 +1120,8 @@ export async function checkReaderTools(app, page, folder, shots) {
   assert.ok(reordered.pages[2].marks.includes("FreeText") && reordered.pages[2].marks.includes("Highlight"));
   assert.ok(reordered.pages.at(-1).marks.includes("Highlight"));
   await openCopy.click();
-  await page.window.waitForFunction(() => document.title.includes("(reordered).pdf"));
-  console.log("ok  reordered PDF pages, bookmark destinations and annotations match the sidebar order");
+  await page.window.waitForFunction(() => document.title.includes("(organized).pdf"));
+  console.log("ok  organized PDF pages, bookmark destinations and annotations match the sidebar order");
 
   await app.evaluate(({ BrowserWindow }, form) => BrowserWindow.getAllWindows()[0].webContents.send(
     "folio:open-file", { name: "Form.pdf", data: Buffer.from(form) }), formPdf());
@@ -1044,18 +1146,18 @@ export async function checkReaderTools(app, page, folder, shots) {
     } finally { await task.destroy(); }
   }, Array.from(readFileSync(selectedForm))), "A filled field");
   await documents.getByRole("button", { name: "Close Form.pdf, unsaved changes" }).waitFor();
-  await page.getByRole("button", { name: "Reorder pages" }).click();
+  await page.getByRole("button", { name: "Organize pages" }).click();
   await page.getByLabel("Move page 1 to").fill("2");
   await page.getByRole("button", { name: "Move", exact: true }).click();
-  await captureDownload(app, path.join(folder, "reordered-form.pdf"));
+  await captureDownload(app, path.join(folder, "organized-form.pdf"));
   await page.keyboard.press("ControlOrMeta+s");
   await openCopy.click();
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
-  await page.window.waitForFunction(() => document.title.startsWith("Form (reordered).pdf"));
+  await page.window.waitForFunction(() => document.title.startsWith("Form (organized).pdf"));
   await documents.getByRole("button", { name: "Close Form.pdf", exact: true }).waitFor();
   await page.getByTitle("Next page").click();
   assert.equal(await page.locator('.page[data-page-number="2"] .textWidgetAnnotation input').inputValue(), "A filled field");
-  console.log("ok  the normal Save shortcut and Open reordered copy preserve filled form fields");
+  console.log("ok  the normal Save shortcut and Open organized copy preserve filled form fields");
   await checkScanSelection(app, page);
   await checkContentEditing(app, page, folder, shots);
   await checkImageInsertion(app, page, folder, shots);
@@ -1063,5 +1165,6 @@ export async function checkReaderTools(app, page, folder, shots) {
   await checkArabicEditing(app, page, folder, shots);
   await checkLinkHistory(app, page, shots);
   await checkPageExport(app, page, folder, shots);
+  await checkOrganizePages(app, page, folder, shots);
   await checkPenDrawing(app, page, folder, shots);
 }

@@ -32,6 +32,7 @@ const paths = {
   fitPage: <><rect x="6" y="3" width="12" height="18" rx="2" /><path d="M9 12h6" /></>,
   trash: <><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13" /></>,
   undo: <><path d="M9 14 4 9l5-5" /><path d="M4 9h10a6 6 0 0 1 0 12h-3" /></>,
+  redo: <><path d="m15 14 5-5-5-5" /><path d="M20 9H10a6 6 0 0 0 0 12h3" /></>,
   info: <><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8h.01" /></>,
   link: <><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1" /><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1" /></>,
   note: <><path d="M5 4.5h14a1 1 0 0 1 1 1V15l-5 4.5H5a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1Z" /><path d="M15 19.5V15h5M8 9h8M8 12.5h5" /></>,
