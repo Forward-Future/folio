@@ -285,15 +285,25 @@ async function checkPenDrawing(app, page, folder, shots) {
     if (name === "Thick") {
       await zoom.click();
       await page.getByRole("menuitem", { name: "Fit width" }).click();
-      await layer.waitFor();
     }
-    const size = await layer.boundingBox();
-    const position = { x: Math.floor(size.width * 0.2), y: Math.floor(size.height * (0.3 + index * 0.15)) };
-    // Wait for the ink layer to receive the pointer after a page opens or changes scale.
-    await layer.hover({ position });
-    const box = await layer.boundingBox();
-    const x = box.x + position.x;
-    const y = box.y + position.y;
+    // The ink layer can disappear or move during a redraw, even just after hover succeeds.
+    const deadline = Date.now() + 10_000;
+    let start;
+    while (Date.now() < deadline) {
+      await layer.waitFor({ timeout: Math.max(1, deadline - Date.now()) });
+      const before = await layer.boundingBox();
+      if (!before) continue;
+      const position = { x: Math.floor(before.width * 0.2), y: Math.floor(before.height * (0.3 + index * 0.15)) };
+      await layer.hover({ position, timeout: Math.max(1, deadline - Date.now()) });
+      const after = await layer.boundingBox();
+      if (after && before.x === after.x && before.y === after.y &&
+          before.width === after.width && before.height === after.height) {
+        start = { x: after.x + position.x, y: after.y + position.y };
+        break;
+      }
+    }
+    assert.ok(start, `the ink layer did not settle before the ${name} pen stroke`);
+    const { x, y } = start;
     await page.mouse.down();
     assert.ok(await layer.evaluate(el => el.classList.contains("drawing")), `${name} pen did not start a stroke`);
     await page.mouse.move(x + 25, y - 10);
