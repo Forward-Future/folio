@@ -796,7 +796,7 @@ try {
   await filter.click();
 
   // In the page organizer, a moved page takes its own shape to its new row: drag the 11x17 sheet to the top.
-  await page.getByRole("button", { name: "Reorder pages" }).click();
+  await page.getByRole("button", { name: "Organize pages" }).click();
   const organized = (n) => page.locator(`.thumb[data-page="${n}"]`);
   await organized(3).dragTo(organized(1));
   assert.equal(await organized(3).getAttribute("aria-label"), "Page 3, position 1");
@@ -810,7 +810,7 @@ try {
   assert.ok(sameFrame(rows[0], frames[2]) && sameFrame(rows[1], frames[0]) && sameFrame(rows[2], frames[1]),
     `reordered thumbnails lost their shape: ${JSON.stringify(rows)}`);
   await page.getByRole("button", { name: "Cancel" }).click();
-  console.log("ok  reordered thumbnails keep each page's shape:", rows.map((r) => `page ${r.page} ${Math.round(r.width)}x${Math.round(r.height)}`).join(", "));
+  console.log("ok  organized thumbnails keep each page's shape:", rows.map((r) => `page ${r.page} ${Math.round(r.width)}x${Math.round(r.height)}`).join(", "));
 
   // A Word document opens converted to PDF (by Word, LibreOffice, or Folio itself, whichever the computer has),
   // and the PDF is saved next to it. Opening the document again reuses that PDF.
