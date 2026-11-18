@@ -113,17 +113,18 @@ interface OpenDoc {
 }
 
 /** The open document's pages that reach a copy of `pages`, zero-based like pdf.js's pageIndex. */
-const keptIndexes = (pages: DraftPage[]) => new Set(pages.map(p => p.page - 1));
+const keptIndexes = (pages: DraftPage[]) => new Set(pages.filter(p => !p.source).map(p => p.page - 1));
 
 function changesForCopy(doc: OpenDoc, annotated: boolean, pages?: DraftPage[]) {
   const changes = [...(doc.edits?.changes ?? [])];
   if (annotated && !changes.some(change => change.kind === "annotations")) changes.push({ kind: "annotations" });
   if (pages) {
-    const order = pages.map(p => p.page);
-    const rotated = pages.filter(p => p.rotation).map(p => p.page);
+    const order = pages.filter(p => !p.source).map(p => p.page);
+    const inserted = pages.filter(p => p.source).length;
+    const rotated = pages.filter(p => !p.source && p.rotation).map(p => p.page);
     const kept = new Set(order);
     const deleted = Array.from({ length: doc.pdf.numPages }, (_, i) => i + 1).filter(n => !kept.has(n));
-    changes.push({ kind: "pages", order, ...(rotated.length && { rotated }), ...deleted.length && { deleted } });
+    changes.push({ kind: "pages", order, ...(inserted && { inserted }), ...(rotated.length && { rotated }), ...deleted.length && { deleted } });
   }
   return changes;
 }
@@ -237,6 +238,29 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const nextSelection = useRef<NextSelection | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
   const [pageDraft, setPageDraft] = useState<PageDraft | null>(null);
+  const insertedPdfs = useRef(new Set<PDFDocumentProxy>());
+  useEffect(() => {
+    const owned = insertedPdfs.current;
+    if (!owned.size) return;
+    const retained = new Set<PDFDocumentProxy>();
+    if (pageDraft) {
+      for (const pages of [pageDraft.pages, ...pageDraft.undo, ...pageDraft.redo]) {
+        for (const page of pages) if (page.source) retained.add(page.source.pdf);
+      }
+    }
+    for (const pdf of owned) {
+      if (retained.has(pdf)) continue;
+      owned.delete(pdf);
+      void pdf.loadingTask.destroy().catch(() => {});
+    }
+  }, [pageDraft]);
+  useEffect(() => {
+    const owned = insertedPdfs.current;
+    return () => {
+      for (const pdf of owned) void pdf.loadingTask.destroy().catch(() => {});
+      owned.clear();
+    };
+  }, []);
   const organized = pageDraft && doc && draftChanged(pageDraft, doc.pdf.numPages) ? pageDraft.pages : undefined;
   const keptOrganized = useMemo(() => organized && keptIndexes(organized), [organized]);
   const unsaved = !!doc?.sourceId || dirty || editorDirty || (!!organized && !pageDraft?.copy);
@@ -492,7 +516,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         const reading = previous ? markupRef.current!.state : undefined;
         if (reading?.bookmarkedPages && exportedPages) {
           const bookmarks = new Set(reading.bookmarkedPages);
-          reading.bookmarkedPages = exportedPages.flatMap((p, i) => bookmarks.has(p.page) ? [i + 1] : []);
+          reading.bookmarkedPages = exportedPages.flatMap((p, i) => !p.source && bookmarks.has(p.page) ? [i + 1] : []);
         }
         persistRef.current = !password && !revision;
         const markupReady = markupRef.current!.load(id, persistRef.current, reading);
@@ -973,7 +997,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
 
   const copyName = organized && doc ? doc.name.replace(/\.pdf$/i, "") + " (organized).pdf" : doc?.name ?? "document.pdf";
   // Where the reader's page ended up in the organized copy; the first page if it was deleted.
-  const organizedPage = (n: number) => organized ? Math.max(1, organized.findIndex(p => p.page === n) + 1) : n;
+  const organizedPage = (n: number) => organized ? Math.max(1, organized.findIndex(p => !p.source && p.page === n) + 1) : n;
   const saveBytes = (bytes: Uint8Array) => {
     saveBlob(pdfBlob(bytes), copyName.toLowerCase().endsWith(".pdf") ? copyName : `${copyName}.pdf`);
   };
@@ -1020,7 +1044,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     try {
       const copy = await currentBytes(doc, organized);
       if (!copy || docRef.current !== doc) return;
-      const withText = await copyWithText(ocr, copy.bytes, organized?.map(p => p.page));
+      const withText = await copyWithText(ocr, copy.bytes, organized?.map(p => p.source ? 0 : p.page));
       if (docRef.current !== doc) return;
       const name = doc.sourceId ? copyName.replace(/\.pdf$/i, "") + " (edited).pdf" : copyName;
       const blob = pdfBlob(withText.bytes);
@@ -1330,7 +1354,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (!hasFiles(e)) return;
       e.preventDefault();
       depth++;
-      setDragging(true);
+      setDragging(!(e.dataTransfer?.types.includes("Files") && (e.target as Element)?.closest?.(".sidebar-organizer")));
     };
     const leave = (e: DragEvent) => {
       if (!hasFiles(e)) return;
@@ -1345,6 +1369,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       e.preventDefault();
       depth = 0;
       setDragging(false);
+      if (e.dataTransfer?.files.length && (e.target as Element)?.closest?.(".sidebar-organizer")) return;
       const files = e.dataTransfer?.files;
       const url = !files?.length && e.dataTransfer ? droppedUrl(e.dataTransfer) : null;
       if (files?.length) openFiles(files);
@@ -1506,6 +1531,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             onToggleBookmark={n => markupRef.current!.toggleBookmark(n)}
             draft={pageDraft}
             onDraft={setPageDraft}
+            onImport={source => insertedPdfs.current.add(source)}
             onSaveDraft={download}
               onExportPages={exportPages}
             onOpenCopy={pageDraft?.copy ? () => {
