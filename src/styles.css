@@ -480,6 +480,9 @@ kbd {
 .thumb.drop-target { background: var(--active); box-shadow: inset 0 0 0 2px var(--accent); }
 .organize-head { padding: 12px 12px 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .organize-head p { color: var(--text-2); line-height: 1.45; margin: 5px 0 8px; }
+.organize-tools { display: flex; align-items: center; gap: 2px; margin: 0 -6px 6px; }
+.organize-tools-gap { flex: 1; }
+.menu.page-export-menu button:disabled:hover { background: none; }
 .organize-head .page-field { padding: 0; }
 .organize-head input { width: 4.5em; }
 .organize-actions {
