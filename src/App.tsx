@@ -960,8 +960,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         storage.setValue(key, data);
         keys.push(key);
       }
-      // Marks on deleted pages don't reach the copy. Form values don't carry their page here, so they always count.
-      const kept = pages && keptIndexes(pages);
+      // An empty list requests the full PDF. For page copies, ignore marks on omitted pages, but keep form values.
+      const kept = pages?.length ? keptIndexes(pages) : null;
       const annotated = [...storage].some(([, value]) => !kept || typeof value?.pageIndex !== "number" || kept.has(value.pageIndex));
       if (pages?.length) return { bytes: await copyPdfPages(doc.pdf, pages, signal, doc.password), annotated };
       return { bytes: annotated ? await doc.pdf.saveDocument() : await doc.pdf.getData(), annotated };
