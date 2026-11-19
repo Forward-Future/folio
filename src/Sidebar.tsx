@@ -2,7 +2,7 @@ import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
 import { Icon } from "./icons";
-import { listAttachments, MAX_ATTACHMENTS, type Attachment } from "./attachments";
+import { firstAttachments, MAX_ATTACHMENTS, type Attachment } from "./attachments";
 import { deletePages, draftChanged, movePage, pageKey, startDraft, stepDraft, withPages, type DraftPage, type PageDraft } from "./organize";
 import { IS_MAC, keys } from "./platform";
 import { anchoredScrollTop, loadPageSizes, rowAt, thumbLayout, THUMB_ROW_EXTRA, type PageSize } from "./thumbnails";
@@ -39,7 +39,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
   const [bookmarkedOnly, setBookmarkedOnly] = useState(false);
   const [organizerPick, setOrganizerPick] = useState<string[] | null>(null);
 
-  const [files, setFiles] = useState<Attachment[]>([]);
+  const [{ files, more: moreFiles }, setFiles] = useState<{ files: Attachment[]; more: boolean }>({ files: [], more: false });
 
   useEffect(() => {
     setOutline(null);
@@ -48,9 +48,9 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
 
   useEffect(() => {
     let current = true;
-    setFiles([]);
+    setFiles({ files: [], more: false });
     // A PDF whose attachment list can't be read is still a PDF to read: it just gets no Files tab.
-    listAttachments(pdf).then(found => { if (current) setFiles(found); }, () => {});
+    firstAttachments(pdf).then(found => { if (current) setFiles(found); }, () => {});
     return () => { current = false; };
   }, [pdf]);
 
@@ -117,7 +117,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
                 </button>
               </li>
             ))}
-            {files.length === MAX_ATTACHMENTS && <li className="attachments-more">Only the first {MAX_ATTACHMENTS} files are listed.</li>}
+            {moreFiles && <li className="attachments-more">Only the first {MAX_ATTACHMENTS} files are listed.</li>}
           </ul>
         ) : tab === "pages" ? (
           <Thumbnails pdf={pdf} page={page} rotation={rotation}

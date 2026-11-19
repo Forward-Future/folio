@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { PDFDocument, PDFHexString, PDFName, PDFRef, PDFString } from "pdf-lib";
-import DecodeStream from "pdf-lib/es/core/streams/DecodeStream";
-import { attachmentBytes, listAttachments, plainText, readWithin, runsWhenOpened, saveName } from "./attachments";
+import { AttachmentError, attachmentBytes, firstAttachments, listAttachments, plainText, readAttachment, readWithin, runsWhenOpened, saveName } from "./attachments";
 import { protectedByOwner } from "./testing/fixtures";
+import { handPdf, pack, streamOf, withAttachment } from "./testing/handPdf";
 import { openPdf } from "./testing/pdfjs";
 
 // Every byte value, so a text decoding or a dropped filter anywhere on the way out would show.
@@ -27,8 +27,6 @@ async function pdfStoring(contents: Uint8Array, settings: Record<string, unknown
 const fileSpec = (pdf: PDFDocument, files: Record<string, PDFRef>) => pdf.context.obj({ Type: "Filespec", F: PDFString.of("file.bin"), EF: files });
 const defaultTree = (pdf: PDFDocument, stream: PDFRef) => ({ Names: [PDFString.of("file.bin"), fileSpec(pdf, { F: stream })] });
 
-const pack = async (bytes: Uint8Array) => new Uint8Array(await new Response(
-  new Blob([bytes as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new CompressionStream("deflate"))).arrayBuffer());
 const saved = async (file: Promise<Blob>) => Array.from(new Uint8Array(await (await file).arrayBuffer()));
 
 describe("document attachments", () => {
@@ -90,28 +88,6 @@ describe("document attachments", () => {
     await expect(attachmentBytes(parent, "file.bin")).rejects.toThrow("no content");
   });
 
-  it("stops reading a PDF whose packed lists of objects unpack past the limit", async () => {
-    // What pdf-lib unpacks just to open the file: 8 MB here, from a few kilobytes.
-    const hidden = (pdf: PDFDocument, stream: PDFRef) => {
-      pdf.context.register(pdf.context.stream(zeros, { Type: "ObjStm", N: 0, First: 0, Filter: "FlateDecode" }));
-      return defaultTree(pdf, stream);
-    };
-    const zeros = await pack(new Uint8Array(8 * 1024 * 1024));
-    const bytes = await pdfStoring(binary, {}, hidden);
-    expect(bytes.length).toBeLessThan(100_000);
-    // How far pdf-lib's unpackers were let to grow their output.
-    const unpackers = DecodeStream.prototype as unknown as { ensureBuffer(requested: number): Uint8Array };
-    const grow = unpackers.ensureBuffer;
-    let largest = 0;
-    unpackers.ensureBuffer = function (requested) { largest = Math.max(largest, requested); return grow.call(this, requested); };
-    try {
-      await expect(attachmentBytes(bytes, "file.bin", { openLimit: 1024 * 1024 })).rejects.toThrow("too large for Folio");
-      expect(largest).toBeLessThanOrEqual(1024 * 1024);
-      expect(await saved(attachmentBytes(bytes, "file.bin", { openLimit: 32 * 1024 * 1024 }))).toEqual(Array.from(binary));
-      expect(largest).toBeGreaterThan(4 * 1024 * 1024);
-    } finally { unpackers.ensureBuffer = grow; }
-  });
-
   it("lists nothing for a document without attachments", async () => {
     const pdf = await openPdf(await pdfWith([]));
     try {
@@ -127,6 +103,9 @@ describe("document attachments", () => {
       const listed = await listAttachments(pdf, 2);
       expect(listed.map(file => file.name)).toEqual(["one.txt", "two.txt"]);
       expect(listed[0].description.length).toBe(500);
+      // Whether there are more is known, so a PDF with exactly as many as are listed isn't said to have more.
+      expect(await firstAttachments(pdf, 3)).toMatchObject({ more: false, files: [{ name: "one.txt" }, { name: "two.txt" }, { name: "three.txt" }] });
+      expect(await firstAttachments(pdf, 2)).toMatchObject({ more: true, files: [{ name: "one.txt" }, { name: "two.txt" }] });
     } finally { await pdf.loadingTask.destroy(); }
   });
 
@@ -152,8 +131,9 @@ describe("document attachments", () => {
     // 64 MB in one packed block. Chromium unpacks every piece it is handed in full, so what counts is how much it is handed.
     const zeros = await pack(new Uint8Array(64 * 1024 * 1024));
     expect(zeros.length).toBeLessThan(100_000);
-    let largest = 0, handed = 0, unpacked = 0;
+    let largest = 0, handed = 0, unpacked = 0, started = 0;
     const counted = () => {
+      started++;
       const unpacker = new DecompressionStream("deflate") as ReadableWritablePair<Uint8Array, Uint8Array>;
       const before = new TransformStream<Uint8Array, Uint8Array>({ transform(piece, next) {
         largest = Math.max(largest, piece.length); handed += piece.length; next.enqueue(piece);
@@ -162,15 +142,51 @@ describe("document attachments", () => {
       void before.readable.pipeTo(unpacker.writable).catch(() => {});
       return { writable: before.writable, readable: unpacker.readable.pipeThrough(after) };
     };
-    await expect(attachmentBytes(await pdfStoring(zeros, { Filter: "FlateDecode" }), "file.bin", { limit: 4096, unpacker: counted })).rejects.toThrow("too large");
+    // (Written by hand, so that the attached file is the only thing in the PDF there is to unpack.)
+    const storing = (packed: Uint8Array) => handPdf({ ...withAttachment(), 5: streamOf(packed, "/Filter /FlateDecode") });
+    await expect(attachmentBytes(storing(zeros), "a.txt", { limit: 4096, unpacker: counted })).rejects.toThrow("too large");
     expect(largest).toBe(16 * 1024);
     expect(handed).toBeLessThanOrEqual(4 * 16 * 1024);
+    expect(started).toBe(1);
     // A file refused for its size isn't tried a second time, as one that merely ends in a stray line break is.
-    handed = 0;
-    await expect(attachmentBytes(await pdfStoring(Uint8Array.of(...zeros, 10), { Filter: "FlateDecode" }), "file.bin", { limit: 4096, unpacker: counted })).rejects.toThrow("too large");
-    expect(handed).toBeLessThanOrEqual(4 * 16 * 1024);
+    await expect(attachmentBytes(storing(Uint8Array.of(...zeros, 10)), "a.txt", { limit: 4096, unpacker: counted })).rejects.toThrow("too large");
+    expect(started).toBe(2);
     expect(unpacked).toBeGreaterThan(4096);
     expect(unpacked).toBeLessThan(4 * 1024 * 1024);
+    expect((await attachmentBytes(storing(Uint8Array.of(...await pack(text), 10)), "a.txt", { unpacker: counted })).size).toBe(text.length);
+    expect(started).toBe(4);
+  });
+
+  it("gives up on a PDF that takes too long, or whose document closes, and stops the work", async () => {
+    const worker = () => {
+      const made = { posted: 0, stopped: 0, postMessage() { made.posted++; }, terminate() { made.stopped++; }, onmessage: null, onerror: null };
+      return made;
+    };
+    // The PDF's bytes never arrive: the wait for them counts.
+    let started = 0;
+    const never = readAttachment(new Promise(() => {}), "a.txt", new AbortController().signal, 20, () => { started++; return worker(); });
+    await expect(never).rejects.toThrow("takes too long");
+    await expect(never).rejects.toBeInstanceOf(AttachmentError);
+    expect(started).toBe(0);
+    // They arrive, and reading them never ends.
+    const slow = worker();
+    await expect(readAttachment(Promise.resolve(new Uint8Array(4)), "a.txt", new AbortController().signal, 20, () => slow)).rejects.toThrow("takes too long");
+    expect(slow).toMatchObject({ posted: 1, stopped: 1 });
+    // The document closes while its file is being read, and while its bytes are still on their way.
+    const closing = new AbortController(), reading = worker();
+    const closed = readAttachment(Promise.resolve(new Uint8Array(4)), "a.txt", closing.signal, 5000, () => reading);
+    await Promise.resolve();
+    closing.abort(new Error("closed"));
+    await expect(closed).rejects.toThrow("closed");
+    expect(reading).toMatchObject({ posted: 1, stopped: 1 });
+    const early = new AbortController();
+    let arrive!: (bytes: Uint8Array) => void;
+    const waiting = readAttachment(new Promise(resolve => { arrive = resolve; }), "a.txt", early.signal, 5000, () => { started++; return worker(); });
+    early.abort(new Error("closed"));
+    await expect(waiting).rejects.toThrow("closed");
+    arrive(new Uint8Array(4));
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(started).toBe(0);
   });
 
   it("refuses a file stored in a way it can't read correctly or unpack within a limit", async () => {
@@ -182,12 +198,12 @@ describe("document attachments", () => {
     await refused(await pack(packed), { Filter: ["FlateDecode", "FlateDecode"] });
     await refused(packed, { Filter: "FlateDecode", DecodeParms: { Predictor: 12, Columns: 4 } });
     await refused(packed, { F: "FlateDecode" });
-    // A stated length that doesn't lead to the end of the data: pdf-lib then guesses where the data ends.
+    // A stated length that doesn't lead to the end of the data.
     const wrongLength = await pdfStoring(packed, { Filter: "FlateDecode" });
     const stated = new TextEncoder().encode(`/Length ${packed.length}`);
     const at = wrongLength.findIndex((_, i) => stated.every((byte, j) => wrongLength[i + j] === byte));
     expect(at).toBeGreaterThan(0);
-    wrongLength.set(new TextEncoder().encode(`/Length ${packed.length - 1}`), at);
+    wrongLength.set(new TextEncoder().encode(`/Length ${packed.length - 2}`), at);
     await expect(attachmentBytes(wrongLength, "file.bin")).rejects.toThrow("can't save");
   });
 
@@ -198,7 +214,8 @@ describe("document attachments", () => {
   it("knows which names would run when the saved file is opened", () => {
     for (const name of ["setup.exe", "Invoice.PDF.Exe", "run.bat", "install.sh", "Tool.app", "notes.desktop", "update.msi", "report.pdf.js", "setup.exe.", "setup.exe . ",
       "setup.exe\u200d", "setup.exe::$DATA", "notes.txt:run.exe", "Budget.xlsm", "console.msc", "disk.iso",
-      "run.vb\u017f", "setup.m\u017f\u0131", "office.rdp", "page.hta", "Slides.ppsm", "tool.snap"]) {
+      "run.vb\u017f", "setup.m\u017f\u0131", "office.rdp", "page.hta", "Slides.ppsm", "tool.snap",
+      "analysis.xla", "analysis.xlam", "deck.ppa", "deck.ppam", "letters.wll", "query.mde", "module.bas", "patch.mst", "Game.apk"]) {
       expect(runsWhenOpened(name), name).toBe(true);
     }
     for (const name of ["figures.bin", "notes.txt", "README", "exe", "report.exe.pdf", "photo.jpeg", "data.json"]) {

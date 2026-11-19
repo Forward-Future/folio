@@ -1006,9 +1006,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     const save = attachmentSave.current = new AbortController();
     setSavingAttachment(true);
     try {
-      // (pdf.js leaves this unanswered if the document closes first; the race is what lets the next save start.)
-      const data = await Promise.race([source.pdf.getData(), new Promise<never>((_resolve, reject) => save.signal.addEventListener("abort", reject))]);
-      const bytes = await readAttachment(data, file.id, save.signal);
+      const bytes = await readAttachment(source.pdf.getData(), file.id, save.signal);
       if (save.signal.aborted || docRef.current !== source) return;
       // Without a type, Chromium guesses one from the bytes and adds its extension to a name that has none.
       saveBlob(new Blob([bytes], { type: "application/octet-stream" }), file.name);
@@ -1268,7 +1266,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (!docRef.current) return;
       // A dialog owns the keyboard, and closes itself on Escape. The reader's shortcuts are swallowed
       // rather than left to act on the document behind it (or to fall through to the browser's own).
-      if (dialog || pending || imageView) {
+      if (dialog || pending || imageView || programAsked) {
         const key = e.key.toLowerCase();
         if (mod && (["f", "s", "p", "=", "+", "-", "0", "\\"].includes(key) || (!typing && (key === "z" || key === "y")))) e.preventDefault();
         return;

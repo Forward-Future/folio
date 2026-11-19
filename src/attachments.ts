@@ -1,4 +1,5 @@
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import { Dict, LIMITS, PdfReader, pdfText, Ref, Refusal, Stream, type Value } from "./attachmentReader";
 import { MAX_PDF_BYTES } from "./pdfInput";
 
 export interface Attachment {
@@ -25,14 +26,29 @@ export async function listAttachments(pdf: Pick<PDFDocumentProxy, "getAttachment
   return listed;
 }
 
+/** The first `limit` of the PDF's files, and whether it has more than those. */
+export async function firstAttachments(pdf: Pick<PDFDocumentProxy, "getAttachments">, limit = MAX_ATTACHMENTS) {
+  const files = await listAttachments(pdf, limit + 1);
+  return { files: files.slice(0, limit), more: files.length > limit };
+}
+
 // Endings that Windows, macOS or Linux run, install, mount or follow when the saved file is opened, rather than show.
-// Office files that carry macros are here; the everyday ones (doc, xls, html) are not, or the question would lose its meaning.
-const RUNNABLE = new Set(("exe com scr pif bat cmd msi msp msu msix msixbundle appx appxbundle appinstaller ppkg cab ps1 psm1 psd1 ps1xml psc1 msh "
-  + "vb vbs vbe js jse ws wsf wsc wsh sct hta cpl msc ocx xll lnk url website reg jar jnlp dll sys inf scf chm hlp gadget diagcab "
-  + "application appref-ms settingcontent-ms library-ms search-ms theme themepack rdp wsb job shb shs xbap vsix vsto iso img vhd vhdx "
-  + "docm dotm xlsm xltm xlam pptm potm ppsm ppam sldm iqy slk app command dmg sparseimage pkg mpkg scpt scptd applescript osax "
-  + "workflow action terminal tool webloc inetloc fileloc mobileconfig prefpane sh bash zsh csh ksh fish run appimage deb rpm snap "
-  + "flatpakref desktop py pyc pyw pyz pyzw pl rb php").split(" "));
+// The first list is the one Outlook won't deliver ("Blocked attachments in Outlook", support.microsoft.com), whole, so
+// that it can be checked against its source. The second adds newer Windows installers and the Office files and add-ins
+// made to carry macros; the everyday Office files (doc, xls, dot), which may carry one too, are not here, or the
+// question would lose its meaning. The third is what macOS and Linux run.
+const RUNNABLE = new Set([
+  "ade adp apk app appcontent-ms application appref-ms appx asp aspx asx bas bat bgi cab cdxml cer chm cmd cnt com cpl "
+  + "crt csh der diagcab exe fxp gadget grp hlp hpj hta htc img inf ins iso isp its jar jnlp js jse ksh library-ms lnk mad "
+  + "maf mag mam maq mar mas mat mau mav maw mcf mda mdb mde mdt mdw mdz msc mht mhtml msh msh1 msh2 mshxml msh1xml msh2xml "
+  + "msi msp mst msu ops osd pcd pif pl plg prf prg printerexport ps1 ps1xml ps2 ps2xml psc1 psc2 psd1 psdm1 pssc pst py "
+  + "pyc pyo pyw pyz pyzw reg scf scr sct search-ms settingcontent-ms shb shs theme tmp udl url vb vbe vbp vbs vhd vhdx "
+  + "vsmacros vsw webpnp website ws wsb wsc wsf wsh xbap xll xnk",
+  "msix msixbundle appxbundle appinstaller ppkg psm1 ocx dll sys job vsix vsto themepack rdp docm dotm xlsm xltm xlam xla "
+  + "pptm potm ppsm ppam ppa sldm wll iqy slk",
+  "command dmg sparseimage pkg mpkg scpt scptd applescript osax workflow action terminal tool webloc inetloc fileloc "
+  + "mobileconfig prefpane sh bash zsh fish run appimage deb rpm snap flatpakref desktop rb php",
+].join(" ").split(" "));
 
 /**
  * Whether opening the saved file could run it. Windows drops dots and spaces after the ending, reads what follows a
@@ -51,103 +67,31 @@ const UNPACK_STEP = 16 * 1024;
 /** A problem saving an attachment, worded for the reader. */
 export class AttachmentError extends Error {}
 
-/** What `stream` delivers, as long as it is no more than `limit` bytes: past that, reading stops and nothing more is asked for. */
-export async function readWithin(stream: ReadableStream<Uint8Array>, limit: number) {
-  const reader = stream.getReader(), parts: Uint8Array[] = [];
+/** What `stream` delivers, in the pieces it came in, as long as it is no more than `limit` bytes: past that, reading stops and nothing more is asked for. */
+async function partsWithin(stream: ReadableStream<Uint8Array>, limit: number) {
+  const reader = stream.getReader(), parts: Uint8Array<ArrayBuffer>[] = [];
   for (let size = 0;;) {
     const { done, value } = await reader.read();
-    if (done) return new Blob(parts as Uint8Array<ArrayBuffer>[]);
+    if (done) return parts;
     if ((size += value.length) > limit) {
       void reader.cancel().catch(() => {});
       throw new AttachmentError("This attachment is too large to save.");
     }
-    parts.push(value);
+    parts.push(value as Uint8Array<ArrayBuffer>);
   }
 }
 
+export async function readWithin(stream: ReadableStream<Uint8Array>, limit: number) {
+  return new Blob(await partsWithin(stream, limit));
+}
+
+type Unpacker = () => ReadableWritablePair<Uint8Array, Uint8Array>;
+
 /**
- * The attached file exactly as it was embedded, read from the PDF's own bytes. A few hundred bytes can unpack to
- * gigabytes, and pdf.js and pdf-lib both unpack a whole file, or a whole block of one, before its size can be checked.
- * So pdf-lib only finds the packed bytes, and the browser unpacks them a small piece at a time until the limit.
- * Finding them means reading the whole PDF, which can take a while: the app does this in a worker (`readAttachment`).
+ * Flate data unpacked, as long as it comes to no more than `limit` bytes. Chromium unpacks all of a piece it is given
+ * before anyone can count the result, and a piece can grow a thousandfold, so the pieces are kept small.
  */
-export async function attachmentBytes(source: Uint8Array, id: string, { limit = MAX_PDF_BYTES, openLimit = MAX_PDF_BYTES,
-  unpacker = (): ReadableWritablePair<Uint8Array, Uint8Array> => new DecompressionStream("deflate") as ReadableWritablePair<Uint8Array, Uint8Array> } = {}) {
-  const { ParseSpeeds, PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNull, PDFNumber, PDFRawStream, PDFString } = await import("pdf-lib/es");
-  const name = PDFName.of;
-
-  // pdf-lib unpacks every packed list of objects in the file as it opens it, each in one go, and those can be as
-  // inflated as an attachment. Its unpackers all grow their output through one method, so that is where the total is kept.
-  const growing = (await import("pdf-lib/es/core/streams/DecodeStream")).default.prototype as unknown as
-    { ensureBuffer(this: { buffer: Uint8Array; minBufferLength: number }, requested: number): Uint8Array };
-  const grow = growing.ensureBuffer;
-  let unpacked = 0;
-  growing.ensureBuffer = function (requested) {
-    let size = Math.max(this.buffer.byteLength, this.minBufferLength);
-    while (size < requested) size *= 2;
-    if ((unpacked += size - this.buffer.byteLength) > openLimit) throw new Error("Too much to unpack.");
-    return grow.call(this, requested);
-  };
-  // (No pauses while reading: in a worker there is no one to make way for, and each pause costs a few milliseconds.)
-  const pdf = await PDFDocument.load(source, { updateMetadata: false, ignoreEncryption: true, parseSpeed: ParseSpeeds.Fastest })
-    .finally(() => { growing.ensureBuffer = grow; });
-  // (pdf-lib carries on past an object it couldn't read, so the count is what says the limit was reached.)
-  if (unpacked > openLimit) throw new AttachmentError("This PDF is too large for Folio to save its attached files.");
-  // pdf-lib can't read a protected file, and handing it to pdf.js instead would unpack the attachment without a limit.
-  if (pdf.isEncrypted) throw new AttachmentError("Folio can't save files attached to a protected PDF.");
-
-  // The same walk as pdf.js, whose list gave us `id`: a node with Kids has no entries of its own, and the last entry
-  // with a name is the one that counts.
-  const text = (key: { asBytes(): Uint8Array; decodeText(): string }) => {
-    const bytes = key.asBytes();
-    // pdf-lib doesn't know the UTF-8 mark that newer PDFs may start a name with.
-    return bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? new TextDecoder().decode(bytes) : key.decodeText();
-  };
-  let spec: unknown;
-  const names = pdf.catalog.lookup(name("Names"));
-  const nodes: unknown[] = [names instanceof PDFDict ? names.lookup(name("EmbeddedFiles")) : undefined];
-  const seen = new Set<unknown>();
-  for (const node of nodes) {
-    if (!(node instanceof PDFDict) || seen.has(node)) continue;
-    seen.add(node);
-    const kids = node.lookup(name("Kids")), entries = node.lookup(name("Names"));
-    if (kids instanceof PDFArray) for (let i = 0; i < kids.size(); i++) nodes.push(kids.lookup(i));
-    else if (!node.get(name("Kids"), true) && entries instanceof PDFArray) for (let i = 0; i + 1 < entries.size(); i += 2) {
-      const key = entries.lookup(i);
-      if ((key instanceof PDFString || key instanceof PDFHexString) && text(key) === id) spec = entries.lookup(i + 1);
-    }
-  }
-  const embedded = spec instanceof PDFDict ? spec.lookup(name("EF")) : undefined;
-  let stream: unknown;
-  if (embedded instanceof PDFDict) {
-    const platform = ["UF", "F", "Unix", "Mac", "DOS"].map(name).find(key => embedded.get(key, true));
-    stream = platform && embedded.lookup(platform);
-  }
-  if (!(stream instanceof PDFRawStream)) throw new AttachmentError("This attachment has no content.");
-
-  // Only what PDF writers do with attached files is read: the bytes as they are, or packed once with Flate. Anything
-  // else is refused, since pdf-lib would hand over the wrong bytes for it or it couldn't be unpacked within a limit.
-  const { dict, contents } = stream;
-  // Some writers put a single filter in a list, or write an empty setting out.
-  const only = (value: unknown) => {
-    const one = value instanceof PDFArray && value.size() === 1 ? value.lookup(0) : value;
-    return one === PDFNull ? undefined : one;
-  };
-  const filter = only(dict.lookup(name("Filter"))), parms = only(dict.lookup(name("DecodeParms"))), length = dict.lookup(name("Length"));
-  const packed = filter === name("FlateDecode") || filter === name("Fl");
-  const predictor = parms instanceof PDFDict ? parms.lookup(name("Predictor")) : parms;
-  if ((filter && !packed) || (predictor && !(predictor instanceof PDFNumber && predictor.asNumber() === 1))
-    || ["F", "FFilter", "DP"].some(key => dict.get(name(key), true))
-    // Without a length that fits, pdf-lib looked for the end of the data itself and may have stopped early.
-    || !(length instanceof PDFNumber) || length.asNumber() !== contents.length) {
-    throw new AttachmentError("This attachment is stored in a way Folio can't save.");
-  }
-  if (!packed || !contents.length) {
-    if (contents.length > limit) throw new AttachmentError("This attachment is too large to save.");
-    return new Blob([contents as Uint8Array<ArrayBuffer>]);
-  }
-  // Chromium unpacks all of a piece it is given before anyone can count the result, and a piece can grow a
-  // thousandfold, so the pieces are kept small.
+async function unpackWithin(packed: Uint8Array, limit: number, unpacker: Unpacker) {
   const unpack = (data: Uint8Array) => {
     let at = 0;
     const pieces = new ReadableStream<Uint8Array>({
@@ -156,34 +100,118 @@ export async function attachmentBytes(source: Uint8Array, id: string, { limit = 
         else controller.close();
       },
     }, { highWaterMark: 0 });
-    return readWithin(pieces.pipeThrough(unpacker()), limit);
+    return partsWithin(pieces.pipeThrough(unpacker()), limit);
   };
   try {
-    return await unpack(contents);
+    return await unpack(packed);
   } catch (error) {
     // Some writers count the line break after the data as part of it, which the browser's unpacker won't have.
-    const end = contents.length - (contents.at(-1) === 10 ? (contents.at(-2) === 13 ? 2 : 1) : contents.at(-1) === 13 ? 1 : 0);
-    if (error instanceof AttachmentError || end === contents.length) throw error;
-    return unpack(contents.subarray(0, end));
+    const end = packed.length - (packed.at(-1) === 10 ? (packed.at(-2) === 13 ? 2 : 1) : packed.at(-1) === 13 ? 1 : 0);
+    if (error instanceof AttachmentError || end === packed.length) throw error;
+    return unpack(packed.subarray(0, end));
   }
 }
 
+const REFUSALS = {
+  limit: "This PDF is too large for Folio to save its attached files.",
+  // (Reading a protected file would mean handing it to pdf.js, which unpacks an attachment without a limit.)
+  protected: "Folio can't save files attached to a protected PDF.",
+  unreadable: "This attachment is stored in a way Folio can't save.",
+};
+
+/**
+ * The attached file exactly as it was embedded, read from the PDF's own bytes. A few hundred bytes can unpack to
+ * gigabytes, and pdf.js unpacks a whole file before its size can be checked. A PDF library, for its part, reads every
+ * object in the file to find one, which a small file can make cost gigabytes too. So only the objects that lead to the
+ * attachment are read (`PdfReader`, which counts what it uses against `limits`), and the browser unpacks the file a
+ * small piece at a time until `limit`. The app does this in a worker (`readAttachment`).
+ */
+export async function attachmentBytes(source: Uint8Array, id: string, { limit = MAX_PDF_BYTES, limits = LIMITS,
+  unpacker = (() => new DecompressionStream("deflate")) as Unpacker, spent = (_used: PdfReader["used"]) => {} } = {}) {
+  const reader = new PdfReader(source, async (packed, room) => {
+    try {
+      return new Uint8Array(await new Blob(await unpackWithin(packed, room, unpacker)).arrayBuffer());
+    } catch (error) {
+      throw error instanceof AttachmentError ? new Refusal("limit") : error;
+    }
+  }, limits);
+  try {
+    await reader.open();
+
+    // The same walk as pdf.js, whose list gave us `id`: a node with Kids has no entries of its own, an entry written
+    // twice keeps its first place and its last file, and the first entry whose name reads as `id` is the one.
+    const root = await reader.get(reader.trailer, "Root"), names = root instanceof Dict ? await reader.get(root, "Names") : undefined;
+    const entries = new Map<Value, Value>();
+    if (names instanceof Dict && names.get("EmbeddedFiles") !== undefined) {
+      const nodes = [names.get("EmbeddedFiles")], seen = new Set<string>();
+      for (const node of nodes) {
+        if (node instanceof Ref && seen.size === seen.add(`${node.num} ${node.gen}`).size) throw new Refusal("unreadable");
+        const dict = await reader.resolve(node);
+        if (!(dict instanceof Dict)) continue;
+        const kids = dict.get("Kids") !== undefined, list = await reader.get(dict, kids ? "Kids" : "Names");
+        if (!Array.isArray(list)) continue;
+        if (kids) nodes.push(...list);
+        else for (let i = 0; i < list.length; i += 2) entries.set(await reader.resolve(list[i]), list[i + 1]);
+      }
+    }
+    let spec: Value;
+    for (const [key, value] of entries) {
+      // (pdf.js makes a name of anything, in its own way; all that PDF writers put here is a string.)
+      if (typeof key !== "string") throw new Refusal("unreadable");
+      if (pdfText(key) === id) { spec = await reader.resolve(value); break; }
+    }
+    const embedded = spec instanceof Dict ? await reader.get(spec, "EF") : undefined;
+    const platform = embedded instanceof Dict ? ["UF", "F", "Unix", "Mac", "DOS"].find(key => embedded.get(key) !== undefined) : undefined;
+    const stream = platform ? await reader.get(embedded as Dict, platform) : undefined;
+    if (!(stream instanceof Stream)) throw new AttachmentError("This attachment has no content.");
+
+    // Only what PDF writers do with attached files is read: the bytes as they are, or packed once with Flate.
+    const { packed, predictor } = await reader.packing(stream), contents = await reader.contents(stream);
+    if (predictor > 1) throw new Refusal("unreadable");
+    if (!packed || !contents.length) {
+      if (contents.length > limit) throw new AttachmentError("This attachment is too large to save.");
+      return new Blob([contents as Uint8Array<ArrayBuffer>]);
+    }
+    return new Blob(await unpackWithin(contents, limit, unpacker));
+  } catch (error) {
+    throw error instanceof Refusal ? new AttachmentError(REFUSALS[error.why]) : error;
+  } finally {
+    spent(reader.used);
+  }
+}
+
+type ReadingWorker = Pick<Worker, "postMessage" | "terminate" | "onmessage" | "onerror">;
+
 /**
  * `attachmentBytes` in a worker, so a PDF that takes long to read doesn't hold up the reader. `signal` abandons it, and
- * so does `patience` running out: pdf-lib can be made to read a small PDF for hours.
+ * so does `patience` running out, counted from the call: `source` (the PDF's bytes, which pdf.js never hands over if
+ * the document closes first) is part of the wait.
  */
-export function readAttachment(source: Uint8Array, id: string, signal: AbortSignal, patience = 30_000) {
+export function readAttachment(source: Promise<Uint8Array>, id: string, signal: AbortSignal, patience = 30_000,
+  start = (): ReadingWorker => new Worker(new URL("./attachments.worker.ts", import.meta.url), { type: "module" })) {
   return new Promise<Blob>((resolve, reject) => {
     if (signal.aborted) return reject(signal.reason);
-    const worker = new Worker(new URL("./attachments.worker.ts", import.meta.url), { type: "module" });
-    const settle = (settled: () => void) => { worker.terminate(); clearTimeout(timer); signal.removeEventListener("abort", abandon); settled(); };
+    let worker: ReadingWorker | undefined, settled = false;
+    const settle = (outcome: () => void) => {
+      if (settled) return;
+      settled = true;
+      worker?.terminate();
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abandon);
+      outcome();
+    };
+    const failed = () => settle(() => reject(new Error("Couldn't read the attachment.")));
     const abandon = () => settle(() => reject(signal.reason));
     const timer = setTimeout(() => settle(() => reject(new AttachmentError("This PDF takes too long to read for Folio to save its attached files."))), patience);
     signal.addEventListener("abort", abandon);
-    worker.onmessage = ({ data }: MessageEvent<{ file: Blob } | { error: string | null }>) => settle(() =>
-      "file" in data ? resolve(data.file) : reject(data.error ? new AttachmentError(data.error) : new Error("Couldn't read the attachment.")));
-    worker.onerror = () => settle(() => reject(new Error("Couldn't read the attachment.")));
-    worker.postMessage({ source, id }, [source.buffer as ArrayBuffer]);
+    source.then(bytes => {
+      if (settled) return;
+      worker = start();
+      worker.onmessage = ({ data }: MessageEvent<{ file: Blob } | { error: string | null }>) => settle(() =>
+        "file" in data ? resolve(data.file) : reject(data.error ? new AttachmentError(data.error) : new Error("Couldn't read the attachment.")));
+      worker.onerror = failed;
+      worker.postMessage({ source: bytes, id }, [bytes.buffer as ArrayBuffer]);
+    }, failed);
   });
 }
 
