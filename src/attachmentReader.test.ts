@@ -4,7 +4,7 @@ import { LIMITS, type Limits } from "./attachmentReader";
 import { bytesOf, handPdf, pack, streamOf, tableOf, withAttachment } from "./testing/handPdf";
 import { openPdf } from "./testing/pdfjs";
 
-type Used = { work: number; tokens: number; sections: number };
+type Used = { work: number; tokens: number; sections: number; rows: number };
 
 /** What saving "a.txt" from `pdf` gives, and what it used of `limits` on the way, whether it was saved or refused. */
 async function save(pdf: Uint8Array, limits: Partial<Limits> = {}, id = "a.txt") {
@@ -149,12 +149,16 @@ describe("reading an attached file out of a PDF's bytes", () => {
     expect(refused(tokens.outcome)).toBe(TOO_LARGE);
     expect(tokens.used.tokens).toBe(2001);
 
-    // A megabyte of string in an object on the way to the file.
-    const long = handPdf({ ...withAttachment(), 6: `<< /Limits [ (${"x".repeat(1024 * 1024)}) ] /Names [ (a.txt) 4 0 R ] >>` });
+    // A megabyte of strings in an object on the way to the file.
+    const long = handPdf({ ...withAttachment(), 6: `<< /Limits [ ${`(${"x".repeat(30_000)}) `.repeat(35)}] /Names [ (a.txt) 4 0 R ] >>` });
     const string = await save(long, { work: 100_000 });
     expect(refused(string.outcome)).toBe(TOO_LARGE);
-    expect(string.used.work).toBe(100_001);
+    expect(string.used.work).toBeLessThanOrEqual(100_002);
     expect((await save(long)).outcome).toBe("hello\n");
+
+    // The seven lines of the table that says where the objects are.
+    expect((await save(handPdf(withAttachment()), { rows: 7 })).outcome).toBe("hello\n");
+    expect(refused((await save(handPdf(withAttachment()), { rows: 6 })).outcome)).toBe(TOO_LARGE);
 
     const deep = handPdf({ ...withAttachment(), 6: `<< /Deep ${"[".repeat(100)}${"]".repeat(100)} /Names [ (a.txt) 4 0 R ] >>` });
     expect(refused((await save(deep)).outcome)).toBe(TOO_LARGE);
@@ -199,6 +203,55 @@ describe("reading an attached file out of a PDF's bytes", () => {
     expect(refused(count.outcome)).toBe(CANT_SAVE);
     expect(count.used.tokens).toBeLessThan(200);
     expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  it("reads a table's lines only where pdf.js reads them", async () => {
+    // pdf.js reads a table as a run of numbers and letters, wherever the lines break; reading a line from where it
+    // ought to start is the same only if every line before it is the length it should be. Here two objects are both
+    // numbered 5, and a table whose lines are uneven, or hidden in a comment, leads the two readings to different ones.
+    const build = (rows: (row: (num: number) => string) => string) => {
+      const objects = { ...withAttachment(), 4: "<< /Type /Filespec /F (a.txt) /EF << /F 8 0 R >> >>", 7: "null", 9: "null" } as Record<number, string | Uint8Array>;
+      let pdf = "%PDF-1.7\n";
+      const offsets = new Map<number, number>([[8, 123]]);
+      const add = (num: number, body: string | Uint8Array) => { pdf += `${num} 0 obj\n${String.fromCharCode(...bytesOf(body))}\nendobj\n`; };
+      // The file's eighth object at byte 123, and another calling itself that at byte 23.
+      pdf = pdf.padEnd(23);
+      add(8, streamOf("FAKE\n"));
+      pdf = pdf.padEnd(123);
+      add(8, streamOf("hello\n"));
+      for (const [num, body] of Object.entries(objects)) { offsets.set(Number(num), pdf.length); add(Number(num), body); }
+      const row = (num: number) => `${String(offsets.get(num)).padStart(10, "0")} 00000 n \n`;
+      const table = pdf.length;
+      pdf += `xref\n0 5\n0000000000 65535 f \n${[1, 2, 3, 4].map(row).join("")}6 4\n${rows(row)}trailer\n<< /Size 10 /Root 1 0 R >>\nstartxref\n${table}\n%%EOF\n`;
+      return bytesOf(pdf);
+    };
+    const theirs = async (pdf: Uint8Array) => {
+      const opened = await openPdf(pdf);
+      try { return new TextDecoder().decode(await opened.getAttachmentContent("a.txt") as Uint8Array); } finally { await opened.loadingTask.destroy(); }
+    };
+    // Even lines: both read the same.
+    const even = build(row => row(6) + row(7) + row(8) + row(9));
+    expect(await theirs(even)).toBe("hello\n");
+    expect((await save(even)).outcome).toBe("hello\n");
+    // Lines of 20, 19, 21 and 20 bytes: counting 20 for each lands one byte into the third, where "123" reads as 23.
+    const uneven = build(row => row(6) + row(7).slice(1) + `123 00000 n${" ".repeat(9)}\n` + row(9));
+    expect(await theirs(uneven)).toBe("hello\n");
+    expect(refused((await save(uneven)).outcome)).toBe(CANT_SAVE);
+    // A line that is a comment: pdf.js takes the next one in its place.
+    const hidden = build(row => row(6) + `%${" ".repeat(18)}\n` + row(8) + row(9));
+    expect(refused((await save(hidden)).outcome)).toBe(CANT_SAVE);
+    // A line with something after its letter, which pdf.js would read on into the next line.
+    const run = build(row => row(6) + row(7).slice(0, 18) + " 1" + row(8) + row(9));
+    expect(refused((await save(run)).outcome)).toBe(CANT_SAVE);
+  });
+
+  it("doesn't keep a long string it has no use for, and refuses a name it would need that is too long to be one", async () => {
+    const long = "a".repeat(1024 * 1024);
+    const beside = await save(handPdf({ ...withAttachment(), 5: streamOf("hello\n", `/Junk (${long}) /Hex <${long}>`) }));
+    expect(beside.outcome).toBe("hello\n");
+    expect(beside.used.work).toBeLessThan(200_000);
+    expect(refused((await save(handPdf({ ...withAttachment(), 6: `<< /Names [ (${long}) 4 0 R (a.txt) 4 0 R ] >>` }))).outcome)).toBe(CANT_SAVE);
+    expect(refused((await save(handPdf({ ...withAttachment(), 6: `<< /${long} 1 /Names [ (a.txt) 4 0 R ] >>` }))).outcome)).toBe(TOO_LARGE);
   });
 
   it("refuses a PDF that doesn't hold together, rather than repair it", async () => {

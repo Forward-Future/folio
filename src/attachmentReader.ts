@@ -28,14 +28,19 @@ export interface Limits {
   tokens: number;
   /** Tables of objects it may follow back through the file's saved revisions. */
   sections: number;
+  /** Lines of those tables it may check. */
+  rows: number;
   /** How deep lists and dictionaries may nest. */
   depth: number;
 }
-export const LIMITS: Limits = { work: 64 * 1024 * 1024, tokens: 1_000_000, sections: 1024, depth: 64 };
+export const LIMITS: Limits = { work: 64 * 1024 * 1024, tokens: 1_000_000, sections: 1024, rows: 20_000_000, depth: 64 };
 
 interface Meter { token(): void; work(bytes: number): void; depth: number }
 
 const END = new Cmd("");
+/** In place of a string too long to be a name for anything: it is read past, and not kept. */
+export const LONG = new Cmd("");
+const LONGEST = 32 * 1024;
 const SPACE = 1, MARK = 2;
 const KIND = new Uint8Array(256);
 for (const code of [0, 9, 10, 12, 13, 32]) KIND[code] = SPACE;
@@ -73,7 +78,12 @@ class Lexer {
     const at = (i: number) => i < end ? bytes[i] : -1;
     let code = bytes[p];
     const codes: number[] = [];
-    const keep = (kept: number) => { meter.work(1); codes.push(kept); };
+    let long = false;
+    const keep = (kept: number) => {
+      if (codes.length === LONGEST) { long = true; return; }
+      meter.work(2);
+      codes.push(kept);
+    };
 
     if ((code >= 0x30 && code <= 0x39) || code === 0x2b || code === 0x2d || code === 0x2e) {
       let divideBy = 0, sign = 1;
@@ -117,7 +127,7 @@ class Lexer {
         }
       }
       this.pos = p;
-      return text(codes);
+      return long ? LONG : text(codes);
     }
 
     if (code === 0x2f) {
@@ -134,6 +144,8 @@ class Lexer {
         keep(second);
       }
       this.pos = p;
+      // (A name is a key, and what follows a key that was let go would be read as something else.)
+      if (long) throw new Refusal("limit");
       return new Name(text(codes));
     }
 
@@ -150,7 +162,7 @@ class Lexer {
       }
       if (first !== -1) keep(first << 4);
       this.pos = p;
-      return text(codes);
+      return long ? LONG : text(codes);
     }
 
     if (code === 0x29) throw unreadable();
@@ -236,7 +248,7 @@ function find(bytes: Uint8Array, word: string, from: number, to: number, backwar
 
 export class PdfReader {
   /** What has been spent of each limit so far. */
-  readonly used = { work: 0, tokens: 0, sections: 0 };
+  readonly used = { work: 0, tokens: 0, sections: 0, rows: 0 };
   /** The newest trailer: where the document starts. */
   trailer!: Dict;
   private meter: Meter;
@@ -304,37 +316,37 @@ export class PdfReader {
     if ((await this.get(this.trailer, "Encrypt")) instanceof Dict) throw new Refusal("protected");
   }
 
-  /** One line of a table: where an object is, or that it is gone. */
-  private row(lexer: Lexer) {
-    const offset = lexer.next(), at = lexer.from, gen = lexer.next(), kind = lexer.next();
-    const free = isCmd(kind, "f");
-    if (!isInt(offset) || !isInt(gen) || !(free || isCmd(kind, "n"))) throw unreadable();
-    return { at, offset, gen, free };
-  }
-
   /**
-   * A table can claim millions of lines, so none are kept: its lines are all the same length, and one is read from its
-   * place when an object is asked for. Returns the trailer after the table.
+   * A table can claim millions of lines, so none are kept: one is read from its place when an object is asked for.
+   * pdf.js reads a table as a run of numbers and letters, wherever its lines break, and the two readings are the same
+   * only for a table written the regular way: every line ten digits, five digits and a letter, a space between them,
+   * and the same few spaces or line breaks after. So every line is checked to be that. Returns the trailer after the table.
    */
   private readTable(lexer: Lexer) {
-    const rows: { first: number; count: number; at: number; width: number }[] = [];
+    const { bytes } = this, rows: { first: number; count: number; at: number; width: number }[] = [];
+    const blank = (code: number) => code === 32 || code === 10 || code === 13;
     for (;;) {
       let first = lexer.next();
       if (isCmd(first, "trailer")) break;
       const count = lexer.next();
       if (!isInt(first) || !isInt(count)) throw unreadable();
       if (count <= 0) continue;
-      const one = this.row(lexer);
-      let width = 20;
-      if (count > 1) {
-        width = this.row(lexer).at - one.at;
-        // (The last line is read to carry on from, and so that a table with lines of mixed lengths is noticed.)
-        lexer.pos = one.at + width * (count - 1);
-        if (!(lexer.pos < lexer.end) || this.row(lexer).at !== one.at + width * (count - 1)) throw unreadable();
+      lexer.next();
+      const at = lexer.from;
+      let width = 18;
+      while (blank(bytes[at + width])) width++;
+      if (width === 18 || at + width * count > bytes.length) throw unreadable();
+      if ((this.used.rows += count) > this.limits.rows) throw new Refusal("limit");
+      for (let row = at, end = at + width * count; row < end; row += width) {
+        for (let i = 0; i < width; i++) {
+          const code = bytes[row + i];
+          if (!(i === 10 || i === 16 ? code === 32 : i === 17 ? code === 0x66 || code === 0x6e : i > 17 ? blank(code) : code >= 0x30 && code <= 0x39)) throw unreadable();
+        }
       }
       // (pdf.js's allowance for a table that numbers its first, free, line 1 rather than 0.)
-      if (first === 1 && one.free) first = 0;
-      rows.push({ first, count, at: one.at, width });
+      if (first === 1 && bytes[at + 17] === 0x66) first = 0;
+      rows.push({ first, count, at, width });
+      lexer.pos = at + width * count;
     }
     this.sections.push({ rows });
     const dict = new Parser(lexer, this.meter).value();
@@ -346,8 +358,10 @@ export class PdfReader {
       if ("rows" in section) {
         for (const { first, count, at, width } of section.rows) {
           if (num < first || num >= first + count) continue;
-          const row = this.row(new Lexer(this.bytes, at + width * (num - first), this.bytes.length, this.meter));
-          return row.free || !row.offset ? null : row;
+          const row = at + width * (num - first);
+          const number = (from: number, to: number) => { let value = 0; while (from < to) value = value * 10 + this.bytes[row + from++] - 0x30; return value; };
+          const offset = number(0, 10);
+          return this.bytes[row + 17] === 0x66 || !offset ? null : { offset, gen: number(11, 16) };
         }
         continue;
       }
@@ -502,8 +516,10 @@ export function pdfText(string: string) {
       } catch { /* Not that encoding after all: read it as plain text. */ }
     }
   }
-  return Array.from({ length: string.length }, (_, i) => {
+  let read = "";
+  for (let i = 0; i < string.length; i++) {
     const code = DOC_ENCODING.get(string.charCodeAt(i));
-    return code ? String.fromCharCode(code) : string[i];
-  }).join("");
+    read += code ? String.fromCharCode(code) : string[i];
+  }
+  return read;
 }
