@@ -2,6 +2,7 @@ import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
 import { Icon } from "./icons";
+import { firstAttachments, MAX_ATTACHMENTS, type Attachment } from "./attachments";
 import { deletePages, draftChanged, movePage, pageKey, startDraft, stepDraft, withPages, type DraftPage, type PageDraft } from "./organize";
 import { IS_MAC, keys } from "./platform";
 import { anchoredScrollTop, loadPageSizes, rowAt, thumbLayout, THUMB_ROW_EXTRA, type PageSize } from "./thumbnails";
@@ -18,6 +19,9 @@ interface Props {
   onDraft: (draft: PageDraft | null) => void;
   onSaveDraft: () => Promise<void>;
   onExportPages: (pages: number[]) => Promise<void>;
+  /** A file is being read for saving: one at a time. */
+  savingAttachment: boolean;
+  onSaveAttachment: (file: Attachment) => void;
   onOpenCopy?: () => void;
   tab: SidebarTab;
   onTab: (tab: SidebarTab) => void;
@@ -25,20 +29,33 @@ interface Props {
   noteCount: number;
 }
 
-export type SidebarTab = "pages" | "outline" | "notes";
+export type SidebarTab = "pages" | "outline" | "notes" | "files";
 
 type PageAction = "delete";
 
 export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft, onDraft, onSaveDraft, onOpenCopy, onExportPages,
-  tab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
+  savingAttachment, onSaveAttachment, tab: chosenTab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
   const [outline, setOutline] = useState<OutlineItem[] | null>(null);
   const [bookmarkedOnly, setBookmarkedOnly] = useState(false);
   const [organizerPick, setOrganizerPick] = useState<string[] | null>(null);
+
+  const [{ files, more: moreFiles }, setFiles] = useState<{ files: Attachment[]; more: boolean }>({ files: [], more: false });
 
   useEffect(() => {
     setOutline(null);
     pdf.getOutline().then((o) => setOutline((o as OutlineItem[] | null) ?? []));
   }, [pdf]);
+
+  useEffect(() => {
+    let current = true;
+    setFiles({ files: [], more: false });
+    // A PDF whose attachment list can't be read is still a PDF to read: it just gets no Files tab.
+    firstAttachments(pdf).then(found => { if (current) setFiles(found); }, () => {});
+    return () => { current = false; };
+  }, [pdf]);
+
+  // Most PDFs carry no files, so the tab is there only for the ones that do.
+  const tab = chosenTab === "files" && !files.length ? "pages" : chosenTab;
 
   // The thumbnail menu opens the organizer with its change already made, so Undo can take it back.
   const organize = (pages?: number[], action?: PageAction) => {
@@ -60,7 +77,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
   );
   return (
     <aside className={`sidebar tab-${tab}`}>
-      <div className="sidebar-tabs" role="tablist">
+      <div className={`sidebar-tabs ${files.length ? "with-files" : ""}`} role="tablist">
         <button role="tab" aria-selected={tab === "pages"} className={tab === "pages" ? "on" : ""} onClick={() => setTab("pages")}>
           Pages
         </button>
@@ -70,6 +87,11 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
         <button role="tab" aria-selected={tab === "notes"} className={tab === "notes" ? "on" : ""} onClick={() => setTab("notes")}>
           Notes{noteCount > 0 && <span className="tab-count">{noteCount}</span>}
         </button>
+        {files.length > 0 && (
+          <button role="tab" aria-selected={tab === "files"} className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>
+            Files
+          </button>
+        )}
       </div>
       {tab === "pages" && (
         <button type="button" className="bookmark-filter" aria-pressed={bookmarkedOnly} disabled={bookmarkedPages === null}
@@ -80,6 +102,23 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
       <div className="sidebar-scroll">
         {tab === "notes" ? (
           notes
+        ) : tab === "files" ? (
+          <ul className="attachments" aria-label="Attached files">
+            {files.map(file => (
+              <li key={file.id}>
+                <Icon name="file" size={16} />
+                <div className="attachment-text">
+                  <span className="attachment-name" title={file.name}>{file.name}</span>
+                  {file.description && <span className="attachment-description">{file.description}</span>}
+                </div>
+                <button className="icon-btn" disabled={savingAttachment} onClick={() => onSaveAttachment(file)}
+                  aria-label={`Save ${file.name}`} title={`Save ${file.name}`}>
+                  <Icon name="download" size={15} />
+                </button>
+              </li>
+            ))}
+            {moreFiles && <li className="attachments-more">Only the first {MAX_ATTACHMENTS} files are listed.</li>}
+          </ul>
         ) : tab === "pages" ? (
           <Thumbnails pdf={pdf} page={page} rotation={rotation}
             onSelect={onSelectPage} onExportPages={onExportPages} onOrganize={organize}
@@ -97,7 +136,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
           </ul>
         )}
       </div>
-      {tab !== "notes" && pdf.numPages > 1 && (
+      {tab !== "notes" && tab !== "files" && pdf.numPages > 1 && (
         <div className="organize-actions">
           <button className="link small" onClick={() => organize()}>
             <Icon name="grid" size={14} /> Organize pages
