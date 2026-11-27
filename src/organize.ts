@@ -1,5 +1,5 @@
 /** A page of the organized copy. */
-export interface DraftPage { page: number }
+export interface DraftPage { page: number; rotation?: number }
 
 export interface PageDraft {
   pages: DraftPage[];
@@ -15,7 +15,7 @@ export const startDraft = (count: number): PageDraft =>
   ({ pages: Array.from({ length: count }, (_, i) => ({ page: i + 1 })), undo: [], redo: [] });
 
 export const draftChanged = (draft: PageDraft, count: number) =>
-  draft.pages.length !== count || draft.pages.some((p, i) => p.page !== i + 1);
+  draft.pages.length !== count || draft.pages.some((p, i) => p.page !== i + 1 || !!p.rotation);
 
 export const withPages = (draft: PageDraft, pages: DraftPage[]): PageDraft =>
   ({ pages, undo: [...draft.undo, draft.pages], redo: [] });
@@ -26,6 +26,10 @@ export function stepDraft(draft: PageDraft, back: boolean): PageDraft {
   if (!pages) return draft;
   return back ? { pages, undo: draft.undo.slice(0, -1), redo: [...draft.redo, draft.pages] }
     : { pages, undo: [...draft.undo, draft.pages], redo: draft.redo.slice(0, -1) };
+}
+
+export function rotatePages(pages: DraftPage[], keys: ReadonlySet<string>, degrees: number) {
+  return pages.map(p => keys.has(pageKey(p)) ? { ...p, rotation: ((p.rotation ?? 0) + degrees + 360) % 360 } : p);
 }
 
 /** Moves one page to a zero-based position; null when nothing would change. */

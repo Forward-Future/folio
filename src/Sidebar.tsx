@@ -2,7 +2,7 @@ import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
 import { Icon } from "./icons";
-import { deletePages, draftChanged, movePage, pageKey, startDraft, stepDraft, withPages, type DraftPage, type PageDraft } from "./organize";
+import { deletePages, draftChanged, movePage, pageKey, rotatePages, startDraft, stepDraft, withPages, type DraftPage, type PageDraft } from "./organize";
 import { IS_MAC, keys } from "./platform";
 import { anchoredScrollTop, loadPageSizes, rowAt, thumbLayout, THUMB_ROW_EXTRA, type PageSize } from "./thumbnails";
 
@@ -27,7 +27,7 @@ interface Props {
 
 export type SidebarTab = "pages" | "outline" | "notes";
 
-type PageAction = "delete";
+type PageAction = "delete" | "left" | "right";
 
 export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft, onDraft, onSaveDraft, onOpenCopy, onExportPages,
   tab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
@@ -49,6 +49,8 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
       const result = deletePages(start.pages, new Set(pick));
       next = withPages(start, result.pages);
       pick = [pageKey(result.next)];
+    } else if (pick && (action === "left" || action === "right")) {
+      next = withPages(start, rotatePages(start.pages, new Set(pick), action === "left" ? -90 : 90));
     }
     setOrganizerPick(pick);
     onDraft(next);
@@ -97,7 +99,7 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
           </ul>
         )}
       </div>
-      {tab !== "notes" && pdf.numPages > 1 && (
+      {tab !== "notes" && (
         <div className="organize-actions">
           <button className="link small" onClick={() => organize()}>
             <Icon name="grid" size={14} /> Organize pages
@@ -144,7 +146,7 @@ interface ThumbnailProps {
 }
 
 /** A row of the thumbnail list: which page it shows, and its key in the organizer's draft. */
-interface ThumbRow { key: string; page: number }
+interface ThumbRow extends DraftPage { key: string }
 
 // Ctrl-click (⌘-click on macOS) toggles a page, Shift-click selects the range from the anchor.
 // Returns null for a plain click, which selects just that page.
@@ -188,7 +190,7 @@ function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, 
     focus();
     return () => cancelAnimationFrame(frame);
   }, []);
-  const rows = useMemo(() => draft.pages.map((p): ThumbRow => ({ key: pageKey(p), page: p.page })), [draft.pages]);
+  const rows = useMemo(() => draft.pages.map((p): ThumbRow => ({ ...p, key: pageKey(p) })), [draft.pages]);
   const rowKeys = useMemo(() => rows.map(row => row.key), [rows]);
   const selected = useMemo(() => rowKeys.filter(key => picked.has(key)), [rowKeys, picked]);
   const activeKey = anchor !== null && picked.has(anchor) && rowKeys.includes(anchor) ? anchor : selected[0];
@@ -266,6 +268,10 @@ function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, 
         <strong>Organize pages</strong>
         <p>Drag a page to move it. {keys("Ctrl")}-click or Shift-click to select several pages. Save the result as a new PDF.</p>
         <div className="organize-tools" role="toolbar" aria-label="Page tools">
+          <button className="pill-btn" disabled={saving || !selected.length} title="Rotate left" aria-label="Rotate left"
+            onClick={() => change(rotatePages(draft.pages, new Set(selected), -90))}><Icon name="rotateLeft" size={16} /></button>
+          <button className="pill-btn" disabled={saving || !selected.length} title="Rotate right" aria-label="Rotate right"
+            onClick={() => change(rotatePages(draft.pages, new Set(selected), 90))}><Icon name="rotate" size={16} /></button>
           <button className="pill-btn" onClick={remove} disabled={!canDelete}
             aria-label={selected.length > 1 ? `Delete ${selected.length} pages` : "Delete page"} title="Delete (Delete)">
             <Icon name="trash" size={16} />
@@ -341,6 +347,8 @@ function PageMenu({ target, count, all, onExport, onOrganize, onClose }: {
       const at = items.indexOf(document.activeElement as HTMLButtonElement);
       items[(at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
     }}>
+      <button role="menuitem" onClick={run(() => onOrganize("left"))}><Icon name="rotateLeft" size={16} />Rotate left</button>
+      <button role="menuitem" onClick={run(() => onOrganize("right"))}><Icon name="rotate" size={16} />Rotate right</button>
       <button role="menuitem" onClick={run(() => onOrganize("delete"))} disabled={all}
         title={all ? "A PDF needs at least one page." : undefined}>
         <Icon name="trash" size={16} />{count === 1 ? "Delete page" : `Delete ${count} pages`}
@@ -418,7 +426,14 @@ function Thumbnails({ pdf, page, rotation, onSelect, rows, activeKey, picks, onM
   pagesRef.current = pages;
   const loaderRef = useRef<ReturnType<typeof loadPageSizes> | null>(null);
   // Filtering or reordering changes which page belongs in a row, but keeps the scale of the full document.
-  const layout = useMemo(() => thumbLayout(sizes, pdf.numPages, rotation, pages), [sizes, pdf, rotation, pages]);
+  const layout = useMemo(() => {
+    if (!rows) return thumbLayout(sizes, pdf.numPages, rotation, pages);
+    const rowSizes = rows.map(row => {
+      const size = sizes?.[row.page - 1];
+      return size && (row.rotation ?? 0) % 180 ? { width: size.height, height: size.width } : size;
+    });
+    return thumbLayout(rowSizes, rows.length, rotation);
+  }, [sizes, pdf, rotation, pages, rows]);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const activeIndex = rows ? Math.max(0, rowKeys.indexOf(activeKey!)) : pages ? Math.max(0, pages.indexOf(page)) : page - 1;
@@ -553,7 +568,7 @@ function Thumbnails({ pdf, page, rotation, onSelect, rows, activeKey, picks, onM
         const index = range.start + i;
         const n = pages?.[index] ?? index + 1;
         const key = rowKeys[index];
-        return <Thumb key={`${key}-${rotation}`} pdf={pdf} n={n} rowKey={key} size={layout.frames[index]} rotation={rotation}
+        return <Thumb key={`${key}-${rotation}`} pdf={pdf} n={n} rowKey={key} size={layout.frames[index]} rotation={rotation + (rows?.[index].rotation ?? 0)}
           active={rows ? key === activeKey : page === n}
           selected={onExportPages || picks ? selected.has(key) : undefined} showSelection={!!picks || picked !== null || !!menu}
           bookmarked={bookmarkedPages?.includes(n)} onToggleBookmark={onToggleBookmark}
