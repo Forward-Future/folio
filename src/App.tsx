@@ -48,7 +48,7 @@ import { SettingsDialog } from "./SettingsDialog";
 import { ChangelogDialog } from "./ChangelogDialog";
 import { PrintDialog } from "./PrintDialog";
 import type { Release } from "./releaseNotes";
-import { detectSignatureTargets, placeSignature, rememberSignature, uncoveredTargets, type SignatureImage, type SignatureTarget } from "./signatures";
+import { detectSignatureTargets, enableSignatureEditing, placeSignature, rememberSignature, uncoveredTargets, type SignatureImage, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
 import { useOcrSearchRefresh } from "./hooks/ocr";
 import { OcrSession, copyWithText, savedMessage } from "./lib/ocr";
@@ -233,6 +233,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const editRevision = useRef(0);
   const markDirty = useCallback(() => { editRevision.current++; setDirty(true); }, []);
   const [contentEditing, setContentEditing] = useState(false);
+  const contentEditingRef = useRef(false);
+  contentEditingRef.current = contentEditing;
   const contentRef = useRef<ContentEditorHandle>(null);
   const imageFile = useRef<HTMLInputElement>(null);
   const imageLoad = useRef(0);
@@ -370,6 +372,12 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     trackPageImages(eventBus);
     const stopDrawingPointer = keepDrawingPointer(container);
     const stopTextClickAway = finishTextOnClickAway(container, viewer, eventBus);
+    const stopSignatureEditing = enableSignatureEditing(container, viewer, eventBus, {
+      isBusy: () => placingSignature.current,
+      isContentEditing: () => contentEditingRef.current,
+      onSelectStart: () => { setHighlightMenu(null); setImageMenu(null); setPinned(null); },
+      onStampChanged: markDirty,
+    });
     linkService.setViewer(viewer);
     const history = new LinkHistory(viewer, (state, followed) => {
       setNavigation(state);
@@ -443,7 +451,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       });
     };
     container.addEventListener("wheel", onWheel, { passive: false });
-    return () => { stopTextClickAway(); stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
+    return () => { stopSignatureEditing(); stopTextClickAway(); stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
   }, [tabs, tabKey]);
 
   useEffect(() => {
@@ -879,7 +887,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (toolRef.current !== "select" || e.button !== 0) return;
       const current = document.getSelection();
       if (current && !current.isCollapsed) return;
-      if ((e.target as HTMLElement).closest("a, .annotationCommentButton, .folio-content-layer")) return;
+      if ((e.target as HTMLElement).closest("a, .annotationCommentButton, .folio-content-layer, .stampEditor")) return;
       const hit = markupRef.current?.markAt(e.clientX, e.clientY);
       if (!hit) return setHighlightMenu(null);
       const stage = container.parentElement!.getBoundingClientRect();
@@ -903,7 +911,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     if (!container) return;
     const onClick = (e: MouseEvent) => {
       setImageMenu(null);
-      if ((e.target as Element).closest(".folio-content-layer")) return;
+      if ((e.target as Element).closest(".folio-content-layer, .stampEditor")) return;
       if (toolRef.current !== "select" || e.button !== 0) return;
       const current = document.getSelection();
       if (current && !current.isCollapsed) return;
@@ -1353,6 +1361,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         else if (noteBox) setNoteBox(null);
         else if (searchOpen) setSearchOpen(false);
         else if (contentRef.current?.deselect()) return;
+        else if (Number(viewerRef.current?.annotationEditorMode) === AnnotationEditorType.STAMP) {
+          viewerRef.current!.annotationEditorMode = { mode: AnnotationEditorType.NONE };
+        }
         else if (contentEditing || tool !== "select") void leaveEditMode();
         else if (focus) toggleFocus();
       } else if (e.key === "f" || e.key === "F") {

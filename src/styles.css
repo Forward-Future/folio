@@ -569,6 +569,7 @@ kbd {
 
 .viewer-container {
   position: absolute;
+  isolation: isolate;
   inset: 0;
   overflow: auto;
   outline: none;
@@ -1422,6 +1423,30 @@ kbd {
 .signature-photo { overflow: hidden; border: 1px solid var(--line-strong); border-radius: 10px; background: white; }
 .signature-crop canvas { display: block; max-width: 100%; max-height: 240px; margin: auto; touch-action: none; cursor: crosshair; }
 .annotationEditorLayer.inkEditing { touch-action: none; }
+/* Placed signatures stay clickable in Select mode (outside Edit mode) so readers can move, resize, or remove them. */
+.app:not([data-content-edit]) .annotationEditorLayer.disabled.nonEditing .stampEditor {
+  pointer-events: auto;
+  cursor: grab;
+}
+/* Reset the 100px layer font-size inherited by button { font: inherit } so toolbar icons stay centered inside their buttons. */
+.annotationEditorLayer .editToolbar {
+  font-size: 13px;
+  line-height: 1;
+  --editor-toolbar-bg-color: var(--surface);
+  --editor-toolbar-fg-color: var(--text);
+  --editor-toolbar-border-color: var(--line-strong);
+  --editor-toolbar-hover-bg-color: var(--hover);
+  --editor-toolbar-hover-fg-color: var(--text);
+}
+.annotationEditorLayer .editToolbar .buttons button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Folio doesn't use pdf.js's alt-text dialog, so keep only the working Delete button on the stamp toolbar. */
+.annotationEditorLayer .stampEditor .editToolbar :is(.altText, .altText + .divider) {
+  display: none;
+}
 .signature-range { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-2); font-size: 11px; }
 .signature-range input { min-width: 0; width: 52%; accent-color: var(--accent); }
 .signature-use { width: 100%; }
