@@ -197,12 +197,26 @@ export function enableSignatureEditing(
     }
   };
 
+  // After undoing a deleted stamp in Select mode, pdf.js finishes decoding the bitmap and calls
+  // div.focus(), which would otherwise leave a stamp selected with live resizers while mode is NONE.
+  const onFocusIn = (event: FocusEvent) => {
+    if (options.isBusy() || Number(viewer.annotationEditorMode) !== AnnotationEditorType.NONE) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !container.contains(target)) return;
+    if (target.closest(".stampEditor")) {
+      event.stopPropagation();
+      target.blur();
+    }
+  };
+
+  container.addEventListener("focusin", onFocusIn, true);
   document.addEventListener("pointerdown", onPointerDown, true);
   eventBus.on("editingstateschanged", onEditingStatesChanged);
   eventBus.on("editingaction", onEditingAction);
   eventBus.on("annotationeditormodechanged", onModeChanged);
   return () => {
     toolbarObserver.disconnect();
+    container.removeEventListener("focusin", onFocusIn, true);
     document.removeEventListener("pointerdown", onPointerDown, true);
     eventBus.off("editingstateschanged", onEditingStatesChanged);
     eventBus.off("editingaction", onEditingAction);

@@ -320,8 +320,9 @@ try {
   assert.equal(await page.locator(".stampEditor.selectedEditor").count(), 0);
   await page.keyboard.press("ControlOrMeta+z");
   await page.waitForFunction((n) => document.querySelectorAll(".annotationEditorLayer .stampEditor canvas").length === n, initialStamps);
+  assert.equal(await page.locator(".stampEditor.selectedEditor").count(), 0);
 
-  const restoredBox = await stamps.last().boundingBox();
+  const restoredBox = await stamps.first().boundingBox();
   await page.mouse.click(restoredBox.x + restoredBox.width / 2, restoredBox.y + restoredBox.height / 2);
   await page.locator(".stampEditor.selectedEditor").waitFor();
   await removeSignature.waitFor();
@@ -329,6 +330,7 @@ try {
   await page.waitForFunction((n) => document.querySelectorAll(".annotationEditorLayer .stampEditor").length === n, initialStamps - 1);
   await page.keyboard.press("ControlOrMeta+z");
   await page.waitForFunction((n) => document.querySelectorAll(".annotationEditorLayer .stampEditor canvas").length === n, initialStamps);
+  assert.equal(await page.locator(".stampEditor.selectedEditor").count(), 0);
 
   const boxForEscape = await stamps.first().boundingBox();
   await page.mouse.click(boxForEscape.x + boxForEscape.width / 2, boxForEscape.y + boxForEscape.height / 2);

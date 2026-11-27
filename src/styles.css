@@ -563,6 +563,7 @@ kbd {
 .stage {
   flex: 1;
   position: relative;
+  isolation: isolate;
   min-width: 0;
   background: var(--stage);
 }
