@@ -563,13 +563,13 @@ kbd {
 .stage {
   flex: 1;
   position: relative;
-  isolation: isolate;
   min-width: 0;
   background: var(--stage);
 }
 
 .viewer-container {
   position: absolute;
+  isolation: isolate;
   inset: 0;
   overflow: auto;
   outline: none;

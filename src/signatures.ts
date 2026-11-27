@@ -133,12 +133,12 @@ export function enableSignatureEditing(
     }
   };
   const toolbarObserver = new MutationObserver(labelDeleteButtons);
-  toolbarObserver.observe(container, { childList: true, subtree: true });
 
   const finish = () => {
     if (!tracked) return;
     tracked = false;
     hasSelected = false;
+    toolbarObserver.disconnect();
     checkChanged();
     if (Number(viewer.annotationEditorMode) === AnnotationEditorType.STAMP && !options.isBusy()) {
       viewer.annotationEditorMode = { mode: AnnotationEditorType.NONE };
@@ -161,6 +161,7 @@ export function enableSignatureEditing(
       tracked = true;
       hasSelected = false;
       snapshot = stampSnapshot();
+      toolbarObserver.observe(container, { childList: true, subtree: true });
       (viewer as unknown as { annotationEditorMode: { mode: number; editId?: string } }).annotationEditorMode = {
         mode: AnnotationEditorType.STAMP,
         editId: stamp.id,
@@ -193,6 +194,7 @@ export function enableSignatureEditing(
     if (mode !== AnnotationEditorType.STAMP && tracked) {
       tracked = false;
       hasSelected = false;
+      toolbarObserver.disconnect();
       checkChanged();
     }
   };
