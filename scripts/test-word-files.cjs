@@ -76,7 +76,9 @@ test("resolvePath falls back to JS realpath only on Windows UNKNOWN errors", asy
   assert.equal(await resolvePath(file), expected);
 
   const unknown = () => Promise.reject(Object.assign(new Error("UNKNOWN: unknown error, realpath"), { code: "UNKNOWN" }));
-  assert.equal(await resolvePath(file, { platform: "win32", native: unknown }), expected);
+  const fallback = await resolvePath(file, { platform: "win32", native: unknown });
+  assert.equal(fallback, require("node:fs").realpathSync(file));
+  assert.equal((await readRegular(fallback)).toString("utf8"), "%PDF-1.4\n");
   await assert.rejects(resolvePath(file, { platform: "darwin", native: unknown }), { code: "UNKNOWN" });
   await assert.rejects(resolvePath(file, { platform: "linux", native: unknown }), { code: "UNKNOWN" });
 
