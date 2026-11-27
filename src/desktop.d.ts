@@ -16,6 +16,8 @@ interface FolioDesktop {
   onConverting(callback: (name: string, token: string) => void): () => void;
   onOpenFailed(callback: (message: string, token: string) => void): () => void;
   onTabCommand(callback: (command: "new" | "close" | "next" | "previous") => void): () => void;
+  onMenuCommand(callback: (command: "print") => void): () => void;
+  setCanPrint(enabled: boolean): void;
   openDocument(file: File): Promise<{ name: string; data: Uint8Array; note?: string }>;
   ready(): Promise<boolean>;
   /** Null when the user declines to open an address on their computer or local network, or the request is stopped. */

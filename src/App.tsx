@@ -1377,6 +1377,14 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  const menuCommandRef = useRef<(command: "print") => void>(() => {});
+  menuCommandRef.current = (command) => {
+    if (tabs.active !== tabKey || command !== "print" || !docRef.current) return;
+    if (signing || dialog || pending || imageView || printCopy || document.querySelector('[aria-modal="true"]')) return;
+    void print();
+  };
+  useEffect(() => window.folioDesktop?.onMenuCommand?.((command) => menuCommandRef.current(command)), []);
+
   // ── Drag & drop anywhere ────────────────────────────────────────────
   useEffect(() => {
     let depth = 0;

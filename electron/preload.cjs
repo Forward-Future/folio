@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld("folioDesktop", {
     ipcRenderer.on("folio:tab-command", listener);
     return () => ipcRenderer.removeListener("folio:tab-command", listener);
   },
+  onMenuCommand(callback) {
+    const listener = (_e, command) => callback(command);
+    ipcRenderer.on("folio:menu-command", listener);
+    return () => ipcRenderer.removeListener("folio:menu-command", listener);
+  },
+  setCanPrint: (enabled) => ipcRenderer.send("folio:can-print", !!enabled),
   /** Returns the converted PDF to the tab that opened the Word document. */
   openDocument: (file) => ipcRenderer.invoke("folio:open-document", webUtils.getPathForFile(file)),
   ready: () => ipcRenderer.invoke("folio:ready"),
