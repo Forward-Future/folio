@@ -132,6 +132,8 @@ export function enableSignatureEditing(
       if (!button.title) button.title = "Remove signature";
     }
   };
+  const toolbarObserver = new MutationObserver(labelDeleteButtons);
+  toolbarObserver.observe(container, { childList: true, subtree: true });
 
   const finish = () => {
     if (!tracked) return;
@@ -150,7 +152,7 @@ export function enableSignatureEditing(
     const mode = Number(viewer.annotationEditorMode);
 
     if (mode === AnnotationEditorType.NONE) {
-      if (options.isContentEditing() || !container.contains(target)) return;
+      if (options.isContentEditing() || !container.contains(target) || target.closest(".editToolbar")) return;
       const stamp = target.closest<HTMLElement>(".stampEditor");
       if (!stamp?.id) return;
       event.stopPropagation();
@@ -176,7 +178,7 @@ export function enableSignatureEditing(
     checkChanged();
     if (details?.hasSelectedEditor) {
       hasSelected = true;
-      requestAnimationFrame(labelDeleteButtons);
+      labelDeleteButtons();
     } else if (hasSelected && details?.hasSelectedEditor === false) {
       finish();
     }
@@ -200,6 +202,7 @@ export function enableSignatureEditing(
   eventBus.on("editingaction", onEditingAction);
   eventBus.on("annotationeditormodechanged", onModeChanged);
   return () => {
+    toolbarObserver.disconnect();
     document.removeEventListener("pointerdown", onPointerDown, true);
     eventBus.off("editingstateschanged", onEditingStatesChanged);
     eventBus.off("editingaction", onEditingAction);
