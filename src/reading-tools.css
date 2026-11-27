@@ -354,6 +354,10 @@
 .ai-card.ai-welcome {
   border-color: var(--accent-soft);
 }
+.ai-card > .link.small {
+  margin-top: 8px;
+  padding-left: 0;
+}
 .ai-card-actions {
   display: flex;
   gap: 8px;
@@ -595,7 +599,8 @@
   color: var(--text-3);
 }
 .ai-meta select {
-  max-width: 130px;
+  max-width: 185px;
+  min-width: 0;
   font: inherit;
   font-size: 11.5px;
   color: var(--text-2);
@@ -896,6 +901,7 @@
 }
 .ai-head .ai-provider { height: 27px; font-size: 12px; }
 .settings-hint { color: var(--text-2); font-size: 12.5px; line-height: 1.5; margin: 9px 0; }
+.settings-hint a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
 .router-settings label { font-size: 13.5px; }
 .router-settings .settings-label small { overflow-wrap: anywhere; }
 .router-settings .btn { height: 32px; padding: 0 12px; font-size: 12.5px; }
