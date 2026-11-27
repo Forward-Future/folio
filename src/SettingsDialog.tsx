@@ -1,7 +1,7 @@
 import { clearRecognizedText } from "./recent";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Modal } from "./Dialogs";
-import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
+import { AGY_URL, CLAUDE_CODE_URL, PROVIDERS, savedGeminiMode, savedProvider, saveAiPreference, signInChatGPT, subscribeAiPreferences, USAGE_URL, type AiProvider } from "./ai";
 import { OpenRouterSettings } from "./OpenRouterSettings";
 import { GeminiSettings } from "./GeminiSettings";
 import { CustomEndpointSettings } from "./CustomEndpointSettings";
@@ -179,6 +179,7 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
   // Ask AI
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [provider, setProvider] = useState(savedProvider);
+  const geminiMode = useSyncExternalStore(subscribeAiPreferences, savedGeminiMode);
   const [signingIn, setSigningIn] = useState(false);
   useEffect(() => {
     if (section !== "Ask AI") return;
@@ -256,8 +257,23 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
             >
               <button className="btn ghost" disabled={!aiStatus} onClick={async () => setAiStatus({ ...aiStatus!, claude: await ai!.recheckClaude() })}>Check again</button>
             </Row>}
-            {provider === "gemini" && (aiStatus ? <GeminiSettings ai={ai} configured={!!aiStatus.gemini?.configured}
-              onConfigured={configured => setAiStatus({ ...aiStatus, gemini: { configured } })} /> : <p className="settings-hint">Checking connection…</p>)}
+            {provider === "gemini" && <>
+              <Row label="Connection">
+                <Choice label="Gemini connection" value={geminiMode} onChange={next => { setError(null); saveAiPreference("folio:ai-gemini-mode", next); }}
+                  options={[{ id: "agy", name: "Antigravity" }, { id: "api", name: "API key" }]} />
+              </Row>
+              {geminiMode === "agy" ? <Row
+                label="Antigravity"
+                hint={!aiStatus ? "Checking…" : !aiStatus.agy?.installed
+                  ? <>Uses your Google AI subscription through <a href={AGY_URL} target="_blank" rel="noreferrer">Antigravity CLI</a> (<code>agy</code>). Install it and sign in once.</>
+                  : aiStatus.agy.loggedIn
+                    ? `${`Antigravity CLI ${aiStatus.agy.version ?? ""}`.trim()} is signed in.`
+                    : "Antigravity CLI is installed but not signed in. Run agy in a terminal and sign in."}
+              >
+                <button className="btn ghost" disabled={!aiStatus} onClick={async () => setAiStatus({ ...aiStatus!, agy: await ai!.recheckAgy() })}>Check again</button>
+              </Row> : (aiStatus ? <GeminiSettings ai={ai} configured={!!aiStatus.gemini?.configured}
+                onConfigured={configured => setAiStatus({ ...aiStatus, gemini: { configured } })} /> : <p className="settings-hint">Checking connection…</p>)}
+            </>}
             {provider === "openrouter" && (aiStatus ? <OpenRouterSettings ai={ai} configured={!!aiStatus.openrouter?.configured}
               onConfigured={configured => setAiStatus({ ...aiStatus, openrouter: { configured } })} /> : <p className="settings-hint">Checking connection…</p>)}
             {provider === "custom" && (aiStatus ? <CustomEndpointSettings ai={ai} status={aiStatus.custom}

@@ -51,10 +51,22 @@ export async function checkGemini(app, page) {
     if (!(await panel.count())) await page.getByRole("button", { name: "Ask AI", exact: true }).click();
     const provider = panel.getByRole("combobox", { name: "AI provider" });
     await provider.selectOption("gemini");
-    await panel.getByRole("heading", { name: "Connect Gemini" }).waitFor();
-    await panel.getByRole("button", { name: "Open Ask AI settings" }).click();
+    // Gemini defaults to Antigravity subscription; switch to API key mode through Settings.
+    const agySetup = panel.getByRole("button", { name: "Or use a Gemini API key" });
+    if (await agySetup.count()) {
+      await agySetup.click();
+    } else {
+      await panel.getByText("Using Antigravity").waitFor();
+      await page.getByRole("button", { name: "More" }).click();
+      await page.getByRole("menuitem", { name: /Settings/ }).click();
+    }
     const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings.waitFor();
+    await settings.getByRole("button", { name: "Ask AI", exact: true }).click();
     assert.equal(await settings.getByRole("button", { name: "Ask AI", exact: true }).getAttribute("aria-current"), "page");
+    await settings.getByRole("radio", { name: "Antigravity" }).click();
+    await settings.getByRole("button", { name: "Check again" }).waitFor();
+    await settings.getByRole("radio", { name: "API key" }).click();
     assert.deepEqual(await app.evaluate(() => globalThis.geminiTest.calls), []);
     await settings.getByLabel("API key", { exact: true }).fill("fixture-only-gemini-key");
     await settings.getByRole("button", { name: "Verify and save" }).click();
@@ -90,9 +102,10 @@ export async function checkGemini(app, page) {
     await settings.getByRole("button", { name: "Manage key" }).click();
     await settings.getByRole("button", { name: "Remove saved key" }).click();
     await settings.getByLabel("API key", { exact: true }).waitFor();
+    await settings.getByRole("radio", { name: "Antigravity" }).click();
     await settings.getByLabel("Ask AI provider").selectOption("chatgpt");
     await settings.getByRole("button", { name: "Close" }).click();
     await page.getByRole("tablist", { name: "Open documents" }).getByRole("button", { name: "Close Observatory log.pdf" }).click();
-    console.log("ok  Gemini setup, models, streaming, citations, Stop, provider switching and key removal");
+    console.log("ok  Gemini (Antigravity + API key) setup, models, streaming, citations, Stop, provider switching and key removal");
   } finally { await app.evaluate(() => { globalThis.geminiTest.restore(); delete globalThis.geminiTest; }); }
 }

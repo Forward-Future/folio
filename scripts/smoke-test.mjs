@@ -1044,16 +1044,41 @@ try {
     const ai = globalThis.folioAi = { asked: [], cancelled: [], reply: "" };
     for (const channel of ["folio:ai-status", "folio:ai-ask", "folio:ai-cancel"]) ipcMain.removeHandler(channel);
     ipcMain.handle("folio:ai-status", () => ({ chatgpt: { connected: false, email: "", name: "", welcomeSeen: true, encrypted: true },
-      claude: { installed: true, loggedIn: true, subscription: true, version: "test", authMethod: "claude.ai" } }));
+      claude: { installed: true, loggedIn: true, subscription: true, version: "test", authMethod: "claude.ai" },
+      agy: { installed: true, loggedIn: true, version: "1.5.18", models: [
+        { id: "gemini-4-neon-high", name: "Gemini 4 Neon (High)" },
+        { id: "gemini-3.8-flash-medium", name: "Gemini 3.8 Flash (Medium)" },
+      ] } }));
     ipcMain.handle("folio:ai-ask", (_event, request) => {
       ai.asked.push(request.id);
+      ai.lastRequest = request;
       if (ai.reply) BrowserWindow.getAllWindows()[0].webContents.send("folio:ai-event", { id: request.id, type: "delta", text: ai.reply });
+      if (ai.finish) BrowserWindow.getAllWindows()[0].webContents.send("folio:ai-event", { id: request.id, type: "done" });
       return true;
     });
     ipcMain.handle("folio:ai-cancel", (_event, id) => { ai.cancelled.push(id); return true; });
   });
-  await page.evaluate(() => localStorage.setItem("folio:ai-provider", "claude"));
+  // Verify Gemini's Antigravity subscription flow (model selector + streaming ask) on all platforms.
+  await page.evaluate(() => {
+    localStorage.setItem("folio:ai-provider", "gemini");
+    localStorage.setItem("folio:ai-gemini-mode", "agy");
+  });
   const aiPanel = page.getByRole("complementary", { name: "Ask AI" });
+  await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+  await aiPanel.getByText("Using Antigravity").waitFor();
+  await aiPanel.getByLabel("Model").selectOption("gemini-4-neon-high");
+  await app.evaluate(() => { globalThis.folioAi.reply = "Answered via Antigravity (p. 1)."; globalThis.folioAi.finish = true; });
+  await aiPanel.getByRole("textbox").fill("Check Antigravity");
+  await aiPanel.getByRole("textbox").press("Enter");
+  await aiPanel.getByText("Answered via Antigravity").waitFor();
+  const agyReq = await app.evaluate(() => globalThis.folioAi.lastRequest);
+  assert.equal(agyReq.provider, "agy");
+  assert.equal(agyReq.model, "gemini-4-neon-high");
+  await app.evaluate(() => { globalThis.folioAi.finish = false; globalThis.folioAi.asked = []; globalThis.folioAi.cancelled = []; });
+  await aiPanel.getByRole("button", { name: "Close Ask AI" }).click();
+  console.log("ok  Antigravity subscription mode selects models and streams answers through agy");
+
+  await page.evaluate(() => localStorage.setItem("folio:ai-provider", "claude"));
   const askAndClose = async (question, reply) => {
     const asked = await app.evaluate((_electron, reply) => { globalThis.folioAi.reply = reply; return globalThis.folioAi.asked.length; }, reply);
     await aiPanel.getByRole("textbox").fill(question);

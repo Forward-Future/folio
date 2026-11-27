@@ -49,7 +49,10 @@ Folio opens untrusted PDFs, so it's built to keep a malicious document contained
   with Electron `safeStorage` (Windows DPAPI, the macOS Keychain, or the Linux secret store; kept in memory only when
   no secret store is available) and never reach the page. Claude runs the user's own, unmodified Claude
   Code CLI with all tools, MCP servers, settings, and slash commands disabled, in a private temporary folder under
-  Folio's user data. Folio never handles Claude credentials. Gemini, OpenRouter, and custom-endpoint API keys are verified and stored with OS credential protection by the main
+  Folio's user data. Folio never handles Claude credentials. Antigravity runs the user's own, unmodified `agy` CLI in a
+  private temporary folder with a no-tools agent, slash commands disabled, strict tool permissions, and deny rules
+  blocking commands, files, URLs, and MCP tools; Folio never handles Google account credentials. Gemini API, OpenRouter,
+  and custom-endpoint API keys are verified and stored with OS credential protection by the main
   process; keys are never returned to the reader. Key checks and model lookups send no document content.
   Document text goes to the chosen provider only when the user asks a question. OpenRouter forwards the request to the model's serving provider.
 

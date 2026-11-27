@@ -1,11 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./icons";
 import { copyText } from "./clipboard";
 import type { PDFDocumentProxy } from "./pdf";
 import { getAiHistory, saveAiHistory } from "./recent";
 import { ocrSession } from "./lib/ocr";
-import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, subscribeAiPreferences, USAGE_URL } from "./ai";
+import { AGY_URL, CLAUDE_CODE_URL, PROVIDERS, savedGeminiMode, savedProvider, saveAiPreference, signInChatGPT, subscribeAiPreferences, USAGE_URL } from "./ai";
 import { Modal } from "./Dialogs";
 import { readSetting } from "./preferences";
 
@@ -139,11 +139,15 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
   const ai = window.folioDesktop?.ai;
   const [status, setStatus] = useState<AiStatus | null>(null);
   const provider = useSyncExternalStore(subscribeAiPreferences, savedProvider);
+  const geminiMode = useSyncExternalStore(subscribeAiPreferences, savedGeminiMode);
+  const askProvider = provider === "gemini" && geminiMode === "agy" ? "agy" : provider;
   const keyRevision = useSyncExternalStore(subscribeAiPreferences, () => readSetting("folio:ai-key-revision"));
   const [models, setModels] = useState<{ id: string; name: string }[]>([]);
-  const modelKey = `folio:ai-model:${provider}`;
+  const agyModels = useMemo(() => [{ id: "", name: "Default model" }, ...(status?.agy?.models ?? [])], [status?.agy?.models]);
+  const modelKey = `folio:ai-model:${askProvider}`;
   const savedModel = useSyncExternalStore(subscribeAiPreferences, () => readSetting(modelKey) ?? "");
-  const model = provider === "chatgpt" && models.length && !models.some(m => m.id === savedModel) ? models[0].id : savedModel;
+  const model = askProvider === "chatgpt" && models.length && !models.some(m => m.id === savedModel) ? models[0].id
+    : askProvider === "agy" && savedModel && !agyModels.some(m => m.id === savedModel) ? "" : savedModel;
   const [messages, setMessages] = useState<Message[]>(() => conversations.get(docId)?.messages ?? []);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -227,9 +231,15 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  const connected = { chatgpt: chatgptConnected, claude: !!status?.claude.installed && status.claude.loggedIn,
-    gemini: !!status?.gemini?.configured && !!model, openrouter: !!status?.openrouter?.configured && !!model, custom: !!status?.custom?.configured && !!model };
-  const ready = loaded && connected[provider];
+  const connected = {
+    chatgpt: chatgptConnected,
+    claude: !!status?.claude.installed && status.claude.loggedIn,
+    agy: !!status?.agy?.installed && !!status.agy.loggedIn,
+    gemini: !!status?.gemini?.configured && !!model,
+    openrouter: !!status?.openrouter?.configured && !!model,
+    custom: !!status?.custom?.configured && !!model,
+  };
+  const ready = loaded && connected[askProvider];
 
   // Closing the panel, entering focus mode, or opening another document ends an answer in progress the way Stop does.
   // Otherwise it keeps running unseen, holds one of the two answers allowed at a time, and comes back never finishing.
@@ -271,12 +281,12 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
     onClearContext();
     try {
       const session = ocrSession(pdf);
-      const doc = (provider === "gemini" || provider === "openrouter" || provider === "custom") && context
+      const doc = (askProvider === "gemini" || askProvider === "openrouter" || askProvider === "custom") && context
         ? { text: "", truncated: true, recognized: !!session && (session.embedded.has(context.page) || !!session.pages.get(context.page)?.length) }
         : await documentText(pdf);
       if (preparing.current !== id) return;
       preparing.current = null;
-      await ai.ask({ id, provider, model, document: { name: docName, ...doc },
+      await ai.ask({ id, provider: askProvider, model, document: { name: docName, ...doc },
         messages: history.map(({ role, content, context }) => ({ role, content, ...(context ? { context } : {}) })) });
     } catch {
       if (busyRef.current !== id) return;
@@ -289,7 +299,7 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
         return next;
       });
     }
-  }, [ai, pdf, context, messages, provider, model, docName, onClearContext, ready]);
+  }, [ai, pdf, context, messages, askProvider, model, docName, onClearContext, ready]);
 
   const signIn = async () => {
     if (!ai) return;
@@ -352,11 +362,29 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
             </div>
             <p className="fine">Folio never sees your Claude password or tokens. When you ask, it sends your question and the document's text to Anthropic through Claude Code.</p>
           </div>
-        ) : provider === "gemini" && !connected.gemini ? (
+        ) : askProvider === "agy" && !connected.agy ? (
           <div className="ai-card">
-            <h3>Connect Gemini</h3>
+            <h3>Use your Antigravity subscription</h3>
+            {!status.agy?.installed ? (
+              <p>Folio uses the Antigravity CLI (<code>agy</code>), signed in with your Google AI or Antigravity subscription. Install it, sign in once, then check again.</p>
+            ) : (
+              <p>Antigravity CLI is installed but not signed in. Open a terminal, run <code>agy</code>, and sign in with your Google account.</p>
+            )}
+            <div className="ai-card-actions">
+              {!status.agy?.installed && <a className="btn ghost" href={AGY_URL} target="_blank" rel="noreferrer">Get Antigravity</a>}
+              <button className="btn primary" onClick={async () => setStatus({ ...status, agy: await ai.recheckAgy() })}>Check again</button>
+            </div>
+            <button className="link small" onClick={() => { saveAiPreference("folio:ai-gemini-mode", "api"); onSettings(); }}>Or use a Gemini API key</button>
+            <p className="fine">Folio never sees your Google password or tokens. When you ask, it sends your question and the document's text through the Antigravity CLI with tools blocked.</p>
+          </div>
+        ) : askProvider === "gemini" && !connected.gemini ? (
+          <div className="ai-card">
+            <h3>Connect Gemini API</h3>
             <p>{status.gemini?.configured ? "Choose a model for your questions." : "Use your own Gemini API key and choose a model in Settings."}</p>
-            <button className="btn primary" onClick={onSettings}>Open Ask AI settings</button>
+            <div className="ai-card-actions">
+              <button className="btn primary" onClick={onSettings}>Open Ask AI settings</button>
+            </div>
+            <button className="link small" onClick={() => saveAiPreference("folio:ai-gemini-mode", "agy")}>Or use your Antigravity subscription</button>
           </div>
         ) : provider === "openrouter" && !connected.openrouter ? (
           <div className="ai-card">
@@ -468,13 +496,13 @@ export function AiPanel({ pdf, docId, persist, docName, context, onClearContext,
         </form>
         {ready && (
           <div className="ai-meta">
-            {provider === "gemini" || provider === "openrouter" || provider === "custom" ? <button className="link small router-model-link" title={model} onClick={onSettings}>{model}</button> :
+            {askProvider === "gemini" || askProvider === "openrouter" || askProvider === "custom" ? <button className="link small router-model-link" title={model} onClick={onSettings}>{model}</button> :
             <select value={model} onChange={(e) => saveAiPreference(modelKey, e.target.value)} aria-label="Model">
-              {(provider === "chatgpt" ? models : CLAUDE_MODELS).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {(askProvider === "chatgpt" ? models : askProvider === "agy" ? agyModels : CLAUDE_MODELS).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>}
-            {provider === "chatgpt" ? (
+            {askProvider === "chatgpt" ? (
               <span>Using ChatGPT plan · <a href={USAGE_URL} target="_blank" rel="noreferrer">Manage usage</a></span>
-            ) : provider === "gemini" ? <span>Billed by Google</span> : provider === "openrouter" ? <span>Billed by OpenRouter</span> : provider === "custom" ? (
+            ) : askProvider === "agy" ? <span>Using Antigravity</span> : askProvider === "gemini" ? <span>Billed by Google</span> : askProvider === "openrouter" ? <span>Billed by OpenRouter</span> : askProvider === "custom" ? (
               <span title={status?.custom.baseUrl}>Sent to {status?.custom.configured ? new URL(status.custom.baseUrl).host : "your endpoint"}</span>
             ) : (
               <span>{status?.claude.subscription ? "Using your Claude subscription via Claude Code" : "Using Claude Code"}</span>

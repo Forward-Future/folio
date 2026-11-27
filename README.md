@@ -157,7 +157,8 @@ Choose **Sign** in the toolbar to add a signature.
 ### Ask AI about a document
 
 - **Choose a provider:** use your ChatGPT plan, your Claude subscription through
-  [Claude Code](https://claude.com/claude-code), your own Gemini API key, your own OpenRouter API key, or any OpenAI-compatible endpoint, such as
+  [Claude Code](https://claude.com/claude-code), your Google AI / Antigravity subscription through the
+  [Antigravity CLI](https://antigravity.google/docs/getting-started) or your own Gemini API key, your own OpenRouter API key, or any OpenAI-compatible endpoint, such as
   another provider's API or a model running on your computer.
 - **Whole-document or passage questions:** open the Ask AI panel from the toolbar, select text and choose **Ask AI**,
   or ask about an existing highlight.
@@ -279,9 +280,12 @@ Then pick a provider at the top of the panel:
   [ChatGPT settings](https://chatgpt.com/settings/usage). Sign out, or change the default provider, in Folio's **Settings**.
 - **Claude:** install [Claude Code](https://claude.com/claude-code), run `claude` once in a terminal, and sign in with
   your Claude account (Pro or Max). Then click **Check again** in Folio. Questions use your Claude subscription.
-- **Gemini:** under **Settings → Ask AI**, choose Gemini and verify your [Gemini API key](https://aistudio.google.com/apikey).
-  Search the available Gemini models or enter a model ID. Google bills your key. Reopen this section to check the connection,
-  replace the key, or remove it. For passage questions Folio sends the selected passage, page number, filename and conversation.
+- **Gemini:** use either your Google AI / Antigravity subscription through the
+  [Antigravity CLI](https://antigravity.google/docs/getting-started) (`agy`) or your own
+  [Gemini API key](https://aistudio.google.com/apikey). For Antigravity, install `agy`, sign in once in a terminal, then
+  click **Check again** in Folio and pick any model available on your plan. To use a Gemini API key instead, switch
+  **Connection** to **API key** under **Settings → Ask AI**, verify your key, and pick a model. Google bills API-key
+  usage directly. For API-key passage questions Folio sends the selected passage, page number, filename and conversation.
 - **OpenRouter:** under **Settings → Ask AI**, choose OpenRouter and verify your [OpenRouter API key](https://openrouter.ai/settings/keys).
   Search the text models or enter a model ID. OpenRouter bills your key. Reopen this section to check the connection,
   replace the key, or remove it. If a model's context is too small for a document, choose a larger model or ask about
@@ -309,14 +313,14 @@ network requests only to:
   and it's then printed to PDF), and
 - answer a question you ask in **Ask AI**. Only then, the document's text (up to about 400,000 characters), any passage
   you selected, and the conversation go to the provider you chose: OpenAI for ChatGPT, Anthropic through your
-  installed Claude Code, Google for Gemini, OpenRouter and the provider serving your chosen OpenRouter model, or the custom endpoint you
+  installed Claude Code, Google for Gemini (directly or through your installed Antigravity CLI), OpenRouter and the provider serving your chosen OpenRouter model, or the custom endpoint you
   entered. Their privacy terms apply to that data.
 
-Folio stores a Gemini key, an OpenRouter key, or a custom endpoint's key only with operating-system credential protection. If secure storage is unavailable,
+Folio stores a Gemini API key, an OpenRouter key, or a custom endpoint's key only with operating-system credential protection. If secure storage is unavailable,
 enable or unlock your system key store to connect. For ChatGPT, Folio stores its sign-in tokens in its data folder (below, under `ai`), encrypted with the system's
 credential protection (Windows data protection, the macOS Keychain, or the Linux secret store; if a Linux desktop has
-no secret store, you sign in again each time Folio starts), and never exposes them to the page. For Claude, Folio runs your own Claude Code with every tool disabled;
-it never sees or stores your Claude credentials. The question's context is written to a temporary file for Claude Code
+no secret store, you sign in again each time Folio starts), and never exposes them to the page. For Claude and Antigravity, Folio runs your own CLI with tools blocked;
+it never sees or stores your Claude or Google account credentials. The question's context is isolated in a temporary folder
 and deleted as soon as the answer finishes. Each document's Ask AI conversation is saved with it on this computer (except for password-protected documents) and
 is there when you reopen the document; the **+** button in the panel starts over and deletes it.
 
@@ -354,7 +358,7 @@ terminal has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
   custom `app://` protocol with a strict Content Security Policy, runs the page sandboxed with context isolation, opens
   PDFs from the file manager, keeps a single window, downloads links, and handles updates. `webpage.cjs` converts
   webpages to PDF. `ai.cjs` runs Ask AI (ChatGPT
-  sign-in and requests, Gemini, OpenRouter and custom endpoint keys and requests, and Claude Code). Stored credentials stay in the main process.
+  sign-in and requests, Antigravity CLI, Gemini, OpenRouter and custom endpoint keys and requests, and Claude Code). Stored credentials stay in the main process.
 - `scripts/release.mjs` and `.github/workflows/release-build.yml`: the release pipeline (see
   [CONTRIBUTING.md](CONTRIBUTING.md#releasing)). `scripts/smoke-test.mjs` is the cross-platform smoke test CI runs.
   `scripts/screenshots.mjs` retakes the Ask AI, highlights, and search screenshots at the top of this README (`npm run build`, then `node scripts/screenshots.mjs`).

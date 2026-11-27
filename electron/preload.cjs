@@ -64,6 +64,7 @@ contextBridge.exposeInMainWorld("folioDesktop", {
     chatgptWelcomeSeen: () => ipcRenderer.invoke("folio:ai-chatgpt-welcome-seen"),
     chatgptModels: () => ipcRenderer.invoke("folio:ai-chatgpt-models"),
     recheckClaude: () => ipcRenderer.invoke("folio:ai-claude-recheck"),
+    recheckAgy: () => ipcRenderer.invoke("folio:ai-agy-recheck"),
     openRouterKey: (action, key) => ipcRenderer.invoke("folio:ai-router-key", action, key),
     openRouterModels: () => ipcRenderer.invoke("folio:ai-router-models"),
     geminiKey: (action, key) => ipcRenderer.invoke("folio:ai-gemini-key", action, key),

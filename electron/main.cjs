@@ -381,7 +381,12 @@ const MAX_URL_PDF_BYTES = MAX_DOCUMENT_BYTES;
 const shortUrl = (url) => (url.href.length > 300 ? url.href.slice(0, 300) + "…" : url.href);
 
 // Folio's own links (src/ai.ts) open without asking.
-const FOLIO_LINKS = new Set(["https://chatgpt.com/settings/usage", "https://claude.com/claude-code", "https://aistudio.google.com/apikey"]);
+const FOLIO_LINKS = new Set([
+  "https://chatgpt.com/settings/usage",
+  "https://claude.com/claude-code",
+  "https://antigravity.google/docs/getting-started",
+  "https://aistudio.google.com/apikey",
+]);
 let askingAboutLink = false;
 
 // Links open in the browser (mailto: in the mail app), never in Folio, and only once the user has seen where they go:
