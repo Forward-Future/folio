@@ -1,5 +1,10 @@
+import type { PDFDocumentProxy } from "./pdf";
+
+/** Each insertion has its own PDF identity, even when the same file is picked twice. */
+export interface InsertedPdf { name: string; pdf: PDFDocumentProxy }
+
 /** A page of the organized copy. */
-export interface DraftPage { page: number; rotation?: number }
+export interface DraftPage { page: number; rotation?: number; source?: InsertedPdf }
 
 export interface PageDraft {
   pages: DraftPage[];
@@ -9,13 +14,13 @@ export interface PageDraft {
   copy?: Uint8Array;
 }
 
-export const pageKey = (p: DraftPage) => String(p.page);
+export const pageKey = (p: DraftPage) => p.source ? p.source.pdf.loadingTask.docId + "/" + p.page : String(p.page);
 
 export const startDraft = (count: number): PageDraft =>
   ({ pages: Array.from({ length: count }, (_, i) => ({ page: i + 1 })), undo: [], redo: [] });
 
 export const draftChanged = (draft: PageDraft, count: number) =>
-  draft.pages.length !== count || draft.pages.some((p, i) => p.page !== i + 1 || !!p.rotation);
+  draft.pages.length !== count || draft.pages.some((p, i) => p.page !== i + 1 || !!p.rotation || !!p.source);
 
 export const withPages = (draft: PageDraft, pages: DraftPage[]): PageDraft =>
   ({ pages, undo: [...draft.undo, draft.pages], redo: [] });
