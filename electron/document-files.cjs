@@ -3,6 +3,9 @@ const fsp = fs.promises;
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { pipeline } = require("node:stream/promises");
+const { promisify } = require("node:util");
+
+const fallbackRealpath = promisify(fs.realpath);
 
 const MAX_DOCUMENT_BYTES = 300 * 1024 * 1024;
 const MAX_HTML_BYTES = 48 * 1024 * 1024;
@@ -48,10 +51,20 @@ function checkDiskPath(file) {
     || file.slice(2).includes(":"))) throw new Error("Choose a regular file.");
 }
 
+// On Windows WinFsp drives (such as rclone mount without --network-mode), native realpath can fail
+// with UNKNOWN even though lstat/open work. Fall back to Node's JS realpath implementation.
+async function resolvePath(file, { platform = process.platform, native = fsp.realpath, fallback = fallbackRealpath } = {}) {
+  try { return await native(file); }
+  catch (err) {
+    if (platform !== "win32" || err?.code !== "UNKNOWN") throw err;
+    return await fallback(file);
+  }
+}
+
 async function stageWord(file, source, limit = MAX_DOCUMENT_BYTES) {
   checkDiskPath(file);
   const selected = await fsp.lstat(file, { bigint: true });
-  const resolved = await fsp.realpath(file);
+  const resolved = await resolvePath(file);
   checkDiskPath(resolved);
   const folder = path.dirname(resolved);
   const directory = await fsp.stat(folder, { bigint: true });
@@ -107,4 +120,4 @@ async function rememberPdf(profile, staged, index, data) {
   } finally { await fsp.rm(temp, { force: true }); }
 }
 
-module.exports = { MAX_DOCUMENT_BYTES, MAX_HTML_BYTES, checkDiskPath, tooLarge, readRegular, stageWord, sameFile, pdfName, cachedPdf, rememberPdf };
+module.exports = { MAX_DOCUMENT_BYTES, MAX_HTML_BYTES, checkDiskPath, resolvePath, tooLarge, readRegular, stageWord, sameFile, pdfName, cachedPdf, rememberPdf };
