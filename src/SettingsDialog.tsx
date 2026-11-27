@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Modal } from "./Dialogs";
 import { CLAUDE_CODE_URL, PROVIDERS, savedProvider, saveAiPreference, signInChatGPT, USAGE_URL, type AiProvider } from "./ai";
 import { OpenRouterSettings } from "./OpenRouterSettings";
+import { GeminiSettings } from "./GeminiSettings";
 import { CustomEndpointSettings } from "./CustomEndpointSettings";
 import { updateSummary } from "./updates";
 import { readSignatures } from "./signatures";
@@ -255,6 +256,8 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
             >
               <button className="btn ghost" disabled={!aiStatus} onClick={async () => setAiStatus({ ...aiStatus!, claude: await ai!.recheckClaude() })}>Check again</button>
             </Row>}
+            {provider === "gemini" && (aiStatus ? <GeminiSettings ai={ai} configured={!!aiStatus.gemini?.configured}
+              onConfigured={configured => setAiStatus({ ...aiStatus, gemini: { configured } })} /> : <p className="settings-hint">Checking connection…</p>)}
             {provider === "openrouter" && (aiStatus ? <OpenRouterSettings ai={ai} configured={!!aiStatus.openrouter?.configured}
               onConfigured={configured => setAiStatus({ ...aiStatus, openrouter: { configured } })} /> : <p className="settings-hint">Checking connection…</p>)}
             {provider === "custom" && (aiStatus ? <CustomEndpointSettings ai={ai} status={aiStatus.custom}

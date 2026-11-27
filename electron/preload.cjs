@@ -66,6 +66,8 @@ contextBridge.exposeInMainWorld("folioDesktop", {
     recheckClaude: () => ipcRenderer.invoke("folio:ai-claude-recheck"),
     openRouterKey: (action, key) => ipcRenderer.invoke("folio:ai-router-key", action, key),
     openRouterModels: () => ipcRenderer.invoke("folio:ai-router-models"),
+    geminiKey: (action, key) => ipcRenderer.invoke("folio:ai-gemini-key", action, key),
+    geminiModels: () => ipcRenderer.invoke("folio:ai-gemini-models"),
     customEndpoint: (action, input) => ipcRenderer.invoke("folio:ai-custom-endpoint", action, input),
     customModels: () => ipcRenderer.invoke("folio:ai-custom-models"),
     ask: (request) => ipcRenderer.invoke("folio:ai-ask", request),
