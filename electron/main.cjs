@@ -13,7 +13,7 @@ const { safePdfName } = require("./filenames.cjs");
 const { csp } = require("./csp.cjs");
 const { WORD_FILE, openWord } = require("./convert.cjs");
 const { registerPrinting } = require("./printing.cjs");
-const { MAX_DOCUMENT_BYTES, checkDiskPath, readRegular } = require("./document-files.cjs");
+const { MAX_DOCUMENT_BYTES, checkDiskPath, resolvePath, readRegular } = require("./document-files.cjs");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 // Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
@@ -96,7 +96,7 @@ async function sendFile(file) {
   if (WORD_FILE.test(file)) return sendWordFile(file, target);
   try {
     checkDiskPath(file);
-    const data = await readRegular(await fs.promises.realpath(file));
+    const data = await readRegular(await resolvePath(file));
     if (!target.isDestroyed()) target.webContents.send("folio:open-file", { name: path.basename(file), data });
   } catch (err) {
     dialog.showErrorBox("Couldn't open file", `${file}\n\n${err.userMessage ?? err.message}`);
