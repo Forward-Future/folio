@@ -26,9 +26,29 @@ try {
   });
   const page = readerPage(await app.firstWindow());
   const errors = []; page.on("pageerror", error => errors.push(String(error)));
+  const printMenu = () => app.evaluate(({ Menu }) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById("file-print");
+    return item ? { label: item.label, accelerator: item.accelerator, enabled: item.enabled } : null;
+  });
+  if (process.platform === "darwin") {
+    await page.getByRole("button", { name: /Try a sample/ }).waitFor({ timeout: 30000 });
+    assert.deepEqual(await printMenu(), { label: "Print…", accelerator: "CommandOrControl+P", enabled: false });
+  }
   await page.getByRole("button", { name: /Try a sample/ }).click();
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor({ timeout: 30000 });
-  await page.keyboard.press("ControlOrMeta+p");
+  if (process.platform === "darwin") {
+    assert.equal((await printMenu())?.enabled, true);
+    await page.keyboard.press("ControlOrMeta+,");
+    await page.getByRole("dialog", { name: "Settings" }).waitFor();
+    await app.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById("file-print").click());
+    await page.waitForTimeout(200);
+    assert.equal(await page.getByRole("dialog", { name: "Print", exact: true }).count(), 0);
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog", { name: "Settings" }).waitFor({ state: "hidden" });
+    await app.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById("file-print").click());
+  } else {
+    await page.keyboard.press("ControlOrMeta+p");
+  }
   await page.getByRole("dialog", { name: "Print", exact: true }).waitFor();
   await page.getByRole("tab", { name: "Advanced" }).click();
   await page.getByRole("img", { name: "Preview of sheet 1" }).waitFor();
