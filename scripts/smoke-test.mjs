@@ -282,6 +282,60 @@ try {
   await page.locator(".dirty-dot").waitFor();
   console.log("ok  saved signatures can be selected, exported together, and forgotten individually");
 
+  // Select a placed signature in Select mode: drag to move, resize, undo, delete by key and trash button, and click away to read.
+  const stamps = page.locator(".annotationEditorLayer .stampEditor");
+  const initialStamps = await stamps.count();
+  assert.ok(initialStamps >= 1, "expected placed signatures on page 1");
+  const firstStamp = stamps.first();
+  const beforeMove = await firstStamp.boundingBox();
+  await page.mouse.click(beforeMove.x + beforeMove.width / 2, beforeMove.y + beforeMove.height / 2);
+  await page.locator(".stampEditor.selectedEditor").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Select", exact: true }).getAttribute("aria-pressed"), "true");
+  const removeSignature = page.getByRole("button", { name: "Remove signature", exact: true });
+  await removeSignature.waitFor();
+  assert.equal(await page.locator(".stampEditor.selectedEditor .editToolbar .altText").isVisible(), false);
+
+  await page.mouse.move(beforeMove.x + beforeMove.width / 2, beforeMove.y + beforeMove.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(beforeMove.x + beforeMove.width / 2 + 36, beforeMove.y + beforeMove.height / 2 + 24, { steps: 5 });
+  await page.mouse.up();
+  const afterMove = await firstStamp.boundingBox();
+  assert.ok(afterMove.x > beforeMove.x + 15 && afterMove.y > beforeMove.y + 10, "signature did not move when dragged");
+
+  const handle = await firstStamp.locator(".resizer.bottomRight").boundingBox();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2 + 28, handle.y + handle.height / 2 + 16, { steps: 5 });
+  await page.mouse.up();
+  const afterResize = await firstStamp.boundingBox();
+  assert.ok(afterResize.width > afterMove.width + 10, "signature did not resize from handle");
+
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.waitForTimeout(150);
+  const afterUndoResize = await firstStamp.boundingBox();
+  assert.ok(Math.abs(afterUndoResize.width - afterMove.width) < 6, "undo did not revert signature resize");
+
+  await page.keyboard.press("Delete");
+  await page.waitForFunction((n) => document.querySelectorAll(".annotationEditorLayer .stampEditor").length === n, initialStamps - 1);
+  assert.equal(await page.locator(".stampEditor.selectedEditor").count(), 0);
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.waitForFunction((n) => document.querySelectorAll(".annotationEditorLayer .stampEditor").length === n, initialStamps);
+
+  const restoredBox = await stamps.last().boundingBox();
+  await page.mouse.click(restoredBox.x + restoredBox.width / 2, restoredBox.y + restoredBox.height / 2);
+  await removeSignature.waitFor();
+  await removeSignature.click();
+  await page.waitForFunction((n) => document.querySelectorAll(".annotationEditorLayer .stampEditor").length === n, initialStamps - 1);
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.waitForFunction((n) => document.querySelectorAll(".annotationEditorLayer .stampEditor").length === n, initialStamps);
+
+  const boxForEscape = await stamps.first().boundingBox();
+  await page.mouse.click(boxForEscape.x + boxForEscape.width / 2, boxForEscape.y + boxForEscape.height / 2);
+  await page.locator(".stampEditor.selectedEditor").waitFor();
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator(".stampEditor.selectedEditor").count(), 0);
+  console.log("ok  placed signatures can be selected, moved, resized, undone, and removed from Select mode");
+
   // Stub the PDF viewer handoff in this renderer so printing cannot open a system dialog.
   await page.evaluate(interceptPdfPrint);
   await page.keyboard.press("ControlOrMeta+p");

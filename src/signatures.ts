@@ -1,6 +1,6 @@
 import { AnnotationEditorType } from "pdfjs-dist";
 import type { PDFDocumentProxy } from "./pdf";
-import type { PDFViewer } from "./viewer";
+import type { EventBus, PDFViewer } from "./viewer";
 import { printedSignatureTargets } from "./printedSignatureLines";
 
 export interface SignatureImage { url: string; width: number; height: number }
@@ -93,6 +93,118 @@ export async function placeSignature(viewer: PDFViewer, pdf: PDFDocumentProxy, p
   } finally {
     if (viewer.pdfDocument === pdf) viewer.annotationEditorMode = { mode: AnnotationEditorType.NONE };
   }
+}
+
+/**
+ * Lets readers click a placed signature in Select mode to move, resize, or remove it,
+ * and returns to normal reading/text selection when they click away, delete it, or press Escape.
+ */
+export function enableSignatureEditing(
+  container: HTMLElement,
+  viewer: PDFViewer,
+  eventBus: EventBus,
+  options: {
+    isBusy: () => boolean;
+    isContentEditing: () => boolean;
+    onSelectStart: () => void;
+    onStampChanged: () => void;
+  },
+) {
+  let tracked = false;
+  let hasSelected = false;
+  let snapshot = "";
+
+  const stampSnapshot = () =>
+    Array.from(container.querySelectorAll<HTMLElement>(".annotationEditorLayer .stampEditor"),
+      el => `${el.id}:${el.style.left}:${el.style.top}:${el.style.width}:${el.style.height}`).join("|");
+
+  const checkChanged = () => {
+    const next = stampSnapshot();
+    if (next !== snapshot) {
+      snapshot = next;
+      options.onStampChanged();
+    }
+  };
+
+  const labelDeleteButtons = () => {
+    for (const button of container.querySelectorAll<HTMLButtonElement>(".stampEditor .editToolbar .deleteButton")) {
+      if (!button.getAttribute("aria-label")) button.setAttribute("aria-label", "Remove signature");
+      if (!button.title) button.title = "Remove signature";
+    }
+  };
+
+  const finish = () => {
+    if (!tracked) return;
+    tracked = false;
+    hasSelected = false;
+    checkChanged();
+    if (Number(viewer.annotationEditorMode) === AnnotationEditorType.STAMP && !options.isBusy()) {
+      viewer.annotationEditorMode = { mode: AnnotationEditorType.NONE };
+    }
+  };
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (!event.isPrimary || event.button !== 0 || event.ctrlKey || options.isBusy()) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const mode = Number(viewer.annotationEditorMode);
+
+    if (mode === AnnotationEditorType.NONE) {
+      if (options.isContentEditing() || !container.contains(target)) return;
+      const stamp = target.closest<HTMLElement>(".stampEditor");
+      if (!stamp?.id) return;
+      event.stopPropagation();
+      event.preventDefault();
+      options.onSelectStart();
+      tracked = true;
+      hasSelected = false;
+      snapshot = stampSnapshot();
+      (viewer as unknown as { annotationEditorMode: { mode: number; editId?: string } }).annotationEditorMode = {
+        mode: AnnotationEditorType.STAMP,
+        editId: stamp.id,
+      };
+      return;
+    }
+
+    if (mode === AnnotationEditorType.STAMP && tracked && !target.closest(".stampEditor")) {
+      finish();
+    }
+  };
+
+  const onEditingStatesChanged = ({ details }: { details?: { hasSelectedEditor?: boolean } }) => {
+    if (!tracked || options.isBusy() || Number(viewer.annotationEditorMode) !== AnnotationEditorType.STAMP) return;
+    checkChanged();
+    if (details?.hasSelectedEditor) {
+      hasSelected = true;
+      requestAnimationFrame(labelDeleteButtons);
+    } else if (hasSelected && details?.hasSelectedEditor === false) {
+      finish();
+    }
+  };
+
+  const onEditingAction = () => {
+    if (!tracked || options.isBusy()) return;
+    requestAnimationFrame(checkChanged);
+  };
+
+  const onModeChanged = ({ mode }: { mode: number }) => {
+    if (mode !== AnnotationEditorType.STAMP && tracked) {
+      tracked = false;
+      hasSelected = false;
+      checkChanged();
+    }
+  };
+
+  document.addEventListener("pointerdown", onPointerDown, true);
+  eventBus.on("editingstateschanged", onEditingStatesChanged);
+  eventBus.on("editingaction", onEditingAction);
+  eventBus.on("annotationeditormodechanged", onModeChanged);
+  return () => {
+    document.removeEventListener("pointerdown", onPointerDown, true);
+    eventBus.off("editingstateschanged", onEditingStatesChanged);
+    eventBus.off("editingaction", onEditingAction);
+    eventBus.off("annotationeditormodechanged", onModeChanged);
+  };
 }
 
 export function cleanSignature(source: HTMLCanvasElement, crop: number[], threshold: number): SignatureImage {
