@@ -15,9 +15,12 @@ const os = require("node:os");
 const path = require("node:path");
 const { chatRequest, claudePrompt } = require("./ai-prompt.cjs");
 const { createOpenRouter } = require("./openrouter.cjs");
+const { createGemini } = require("./gemini.cjs");
+const { createAgy } = require("./agy.cjs");
 const { createCustomEndpoint } = require("./custom-endpoint.cjs");
 const { guardSession, resolveDestination } = require("./network.cjs");
 const { claudeChildPath, findClaude: lookUpClaude } = require("./claude-path.cjs");
+const { findAgy } = require("./agy-path.cjs");
 
 const AUTH_ISSUER = "https://auth.openai.com";
 const AUTHORIZE_URL = "https://auth.openai.com/api/accounts/authorize";
@@ -31,6 +34,11 @@ const REFRESH_FAILURES = new Set(["invalid_grant", "invalid_refresh_token", "tok
 const dir = () => path.join(app.getPath("userData"), "ai");
 const file = (name) => path.join(dir(), name);
 const openRouter = createOpenRouter({ net, safeStorage, file, writeAtomic });
+const gemini = createGemini({ net, safeStorage, file, writeAtomic });
+const agy = createAgy({
+  dir,
+  findExe: () => findAgy({ platform: process.platform, home: os.homedir(), localAppData: process.env.LOCALAPPDATA, envPath: process.env.PATH }),
+});
 // Set by register(): main.cjs owns the window, so it shows the local-address question.
 let confirmLocalAddress = async () => false;
 const customEndpoint = createCustomEndpoint({ fetch: endpointFetch, resolve: (url) => resolveDestination(url, sessions.defaultSession),
@@ -545,8 +553,8 @@ const active = new Map();
 const MAX_CHARS = 1_500_000;
 
 function validRequest(req) {
-  return req && typeof req.id === "string" && req.id.length < 100 && ["chatgpt", "claude", "openrouter", "custom"].includes(req.provider)
-    && typeof req.model === "string" && req.model.length <= (req.provider === "openrouter" || req.provider === "custom" ? 256 : 99)
+  return req && typeof req.id === "string" && req.id.length < 100 && ["chatgpt", "claude", "agy", "gemini", "openrouter", "custom"].includes(req.provider)
+    && typeof req.model === "string" && req.model.length <= (req.provider === "agy" || req.provider === "gemini" || req.provider === "openrouter" || req.provider === "custom" ? 256 : 99)
     && typeof req.document?.name === "string" && typeof req.document.text === "string" && typeof req.document.truncated === "boolean" && typeof req.document.recognized === "boolean"
     && Array.isArray(req.messages) && req.messages.length > 0 && req.messages.length < 200
     && req.messages.every((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
@@ -559,8 +567,11 @@ const MAX_ACTIVE = 2;
 function register(handle, send, { confirmLocal } = {}) {
   if (confirmLocal) confirmLocalAddress = confirmLocal;
   cleanStaleClaudeFolders();
-  handle("folio:ai-status", async () => ({ chatgpt: await chatgptStatus(), claude: await claudeStatus(), openrouter: openRouter.status(),
-    custom: customEndpoint.status() }));
+  agy.cleanStaleFolders();
+  handle("folio:ai-status", async () => {
+    const [chatgpt, claude, agyStatus] = await Promise.all([chatgptStatus(), claudeStatus(), agy.status()]);
+    return { chatgpt, claude, agy: agyStatus, gemini: gemini.status(), openrouter: openRouter.status(), custom: customEndpoint.status() };
+  });
   handle("folio:ai-router-key", async (_event, action, key) => {
     try {
       if (action === "save") await openRouter.save(key);
@@ -573,6 +584,19 @@ function register(handle, send, { confirmLocal } = {}) {
   handle("folio:ai-router-models", async () => {
     try { return { ok: true, models: await openRouter.models() }; }
     catch { return { ok: false, error: "Couldn't load OpenRouter models. Check your key and connection, or enter a model ID." }; }
+  });
+  handle("folio:ai-gemini-key", async (_event, action, key) => {
+    try {
+      if (action === "save") await gemini.save(key);
+      else if (action === "remove") await gemini.remove();
+      else if (action === "check") await gemini.check();
+      else throw new Error("Unknown key action.");
+      return { ok: true, configured: gemini.status().configured };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+  handle("folio:ai-gemini-models", async () => {
+    try { return { ok: true, models: await gemini.models() }; }
+    catch { return { ok: false, error: "Couldn't load Gemini models. Check your key and connection, or enter a model ID." }; }
   });
   handle("folio:ai-custom-endpoint", async (_event, action, input) => {
     try {
@@ -602,13 +626,19 @@ function register(handle, send, { confirmLocal } = {}) {
     claudePath = undefined;
     return claudeStatus(true);
   });
+  let lastAgyRecheck = 0;
+  handle("folio:ai-agy-recheck", async () => {
+    if (Date.now() - lastAgyRecheck < 2000) return agy.status();
+    lastAgyRecheck = Date.now();
+    return agy.status(true);
+  });
   handle("folio:ai-ask", (_event, req) => {
     if (!validRequest(req) || active.has(req.id)) throw new Error("Invalid request");
     if (active.size >= MAX_ACTIVE) throw new Error("Another answer is still in progress.");
     const controller = new AbortController();
     active.set(req.id, controller);
     const emit = (text) => send("folio:ai-event", { id: req.id, type: "delta", text });
-    const ask = { chatgpt: askChatGPT, claude: askClaude, openrouter: openRouter.ask, custom: customEndpoint.ask }[req.provider];
+    const ask = { chatgpt: askChatGPT, claude: askClaude, agy: agy.ask, gemini: gemini.ask, openrouter: openRouter.ask, custom: customEndpoint.ask }[req.provider];
     const { name, text, truncated, recognized } = req.document;
     const messages = req.messages.map(({ role, content, context }) => context
       ? { role, content, context: { text: context.text, page: context.page } } : { role, content });

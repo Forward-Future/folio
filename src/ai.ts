@@ -1,12 +1,17 @@
 // Shared by the Ask AI panel and Settings: the providers' pages, and the ChatGPT sign-in flow.
 import { readSetting, writeSetting } from "./preferences";
 
-export const PROVIDERS = { chatgpt: "ChatGPT", claude: "Claude", openrouter: "OpenRouter", custom: "Custom endpoint" } as const;
+export const PROVIDERS = { chatgpt: "ChatGPT", claude: "Claude", gemini: "Gemini", openrouter: "OpenRouter", custom: "Custom endpoint" } as const;
 export type AiProvider = keyof typeof PROVIDERS;
+export type GeminiMode = "agy" | "api";
 
 export function savedProvider(): AiProvider {
   const saved = readSetting("folio:ai-provider");
   return saved && Object.hasOwn(PROVIDERS, saved) ? saved as AiProvider : "chatgpt";
+}
+
+export function savedGeminiMode(): GeminiMode {
+  return readSetting("folio:ai-gemini-mode") === "api" ? "api" : "agy";
 }
 
 // Storage events reach the other document tabs. The local event updates the panel beside Settings.
@@ -27,6 +32,8 @@ export function saveAiPreference(name: string, value: string) {
 
 export const USAGE_URL = "https://chatgpt.com/settings/usage";
 export const CLAUDE_CODE_URL = "https://claude.com/claude-code";
+export const AGY_URL = "https://antigravity.google/docs/getting-started";
+export const GEMINI_KEYS_URL = "https://aistudio.google.com/apikey";
 
 /** Runs the ChatGPT sign-in (it opens the browser); resolves once it's over with the refreshed status. */
 export async function signInChatGPT(ai: FolioAi): Promise<{ status: AiStatus; error: string | null }> {

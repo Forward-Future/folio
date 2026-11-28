@@ -12,7 +12,7 @@ interface PickerProps {
   idExample: string;
 }
 
-/** Searches the provider's models, or takes a typed model ID. Shared by OpenRouter and custom endpoints. */
+/** Searches the provider's models, or takes a typed model ID. Shared by Gemini, OpenRouter and custom endpoints. */
 export function ModelPicker({ storageKey, load, validId, idExample }: PickerProps) {
   const [model, setModel] = useState(() => readSetting(storageKey) ?? "");
   const [editing, setEditing] = useState(!model);

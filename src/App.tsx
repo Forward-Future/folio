@@ -39,6 +39,8 @@ import { ZoomMenu } from "./ZoomMenu";
 import { SearchBar, type FindResult } from "./SearchBar";
 import { AboutDialog, InfoDialog, OpenUrlDialog, PasswordDialog, SaveProgramDialog, ShortcutsDialog, parseWebUrl } from "./Dialogs";
 import { SignatureDialog } from "./SignatureDialog";
+import { SignatureFields } from "./SignatureFields";
+import { SignatureSuggestion } from "./SignatureSuggestion";
 import { newImageDraft, type ImageDraft } from "./ImagePlacement";
 import { ContentEditor, type ContentEditorHandle, type NextSelection } from "./ContentEditor";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
@@ -47,7 +49,7 @@ import { SettingsDialog } from "./SettingsDialog";
 import { ChangelogDialog } from "./ChangelogDialog";
 import { PrintDialog } from "./PrintDialog";
 import type { Release } from "./releaseNotes";
-import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
+import { detectSignatureTargets, enableSignatureEditing, placeSignature, rememberSignature, uncoveredTargets, type SignatureImage, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
 import { useOcrSearchRefresh } from "./hooks/ocr";
 import { OcrSession, copyWithText, savedMessage } from "./lib/ocr";
@@ -114,16 +116,18 @@ interface OpenDoc {
 }
 
 /** The open document's pages that reach a copy of `pages`, zero-based like pdf.js's pageIndex. */
-const keptIndexes = (pages: DraftPage[]) => new Set(pages.map(p => p.page - 1));
+const keptIndexes = (pages: DraftPage[]) => new Set(pages.filter(p => !p.source).map(p => p.page - 1));
 
 function changesForCopy(doc: OpenDoc, annotated: boolean, pages?: DraftPage[]) {
   const changes = [...(doc.edits?.changes ?? [])];
   if (annotated && !changes.some(change => change.kind === "annotations")) changes.push({ kind: "annotations" });
   if (pages) {
-    const order = pages.map(p => p.page);
+    const order = pages.filter(p => !p.source).map(p => p.page);
+    const inserted = pages.filter(p => p.source).length;
+    const rotated = pages.filter(p => !p.source && p.rotation).map(p => p.page);
     const kept = new Set(order);
     const deleted = Array.from({ length: doc.pdf.numPages }, (_, i) => i + 1).filter(n => !kept.has(n));
-    changes.push({ kind: "pages", order, ...deleted.length && { deleted } });
+    changes.push({ kind: "pages", order, ...(inserted && { inserted }), ...(rotated.length && { rotated }), ...deleted.length && { deleted } });
   }
   return changes;
 }
@@ -230,6 +234,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const editRevision = useRef(0);
   const markDirty = useCallback(() => { editRevision.current++; setDirty(true); }, []);
   const [contentEditing, setContentEditing] = useState(false);
+  const contentEditingRef = useRef(false);
+  contentEditingRef.current = contentEditing;
   const contentRef = useRef<ContentEditorHandle>(null);
   const imageFile = useRef<HTMLInputElement>(null);
   const imageLoad = useRef(0);
@@ -237,6 +243,29 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const nextSelection = useRef<NextSelection | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
   const [pageDraft, setPageDraft] = useState<PageDraft | null>(null);
+  const insertedPdfs = useRef(new Set<PDFDocumentProxy>());
+  useEffect(() => {
+    const owned = insertedPdfs.current;
+    if (!owned.size) return;
+    const retained = new Set<PDFDocumentProxy>();
+    if (pageDraft) {
+      for (const pages of [pageDraft.pages, ...pageDraft.undo, ...pageDraft.redo]) {
+        for (const page of pages) if (page.source) retained.add(page.source.pdf);
+      }
+    }
+    for (const pdf of owned) {
+      if (retained.has(pdf)) continue;
+      owned.delete(pdf);
+      void pdf.loadingTask.destroy().catch(() => {});
+    }
+  }, [pageDraft]);
+  useEffect(() => {
+    const owned = insertedPdfs.current;
+    return () => {
+      for (const pdf of owned) void pdf.loadingTask.destroy().catch(() => {});
+      owned.clear();
+    };
+  }, []);
   const organized = pageDraft && doc && draftChanged(pageDraft, doc.pdf.numPages) ? pageDraft.pages : undefined;
   const keptOrganized = useMemo(() => organized && keptIndexes(organized), [organized]);
   const unsaved = !!doc?.sourceId || dirty || editorDirty || (!!organized && !pageDraft?.copy);
@@ -254,9 +283,16 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
-  const [signing, setSigning] = useState(false);
-  const [signatureTargets, setSignatureTargets] = useState<SignatureTarget[]>([]);
-  const [signatureDismissed, setSignatureDismissed] = useState(false);
+  const [signing, setSigning] = useState<{ page: number; field?: SignatureTarget } | null>(null);
+  const placingSignature = useRef(false);
+  const [pendingStamp, setPendingStamp] = useState<{ pdf: PDFDocumentProxy; index: number; previous: number[][] } | null>(null);
+  // PDF.js exposes the editor before its image is ready for undo. Keep the field in place until insertion completes.
+  const stampRects = (index: number) => pendingStamp && pendingStamp.pdf === doc?.pdf && pendingStamp.index === index
+    ? pendingStamp.previous : markupRef.current?.stampRects(index) ?? [];
+  const [detection, setDetection] = useState<{ pdf: PDFDocumentProxy; page: number; targets: SignatureTarget[] } | null>(null);
+  const signatureTargets = detection?.targets.length && detection.pdf === doc?.pdf && detection.page === page
+    ? uncoveredTargets(detection.targets, stampRects(page - 1)) : [];
+  const [dismissedSignaturePages, setDismissedSignaturePages] = useState<number[]>([]);
   const [markup, setMarkup] = useState<MarkupState>({ marks: [], note: "", bookmarkedPages: null });
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("pages");
   const [noteBox, setNoteBox] = useState<{ markId: string; anchor: { x: number; top: number; bottom: number }; quote: string; initial: string } | null>(null);
@@ -286,17 +322,28 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     }
   }, [active, doc, focus, dialog, signing, pending, imageView, programAsked]);
 
+  useEffect(() => { setSigning(current => current?.field ? current : null); }, [page]);
   useEffect(() => {
-    setSigning(false); setSignatureTargets([]); setSignatureDismissed(false);
     if (!doc || contentEditing) return;
     let cancelled = false;
-    const timer = setTimeout(() => {
+    const bus = busRef.current;
+    const refresh = () => {
       void detectSignatureTargets(doc.pdf, page).then(targets => {
-        if (!cancelled) setSignatureTargets(targets);
+        if (!cancelled) setDetection({ pdf: doc.pdf, page, targets });
       }).catch(() => {});
-    }, 350);
-    return () => { cancelled = true; clearTimeout(timer); };
+    };
+    // Undo and redo change stamp coverage without changing the PDF page or the saved notes.
+    const timer = setTimeout(refresh, 350);
+    bus?.on("editingaction", refresh);
+    bus?.on("editingstateschanged", refresh);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      bus?.off("editingaction", refresh);
+      bus?.off("editingstateschanged", refresh);
+    };
   }, [doc, page, contentEditing]);
+  useEffect(() => { setSigning(null); setDismissedSignaturePages([]); setDetection(null); }, [doc]);
 
   docRef.current = doc;
   preferencesRef.current = { sidebar, spread };
@@ -333,6 +380,12 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     trackPageImages(eventBus);
     const stopDrawingPointer = keepDrawingPointer(container);
     const stopTextClickAway = finishTextOnClickAway(container, viewer, eventBus);
+    const stopSignatureEditing = enableSignatureEditing(container, viewer, eventBus, {
+      isBusy: () => placingSignature.current,
+      isContentEditing: () => contentEditingRef.current,
+      onSelectStart: () => { setHighlightMenu(null); setImageMenu(null); setPinned(null); },
+      onStampChanged: markDirty,
+    });
     linkService.setViewer(viewer);
     const history = new LinkHistory(viewer, (state, followed) => {
       setNavigation(state);
@@ -406,7 +459,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       });
     };
     container.addEventListener("wheel", onWheel, { passive: false });
-    return () => { stopTextClickAway(); stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
+    return () => { stopSignatureEditing(); stopTextClickAway(); stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
   }, [tabs, tabKey]);
 
   useEffect(() => {
@@ -499,7 +552,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         const reading = previous ? markupRef.current!.state : undefined;
         if (reading?.bookmarkedPages && exportedPages) {
           const bookmarks = new Set(reading.bookmarkedPages);
-          reading.bookmarkedPages = exportedPages.flatMap((p, i) => bookmarks.has(p.page) ? [i + 1] : []);
+          reading.bookmarkedPages = exportedPages.flatMap((p, i) => !p.source && bookmarks.has(p.page) ? [i + 1] : []);
         }
         persistRef.current = !password && !revision;
         const markupReady = markupRef.current!.load(id, persistRef.current, reading);
@@ -735,6 +788,28 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     } catch { flash("Annotations aren’t supported for this document"); return false; }
   };
   const leaveEditMode = () => chooseTool("select");
+  const startSigning = async () => { if (await chooseTool("select")) setSigning({ page }); };
+  const dismissSignatureSuggestion = () => setDismissedSignaturePages(pages => pages.includes(page) ? pages : [...pages, page]);
+  const addSignature = async (pageNumber: number, image: SignatureImage, rect: number[], rememberAs?: string) => {
+    if (!doc || docRef.current !== doc || !active) throw new Error("The document changed. Open Sign again.");
+    if (placingSignature.current) throw new Error("Another signature is being placed.");
+    placingSignature.current = true;
+    setPendingStamp({ pdf: doc.pdf, index: pageNumber - 1, previous: stampRects(pageNumber - 1) });
+    try {
+      if (!(await chooseTool("select")) || docRef.current !== doc) throw new Error("The document changed. Open Sign again.");
+      await placeSignature(viewerRef.current!, doc.pdf, pageNumber, image, rect, !!signing);
+    } finally {
+      placingSignature.current = false;
+      setPendingStamp(null);
+    }
+    if (docRef.current !== doc) return;
+    markDirty();
+    if (rememberAs !== undefined) {
+      try { rememberSignature(image, rememberAs); }
+      catch { flash("Signature added to the page, but couldn't be remembered on this device."); return; }
+    }
+    flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
+  };
   const insertImage = useCallback(async (file: File) => {
     const editor = contentRef.current, owner = docRef.current, viewer = viewerRef.current;
     if (!editor || !owner || !viewer) return;
@@ -763,7 +838,6 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (request === imageLoad.current && docRef.current === owner) flash(err instanceof Error ? err.message : "Couldn't insert this image.");
     }
   }, [flash]);
-  const startSigning = async () => { if (await chooseTool("select")) setSigning(true); };
 
   useEffect(() => {
     if (!doc || tool !== "ink" || drawTool === "Pen") return;
@@ -821,7 +895,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (toolRef.current !== "select" || e.button !== 0) return;
       const current = document.getSelection();
       if (current && !current.isCollapsed) return;
-      if ((e.target as HTMLElement).closest("a, .annotationCommentButton, .folio-content-layer")) return;
+      if ((e.target as HTMLElement).closest("a, .annotationCommentButton, .folio-content-layer, .stampEditor")) return;
       const hit = markupRef.current?.markAt(e.clientX, e.clientY);
       if (!hit) return setHighlightMenu(null);
       const stage = container.parentElement!.getBoundingClientRect();
@@ -845,7 +919,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     if (!container) return;
     const onClick = (e: MouseEvent) => {
       setImageMenu(null);
-      if ((e.target as Element).closest(".folio-content-layer")) return;
+      if ((e.target as Element).closest(".folio-content-layer, .stampEditor")) return;
       if (toolRef.current !== "select" || e.button !== 0) return;
       const current = document.getSelection();
       if (current && !current.isCollapsed) return;
@@ -970,7 +1044,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       // An empty list requests the full PDF. For page copies, ignore marks on omitted pages, but keep form values.
       const kept = pages?.length ? keptIndexes(pages) : null;
       const annotated = [...storage].some(([, value]) => !kept || typeof value?.pageIndex !== "number" || kept.has(value.pageIndex));
-      if (pages?.length) return { bytes: await copyPdfPages(doc.pdf, pages.map(p => p.page), signal, doc.password), annotated };
+      if (pages?.length) return { bytes: await copyPdfPages(doc.pdf, pages, signal, doc.password), annotated };
       return { bytes: annotated ? await doc.pdf.saveDocument() : await doc.pdf.getData(), annotated };
     } finally {
       for (const key of keys) storage.remove(key);
@@ -980,7 +1054,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
 
   const copyName = organized && doc ? doc.name.replace(/\.pdf$/i, "") + " (organized).pdf" : doc?.name ?? "document.pdf";
   // Where the reader's page ended up in the organized copy; the first page if it was deleted.
-  const organizedPage = (n: number) => organized ? Math.max(1, organized.findIndex(p => p.page === n) + 1) : n;
+  const organizedPage = (n: number) => organized ? Math.max(1, organized.findIndex(p => !p.source && p.page === n) + 1) : n;
   const saveBytes = (bytes: Uint8Array) => {
     saveBlob(pdfBlob(bytes), copyName.toLowerCase().endsWith(".pdf") ? copyName : `${copyName}.pdf`);
   };
@@ -1046,7 +1120,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     try {
       const copy = await currentBytes(doc, organized);
       if (!copy || docRef.current !== doc) return;
-      const withText = await copyWithText(ocr, copy.bytes, organized?.map(p => p.page));
+      const withText = await copyWithText(ocr, copy.bytes, organized?.map(p => p.source ? 0 : p.page));
       if (docRef.current !== doc) return;
       const name = doc.sourceId ? copyName.replace(/\.pdf$/i, "") + " (edited).pdf" : copyName;
       const blob = pdfBlob(withText.bytes);
@@ -1314,6 +1388,9 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         else if (noteBox) setNoteBox(null);
         else if (searchOpen) setSearchOpen(false);
         else if (contentRef.current?.deselect()) return;
+        else if (Number(viewerRef.current?.annotationEditorMode) === AnnotationEditorType.STAMP) {
+          viewerRef.current!.annotationEditorMode = { mode: AnnotationEditorType.NONE };
+        }
         else if (contentEditing || tool !== "select") void leaveEditMode();
         else if (focus) toggleFocus();
       } else if (e.key === "f" || e.key === "F") {
@@ -1338,6 +1415,14 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  const menuCommandRef = useRef<(command: "print") => void>(() => {});
+  menuCommandRef.current = (command) => {
+    if (tabs.active !== tabKey || command !== "print" || !docRef.current) return;
+    if (signing || dialog || pending || imageView || printCopy || document.querySelector('[aria-modal="true"]')) return;
+    void print();
+  };
+  useEffect(() => window.folioDesktop?.onMenuCommand?.((command) => menuCommandRef.current(command)), []);
+
   // ── Drag & drop anywhere ────────────────────────────────────────────
   useEffect(() => {
     let depth = 0;
@@ -1356,7 +1441,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (!hasFiles(e)) return;
       e.preventDefault();
       depth++;
-      setDragging(true);
+      setDragging(!(e.dataTransfer?.types.includes("Files") && (e.target as Element)?.closest?.(".sidebar-organizer")));
     };
     const leave = (e: DragEvent) => {
       if (!hasFiles(e)) return;
@@ -1371,6 +1456,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       e.preventDefault();
       depth = 0;
       setDragging(false);
+      if (e.dataTransfer?.files.length && (e.target as Element)?.closest?.(".sidebar-organizer")) return;
       const files = e.dataTransfer?.files;
       const url = !files?.length && e.dataTransfer ? droppedUrl(e.dataTransfer) : null;
       if (files?.length) openFiles(files);
@@ -1532,6 +1618,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             onToggleBookmark={n => markupRef.current!.toggleBookmark(n)}
             draft={pageDraft}
             onDraft={setPageDraft}
+            onImport={source => insertedPdfs.current.add(source)}
             onSaveDraft={download}
               onExportPages={exportPages}
             savingAttachment={savingAttachment} onSaveAttachment={(file) => void saveAttachment(file)}
@@ -1794,16 +1881,17 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       {dialog === "upgrade" && <ChangelogDialog upgradeNotes={upgradeNotes} onClose={() => setDialog(null)} />}
       {doc && imageView && <ImageViewer pdf={doc.pdf} target={imageView} onClose={() => setImageView(null)} />}
       {dialog === "url" && <OpenUrlDialog key={linkDraft} initial={linkDraft} onClose={() => setDialog(null)} onSubmit={(url) => { setDialog(null); tabs.open([{ kind: "url", name: new URL(url).hostname, url }]); }} />}
-      {doc && signing && <SignatureDialog key={doc.id + ":" + page} pdf={doc.pdf} pageNumber={page} targets={signatureTargets}
-        onClose={() => setSigning(false)} onApprove={async (signature, rect) => {
-          await placeSignature(viewerRef.current!, doc.pdf, page, signature, rect);
-          markDirty(); setSignatureDismissed(true); flash(keys("Signature added. Ctrl+Z to undo; Save copy to export."));
-        }} />}
-      {doc && !contentEditing && !signing && signatureTargets.length > 0 && !signatureDismissed && <div className="signature-suggestion" role="status">
-        <span>{signatureTargets[0].kind === "field" ? "Signature field detected" : "Possible signature area"} on page {page}</span>
-        <button className="btn primary" onClick={startSigning}>Review signature</button>
-        <button className="pill-btn" aria-label="Dismiss signature suggestion" onClick={() => setSignatureDismissed(true)}><Icon name="close" size={14} /></button>
-      </div>}
+      {active && doc && !contentEditing && tool === "select" && !dialog && !signing && !imageView && !pending && viewerRef.current && busRef.current &&
+        <SignatureFields key={doc.id} pdf={doc.pdf} viewer={viewerRef.current} bus={busRef.current}
+          stampRects={stampRects} placing={!!pendingStamp} onSign={addSignature}
+          onCapture={(pageNumber, field) => setSigning({ page: pageNumber, field })} />}
+      {doc && signing && <SignatureDialog key={doc.id + ":" + signing.page} pdf={doc.pdf} pageNumber={signing.page}
+        targets={signing.field ? [signing.field] : signatureTargets} onClose={() => setSigning(null)}
+        onApprove={(image, rect, name) => addSignature(signing.page, image, rect, name)} />}
+      {active && doc && !contentEditing && tool === "select" && !signing && !dialog && signatureTargets.length > 0 && !dismissedSignaturePages.includes(page) &&
+        ((signatureTargets.length === 1 && signatureTargets[0].kind === "field") || signatureTargets.some(target => target.kind === "label")) &&
+        <SignatureSuggestion key={doc.id + ":" + page + ":" + signatureTargets.length} targets={signatureTargets} page={page} placing={!!pendingStamp} onSign={(image, rect) => addSignature(page, image, rect)}
+          onReview={startSigning} onDismiss={dismissSignatureSuggestion} />}
 
       {updateVersion && (
         <div className="update-card" role="status">

@@ -74,9 +74,10 @@ URL opening, webpage conversion, and Word conversion require the desktop app. Fa
   leaving your current page. Turn on **Bookmarked** at the top of the sidebar to see just your saved pages,
   then select a thumbnail to jump to it. These bookmarks are included in Markdown and JSON exports. Folio remembers them locally
   when you reopen a PDF, except for password-protected documents.
-- **Organize pages** from either sidebar tab. Drag thumbnails or enter a new position, and delete pages: Ctrl-click
-  (⌘-click on macOS) or Shift-click to select several, then press **Delete**. Undo and redo with `Ctrl+Z` and
-  `Ctrl+Shift+Z`. Right-click selected thumbnails in **Pages** to start with those pages deleted. Save, then open the
+- **Organize pages** from either sidebar tab. Drag thumbnails or enter a new position, or turn or delete selected pages. Ctrl-click
+  (⌘-click on macOS) or Shift-click to select several, then choose **Rotate left**, **Rotate right**, or **Delete**. Undo and redo with `Ctrl+Z` and
+  `Ctrl+Shift+Z`. Right-click selected thumbnails in **Pages** to apply these actions directly. Use **Insert PDF…** to add another PDF before or after the selected page, at the start,
+  or at the end. You can also drop a PDF on the organizer. Insertion requires both PDFs to be unencrypted. Save, then open the
   organized PDF copy; the original file stays unchanged.
 - **Export selected pages** from the Pages sidebar. Ctrl-click thumbnails (⌘-click on macOS) to select individual pages, or Shift-click for a range. Right-click a selected thumbnail to save those pages in document order as a new PDF.
 - **Attached files:** when a PDF has files embedded in it, a **Files** tab lists them and saves each one as it was attached.
@@ -142,22 +143,23 @@ The editor works with unsigned, unencrypted PDFs.
 Choose **Sign** in the toolbar to add a signature.
 
 - **Capture on paper:** sign with dark ink on white paper, then use your camera or upload a PNG, JPEG, or WebP photo.
-- **Clean up the image:** crop to the signature and adjust ink sensitivity to remove the paper background. Capture
-  and image processing stay on your device.
-- **Suggested placement:** Folio checks the current page for empty PDF signature fields and likely signature labels,
-  then offers places to sign. Detection is a suggestion, not a guarantee that every field will be found.
+- **Clean up the image:** Folio removes the paper background and trims the image on your device. Use **Adjust crop and ink** if you need to refine it.
+- **Sign a detected field:** click an empty PDF signature field, then choose your saved signature or initials from the picker beside it. The chosen image fits the field. If you have no saved signatures yet, clicking the field opens capture with that field selected. A page with a single field also offers a signing shortcut at the bottom.
+- **Suggested placement:** On PDFs with selectable text, click a printed line labeled **Signature** or **Initials** to pick a saved mark beside it. Folio recognizes drawn rules and underscores. When it finds only a possible signing area, **Review signature** lets you check the placement.
 - **Preview and position:** review the actual page, pick a suggestion or place the signature manually, and adjust its
   width before approving.
-- **Explicit approval:** nothing is added until you click **Approve and add signature**. Signatures are visual stamps,
+- **Explicit approval:** click the sign button on a detected field or **Approve and add signature** in the preview. Signatures are visual stamps,
   not certificate-based digital signatures. Use **Save a copy** to keep a signed PDF; placed signatures are not part
   of Folio's automatic annotation restoration.
-- **Optional reuse:** choose to remember a signature on this computer; remove the saved image in
-  **Settings → Storage → Signature → Forget**.
+- **Optional reuse:** select **Remember this signature** and give it a name, such as “Initials”.
+  Open **Sign** again to choose a saved signature or capture another. Remove individual signatures in
+  **Settings → Storage → Signatures**.
 
 ### Ask AI about a document
 
 - **Choose a provider:** use your ChatGPT plan, your Claude subscription through
-  [Claude Code](https://claude.com/claude-code), your own OpenRouter API key, or any OpenAI-compatible endpoint, such as
+  [Claude Code](https://claude.com/claude-code), your Google AI / Antigravity subscription through the
+  [Antigravity CLI](https://antigravity.google/docs/getting-started) or your own Gemini API key, your own OpenRouter API key, or any OpenAI-compatible endpoint, such as
   another provider's API or a model running on your computer.
 - **Whole-document or passage questions:** open the Ask AI panel from the toolbar, select text and choose **Ask AI**,
   or ask about an existing highlight.
@@ -279,6 +281,12 @@ Then pick a provider at the top of the panel:
   [ChatGPT settings](https://chatgpt.com/settings/usage). Sign out, or change the default provider, in Folio's **Settings**.
 - **Claude:** install [Claude Code](https://claude.com/claude-code), run `claude` once in a terminal, and sign in with
   your Claude account (Pro or Max). Then click **Check again** in Folio. Questions use your Claude subscription.
+- **Gemini:** use either your Google AI / Antigravity subscription through the
+  [Antigravity CLI](https://antigravity.google/docs/getting-started) (`agy`) or your own
+  [Gemini API key](https://aistudio.google.com/apikey). For Antigravity, install `agy`, sign in once in a terminal, then
+  click **Check again** in Folio and pick any model available on your plan. To use a Gemini API key instead, switch
+  **Connection** to **API key** under **Settings → Ask AI**, verify your key, and pick a model. Google bills API-key
+  usage directly. For API-key passage questions Folio sends the selected passage, page number, filename and conversation.
 - **OpenRouter:** under **Settings → Ask AI**, choose OpenRouter and verify your [OpenRouter API key](https://openrouter.ai/settings/keys).
   Search the text models or enter a model ID. OpenRouter bills your key. Reopen this section to check the connection,
   replace the key, or remove it. If a model's context is too small for a document, choose a larger model or ask about
@@ -299,29 +307,29 @@ network requests only to:
 
 - check GitHub for updates (installed copies; can be turned off in **Settings**),
 - download the scan language packs you choose in **Settings** from the Tesseract.js project on GitHub,
-- verify an OpenRouter key or retrieve model names during OpenRouter setup,
+- verify a Gemini or OpenRouter key or retrieve model names during setup,
 - check a custom endpoint and retrieve its model names when you connect it in **Settings**,
 - open a link you give it (a webpage is loaded in a hidden, sandboxed window with its own temporary session, so no
   cookies or sign-ins are shared, and every permission is denied; its scripts run while it loads, as in any browser,
   and it's then printed to PDF), and
 - answer a question you ask in **Ask AI**. Only then, the document's text (up to about 400,000 characters), any passage
-  you selected, and the conversation go to the provider you chose: OpenAI for ChatGPT, or Anthropic through your
-  installed Claude Code, OpenRouter and the provider serving your chosen OpenRouter model, or the custom endpoint you
+  you selected, and the conversation go to the provider you chose: OpenAI for ChatGPT, Anthropic through your
+  installed Claude Code, Google for Gemini (directly or through your installed Antigravity CLI), OpenRouter and the provider serving your chosen OpenRouter model, or the custom endpoint you
   entered. Their privacy terms apply to that data.
 
-Folio stores an OpenRouter key or a custom endpoint's key only with operating-system credential protection. If secure storage is unavailable,
+Folio stores a Gemini API key, an OpenRouter key, or a custom endpoint's key only with operating-system credential protection. If secure storage is unavailable,
 enable or unlock your system key store to connect. For ChatGPT, Folio stores its sign-in tokens in its data folder (below, under `ai`), encrypted with the system's
 credential protection (Windows data protection, the macOS Keychain, or the Linux secret store; if a Linux desktop has
-no secret store, you sign in again each time Folio starts), and never exposes them to the page. For Claude, Folio runs your own Claude Code with every tool disabled;
-it never sees or stores your Claude credentials. The question's context is written to a temporary file for Claude Code
+no secret store, you sign in again each time Folio starts), and never exposes them to the page. For Claude and Antigravity, Folio runs your own CLI with tools blocked;
+it never sees or stores your Claude or Google account credentials. The question's context is isolated in a temporary folder
 and deleted as soon as the answer finishes. Each document's Ask AI conversation is saved with it on this computer (except for password-protected documents) and
 is there when you reopen the document; the **+** button in the panel starts over and deletes it.
 
 Stored locally in your user profile (`%APPDATA%\Folio` on Windows, `~/Library/Application Support/Folio` on macOS,
 `~/.config/Folio` on Linux): recently opened PDFs and their thumbnails (up to 8,
 removable from the home screen with **Clear all**; password-protected PDFs are never kept), highlights, notes, and
-Ask AI conversations for each document (except password-protected ones), reading positions, preferences, and, only if you choose to remember
-it, your signature image. Apart from provider credentials, this data isn't encrypted, so anyone with access to your
+Ask AI conversations for each document (except password-protected ones), reading positions, preferences, and any
+signature images you choose to remember. Apart from provider credentials, this data isn't encrypted, so anyone with access to your
 user account can read it.
 
 ## Building from source
@@ -351,7 +359,7 @@ terminal has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
   custom `app://` protocol with a strict Content Security Policy, runs the page sandboxed with context isolation, opens
   PDFs from the file manager, keeps a single window, downloads links, and handles updates. `webpage.cjs` converts
   webpages to PDF. `ai.cjs` runs Ask AI (ChatGPT
-  sign-in and requests, OpenRouter and custom endpoint keys and requests, and Claude Code). Stored credentials stay in the main process.
+  sign-in and requests, Antigravity CLI, Gemini, OpenRouter and custom endpoint keys and requests, and Claude Code). Stored credentials stay in the main process.
 - `scripts/release.mjs` and `.github/workflows/release-build.yml`: the release pipeline (see
   [CONTRIBUTING.md](CONTRIBUTING.md#releasing)). `scripts/smoke-test.mjs` is the cross-platform smoke test CI runs.
   `scripts/screenshots.mjs` retakes the Ask AI, highlights, and search screenshots at the top of this README (`npm run build`, then `node scripts/screenshots.mjs`).

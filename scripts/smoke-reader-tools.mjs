@@ -269,6 +269,189 @@ async function captureDownload(app, file) {
   }, file);
 }
 
+async function checkSignatureFields(app, page, folder) {
+  const labels = "BT /F 12 Tf 30 190 Td (Approved by:) Tj 0 -110 Td (Initials) Tj ET";
+  const lines = [
+    "q 1 0 0 1 30 225 cm 0 0 m 200 0 l S Q BT /F 12 Tf 30 208 Td (Signature) Tj ET",
+    "BT /F 12 Tf 30 140 Td (Initials: ____________) Tj ET",
+    "30 65 m 170 65 l S BT /F 12 Tf 30 50 Td (Witness signature) Tj ET",
+    "BT /F 10 Tf 30 20 Td (Your signature confirms approval.) Tj ET",
+  ].join("\n");
+  // Page 4 has no PDF signature field: a sentence that mentions signing, then a captioned rule.
+  const prose = [
+    "BT /F 10 Tf 30 250 Td (This agreement may be amended only by a) Tj 0 -14 Td (writing signed by both parties.) Tj ET",
+    "30 65 m 170 65 l S BT /F 12 Tf 30 50 Td (Witness signature) Tj ET",
+  ].join("\n");
+  const form = testPdf([
+    "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 8 0 R 11 0 R] >> >>",
+    "<< /Type /Pages /Count 4 /Kids [3 0 R 4 0 R 9 0 R 12 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [20 30 320 330] /Rotate 90 /Annots [5 0 R 8 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F 6 0 R >> >> /Contents 7 0 R >>",
+    "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Applicant signature) /Rect [30 110 230 155] /P 3 0 R /F 4 >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${labels.length} >>\nstream\n${labels}\nendstream`,
+    "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval initials) /Rect [45 60 107 92] /P 3 0 R /F 4 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [11 0 R] /Resources << /Font << /F 6 0 R >> >> /Contents 10 0 R >>",
+    `<< /Length ${lines.length} >>\nstream\n${lines}\nendstream`,
+    "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Witness signature) /Rect [30 65 170 105] /P 9 0 R /F 4 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F 6 0 R >> >> /Contents 13 0 R >>",
+    `<< /Length ${prose.length} >>\nstream\n${prose}\nendstream`,
+  ]);
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Signature fields.pdf", data: Buffer.from(data) }), form);
+  const hint = page.getByRole("region", { name: "Signature suggestion" });
+  const field = page.getByRole("button", { name: "Sign Applicant signature", exact: true });
+  const initials = page.getByRole("button", { name: "Sign Approval initials", exact: true });
+  const fieldPicker = page.getByRole("dialog", { name: "Sign Applicant signature", exact: true });
+  async function clickAtPageFraction(button, x, y) {
+    await button.scrollIntoViewIfNeeded();
+    const position = await button.evaluate((el, point) => {
+      const paper = el.closest(".page").querySelector(".canvasWrapper").getBoundingClientRect();
+      const bounds = el.getBoundingClientRect();
+      return { x: paper.x + point.x * paper.width - bounds.x - el.clientLeft,
+        y: paper.y + point.y * paper.height - bounds.y - el.clientTop };
+    }, { x, y });
+    await button.click({ position });
+  }
+  await field.waitFor();
+  await page.getByRole("button", { name: "Edit mode", exact: true }).click();
+  await field.waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "Sign", exact: true }).click();
+  await page.getByRole("dialog", { name: "Sign page 1", exact: true }).getByRole("button", { name: "Cancel" }).click();
+  await field.waitFor();
+  const saved = await page.evaluate(() => {
+    const entries = Object.entries(localStorage).filter(([key]) => key === "folio:signature" || key.startsWith("folio:signature:"));
+    for (const [key] of entries) localStorage.removeItem(key);
+    return entries;
+  });
+  await initials.click();
+  const capture = page.getByRole("dialog", { name: "Sign page 1", exact: true });
+  const image = JSON.parse(saved[0][1]).url.split(",")[1];
+  await capture.getByLabel("Upload signature photo").setInputFiles({ name: "first.png", mimeType: "image/png", buffer: Buffer.from(image, "base64") });
+  assert.equal(await capture.getByRole("combobox", { name: "Signature placement" }).locator("option:checked").innerText(), "Approval initials");
+  await capture.getByRole("button", { name: "Cancel" }).click();
+  await page.evaluate(entries => { for (const [key, value] of entries) localStorage.setItem(key, value); }, saved);
+  await page.getByTitle(/^Zoom in/).click();
+  // Hit the PDF field's real center after zooming a rotated page with an offset crop box.
+  await clickAtPageFraction(field, (132.5 - 30) / 300, (130 - 20) / 300);
+  await fieldPicker.getByRole("button", { name: "Full name", exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await fieldPicker.waitFor({ state: "hidden" });
+  assert.equal(await page.locator(".stampEditor").count(), 0);
+  await field.press("Enter");
+  await fieldPicker.getByRole("button", { name: "Full name", exact: true }).waitFor();
+  await page.keyboard.press("ControlOrMeta+=");
+  await fieldPicker.getByRole("button", { name: "Full name", exact: true }).click();
+  await field.waitFor({ state: "hidden" });
+  await initials.click();
+  await page.getByRole("dialog", { name: "Sign Approval initials" }).getByRole("button", { name: "Signature 1", exact: true }).click();
+  await initials.waitFor({ state: "hidden" });
+  assert.equal(await page.getByRole("dialog", { name: "Sign page 1" }).count(), 0);
+  // Two saved marks can share a name, so the shortcut shows each mark's image.
+  const other = saved.map(([key, value]) => ({ key, ...JSON.parse(value) }))
+    .find(mark => mark.key === "folio:signature" || mark.name !== "Full name");
+  await page.evaluate(mark => localStorage.setItem("folio:signature:same-name-check", JSON.stringify(mark)),
+    { url: other.url, width: other.width, height: other.height, name: "Full name" });
+  await page.keyboard.press("ControlOrMeta+z");
+  await initials.waitFor();
+  const sameName = hint.getByRole("button", { name: "Sign with Full name", exact: true });
+  await sameName.first().waitFor();
+  const shown = await sameName.locator("img").evaluateAll(images => images.map(image => image.src));
+  assert.equal(shown.length, 2);
+  assert.notEqual(shown[0], shown[1], "marks that share a name show different images");
+  assert.ok(shown.includes(other.url));
+  await hint.getByRole("button", { name: "Sign with Signature 1", exact: true }).waitFor();
+  await sameName.nth(shown.indexOf(other.url)).click();
+  await initials.waitFor({ state: "hidden" });
+  await hint.waitFor({ state: "hidden" });
+  await page.evaluate(() => localStorage.removeItem("folio:signature:same-name-check"));
+  await page.keyboard.press("ControlOrMeta+z");
+  await initials.waitFor();
+  await hint.getByRole("button", { name: "Sign with Signature 1", exact: true }).waitFor();
+  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Storage", exact: true }).click();
+  await page.getByRole("button", { name: "Forget Full name", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await hint.getByRole("button", { name: "Sign with Signature 1" }).click();
+  await hint.waitFor({ state: "hidden" });
+  console.log("ok  native signature fields support capture, keyboard selection, zoom and undo");
+
+  await page.getByTitle("Next page").click();
+  await hint.getByRole("button", { name: "Review signature" }).click();
+  const placement = page.getByRole("combobox", { name: "Signature placement" });
+  assert.match(await placement.locator("option:checked").innerText(), /Approved by/);
+  const approve = page.getByRole("button", { name: "Approve and add signature" });
+  await approve.click();
+  await page.getByRole("dialog", { name: "Sign page 2" }).waitFor({ state: "hidden" });
+  const inferred = page.locator('.page[data-page-number="2"]').getByRole("button", { name: "Sign Initials", exact: true });
+  await inferred.click();
+  await page.getByRole("dialog", { name: "Sign Initials", exact: true }).getByRole("button", { name: "Signature 1", exact: true }).click();
+  await inferred.waitFor({ state: "hidden" });
+  await hint.waitFor({ state: "hidden" });
+  await page.evaluate(entries => { for (const [key, value] of entries) localStorage.setItem(key, value); }, saved);
+  await page.getByTitle("Next page").click();
+  const thirdPage = page.locator('.page[data-page-number="3"]');
+  const printed = thirdPage.getByRole("button", { name: "Sign Signature", exact: true });
+  const printedInitials = thirdPage.getByRole("button", { name: "Sign Initials", exact: true });
+  await printed.waitFor();
+  assert.equal(await thirdPage.locator(".signature-hit").count(), 3, "two printed lines and one native field");
+  // Click the ink itself, first on the drawn rule, then on underscores beside the initials label.
+  await clickAtPageFraction(printed, 130 / 300, 1 - 225 / 300);
+  await page.getByRole("dialog", { name: "Sign Signature", exact: true }).getByRole("button", { name: "Full name", exact: true }).click();
+  await printed.waitFor({ state: "hidden" });
+  await clickAtPageFraction(printedInitials, 105 / 300, 1 - 139 / 300);
+  await page.getByRole("dialog", { name: "Sign Initials", exact: true }).getByRole("button", { name: "Signature 1", exact: true }).click();
+  await printedInitials.waitFor({ state: "hidden" });
+  await thirdPage.locator(".stampEditor canvas").nth(1).waitFor();
+  assert.equal(await page.getByRole("dialog", { name: "Sign page 3", exact: true }).count(), 0);
+  await page.keyboard.press("ControlOrMeta+z");
+  await printedInitials.waitFor();
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await thirdPage.locator(".stampEditor canvas").nth(1).waitFor();
+  await printedInitials.waitFor({ state: "hidden" });
+  // A sentence that mentions signing is not a place to sign; the captioned rule on the same page is.
+  await page.getByTitle("Next page").click();
+  const fourthPage = page.locator('.page[data-page-number="4"]');
+  await fourthPage.getByRole("button", { name: "Sign Witness signature", exact: true }).waitFor();
+  assert.equal(await fourthPage.locator(".signature-hit").count(), 1);
+  await page.getByRole("button", { name: "Sign", exact: true }).click();
+  const fourthDialog = page.getByRole("dialog", { name: "Sign page 4", exact: true });
+  // With two saved marks nothing is preselected, and the placement list appears once a mark is chosen.
+  await fourthDialog.getByRole("combobox", { name: "Saved signature" }).selectOption({ label: "Signature 1" });
+  // The page's places to sign reach the dialog shortly after the page turn.
+  const placements = fourthDialog.getByRole("combobox", { name: "Signature placement" }).locator("option");
+  await placements.filter({ hasText: "Witness signature" }).waitFor({ state: "attached" });
+  assert.deepEqual(await placements.allTextContents(), ["Witness signature", "Choose a position on this page"]);
+  await fourthDialog.getByRole("button", { name: "Cancel" }).click();
+  await fourthDialog.waitFor({ state: "hidden" });
+  assert.equal(await hint.count(), 0, "contract prose is not suggested as a signing area");
+  const file = path.join(folder, "signed-fields.pdf");
+  await captureDownload(app, file);
+  await page.keyboard.press("ControlOrMeta+s");
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  assert.equal(readFileSync(file, "latin1").match(/\/Subtype\s*\/Stamp\b/g)?.length, 6);
+  const stampCenters = await page.evaluate(async bytes => {
+    const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
+    try {
+      const pdf = await task.promise;
+      return await Promise.all([1, 3].map(async number => {
+        const annotations = await (await pdf.getPage(number)).getAnnotations();
+        return annotations.filter(a => a.subtype === "Stamp").map(({ rect: [x1, y1, x2, y2] }) =>
+          [Math.round((x1 + x2) / 2), Math.round((y1 + y2) / 2)]);
+      }));
+    } finally { await task.destroy(); }
+  }, Array.from(readFileSync(file)));
+  const [nativeCenters, printedCenters] = stampCenters;
+  assert.equal(nativeCenters.length, 2);
+  for (const [x, y] of [[130, 132.5], [76, 76]]) {
+    assert.ok(nativeCenters.some(([cx, cy]) => Math.abs(cx - x) < 2 && Math.abs(cy - y) < 2), JSON.stringify(nativeCenters));
+  }
+  assert.equal(printedCenters.length, 2);
+  assert.ok(printedCenters.some(([x, y]) => Math.abs(x - 130) < 2 && Math.abs(y - 245) < 2), JSON.stringify(printedCenters));
+  assert.ok(printedCenters.some(([x, y]) => x > 98 && x < 113 && Math.abs(y - 154) < 2), JSON.stringify(printedCenters));
+  console.log("ok  on-page signing finds native fields, printed rules, underscores and standalone captions, ignores sentences that mention signing, and exports marks at the chosen positions");
+}
+
 async function checkPenDrawing(app, page, folder, shots) {
   const blank = testPdf(["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 480 320] /Resources << >> >>"]);
@@ -851,7 +1034,7 @@ async function readCopy(page, file) {
       const pages = [];
       for (let n = 1; n <= pdf.numPages; n++) {
         const p = await pdf.getPage(n);
-        pages.push({ text: (await p.getTextContent()).items.map(i => i.str).join(" ").trim() });
+        pages.push({ rotation: p.rotate, text: (await p.getTextContent()).items.map(i => i.str).join(" ").trim() });
       }
       return pages;
     } finally { await task.destroy(); }
@@ -868,7 +1051,12 @@ async function checkOrganizePages(app, page, folder, shots) {
   await page.getByRole("tab", { name: "Pages", exact: true }).click();
   const sidebar = page.locator("aside.sidebar");
   const thumb = n => sidebar.locator(`.thumb[data-page="${n}"]`);
-  const shown = () => sidebar.locator(".thumb").evaluateAll(els => els.map(el => Number(el.dataset.page)));
+  const expectShown = async expected => {
+    await page.waitForFunction(order => {
+      const thumbs = document.querySelectorAll("aside.sidebar .thumb");
+      return thumbs.length === order.length && order.every((n, i) => Number(thumbs[i].dataset.page) === n);
+    }, expected);
+  };
   const picked = () => sidebar.locator('.thumb[aria-pressed="true"]').evaluateAll(els => els.map(el => Number(el.dataset.page)));
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -885,10 +1073,10 @@ async function checkOrganizePages(app, page, folder, shots) {
   await menuDelete.click();
   const organizer = page.getByRole("complementary", { name: "Organize pages" });
   await organizer.waitFor();
-  assert.deepEqual(await shown(), [1, 4]);
+  await expectShown([1, 4]);
   await page.waitForFunction(() => document.activeElement?.matches('aside .thumb[data-key="4"]'));
   await organizer.getByRole("button", { name: "Undo", exact: true }).click();
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await expectShown([1, 2, 3, 4]);
   assert.deepEqual(await picked(), [2, 3]);
 
   // Every page selected: nothing can be deleted, by button or key.
@@ -897,7 +1085,7 @@ async function checkOrganizePages(app, page, folder, shots) {
   assert.deepEqual(await picked(), [1, 2, 3, 4]);
   assert.ok(await organizer.getByRole("button", { name: "Delete 4 pages" }).isDisabled());
   await page.keyboard.press("Delete");
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await expectShown([1, 2, 3, 4]);
   await thumb(3).click({ modifiers: [modifier] });
   await thumb(1).click({ modifiers: [modifier] });
   assert.deepEqual(await picked(), [2, 4]);
@@ -905,21 +1093,28 @@ async function checkOrganizePages(app, page, folder, shots) {
 
   // Delete and Backspace delete; the shortcuts undo and redo inside the organizer, not the reader's edits.
   await page.keyboard.press("Delete");
-  assert.deepEqual(await shown(), [1, 3]);
+  await expectShown([1, 3]);
   await page.keyboard.press("ControlOrMeta+z");
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  await expectShown([1, 2, 3, 4]);
   await page.keyboard.press("ControlOrMeta+Shift+z");
-  assert.deepEqual(await shown(), [1, 3]);
+  await expectShown([1, 3]);
   await page.keyboard.press("ControlOrMeta+z");
   await thumb(2).click();
   await page.keyboard.press("Backspace");
-  assert.deepEqual(await shown(), [1, 3, 4]);
+  await expectShown([1, 3, 4]);
   // Dragging is covered by the reorder check; dragging here hangs Playwright on Windows CI.
   await thumb(4).click();
   await organizer.getByLabel("Move page 4 to").fill("1");
   await organizer.getByRole("button", { name: "Move", exact: true }).click();
-  assert.deepEqual(await shown(), [4, 1, 3]);
+  await expectShown([4, 1, 3]);
 
+  await thumb(4).click();
+  await thumb(1).click({ modifiers: ["ControlOrMeta"] });
+  await sidebar.screenshot({ path: path.join(shots, "organizer-before-rotation.png") });
+  await organizer.getByRole("button", { name: "Rotate right", exact: true }).click();
+  await organizer.getByRole("button", { name: "Rotate left", exact: true }).click();
+  await organizer.getByRole("button", { name: "Undo", exact: true }).click();
+  await sidebar.screenshot({ path: path.join(shots, "organizer-after-rotation.png") });
   const file = path.join(folder, "organized.pdf");
   await captureDownload(app, file);
   await organizer.getByRole("button", { name: "Save organized copy" }).click();
@@ -927,9 +1122,91 @@ async function checkOrganizePages(app, page, folder, shots) {
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
   const copy = await readCopy(page, file);
   assert.deepEqual(copy.map(p => p.text), ["Fourth page", "First page", "Third page"]);
+  assert.deepEqual(copy.map(p => p.rotation), [90, 90, 0]);
   await organizer.getByRole("button", { name: "Done", exact: true }).click();
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
-  console.log("ok  organizing pages deletes, undoes and redoes, keeps at least one page, and saves the chosen pages in order");
+  await expectShown([1, 2, 3, 4]);
+  console.log("ok  organizing pages deletes and rotates selected pages, supports undo, and saves the draft order");
+
+  // Select files through the real input without showing a platform file picker during this hidden run.
+  const picker = page.getByLabel("PDF to insert", { exact: true });
+  await picker.evaluate(input => { input.click = () => {}; });
+  await thumb(2).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Insert PDF after selection…" }).click();
+  const incoming = { name: "Appendix.pdf", mimeType: "application/pdf", buffer: Buffer.from(labeledPdf(["Appendix A", "Appendix B"])) };
+  await sidebar.screenshot({ path: path.join(shots, "organizer-before-insert.png") });
+  await picker.setInputFiles(incoming);
+  const imported = sidebar.getByRole("button", { name: /from Appendix.pdf, position/ });
+  await imported.nth(1).waitFor();
+  assert.deepEqual(await imported.evaluateAll(nodes => nodes.map(n => n.getAttribute("aria-label"))),
+    ["Page 1 from Appendix.pdf, position 3", "Page 2 from Appendix.pdf, position 4"]);
+  await sidebar.screenshot({ path: path.join(shots, "organizer-after-insert.png") });
+  await organizer.getByRole("button", { name: "Undo", exact: true }).click();
+  assert.equal(await imported.count(), 0);
+  await organizer.getByRole("button", { name: "Redo", exact: true }).click();
+  await imported.first().click();
+  await organizer.getByRole("button", { name: "Rotate right", exact: true }).click();
+  await organizer.getByLabel("Move page 1 to").fill("1");
+  await organizer.getByRole("button", { name: "Move", exact: true }).click();
+  const insertedFile = path.join(folder, "with-appendix.pdf");
+  await captureDownload(app, insertedFile);
+  await organizer.getByRole("button", { name: "Save organized copy" }).click();
+  await organizer.getByRole("button", { name: "Open organized copy" }).waitFor();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  const inserted = await readCopy(page, insertedFile);
+  assert.deepEqual(inserted.map(p => p.text), ["Appendix A", "First page", "Second page", "Appendix B", "Third page", "Fourth page"]);
+  assert.deepEqual(inserted.map(p => p.rotation), [90, 0, 0, 0, 0, 0]);
+  for (const [placement, expected] of [["start", 1], ["before", 3], ["end", 7]]) {
+    await sidebar.locator('.thumb[data-key="2"]').click();
+    await organizer.getByLabel("Insert pages at").selectOption(placement);
+    await organizer.getByRole("button", { name: "Insert PDF…" }).click();
+    await picker.setInputFiles({ name: "Cover.pdf", mimeType: "application/pdf", buffer: Buffer.from(labeledPdf(["Cover"])) });
+    await sidebar.getByRole("button", { name: `Page 1 from Cover.pdf, position ${expected}`, exact: true }).waitFor();
+    await organizer.getByRole("button", { name: "Undo", exact: true }).click();
+    await sidebar.getByRole("button", { name: /from Cover.pdf/ }).waitFor({ state: "detached" });
+  }
+  await organizer.evaluate((element, bytes) => {
+    const dataTransfer = new DataTransfer();
+    for (const name of ["First dropped.pdf", "Second dropped.pdf"]) {
+      dataTransfer.items.add(new File([Uint8Array.from(bytes)], name, { type: "application/pdf" }));
+    }
+    element.dispatchEvent(new DragEvent("drop", { dataTransfer, bubbles: true, cancelable: true }));
+  }, Array.from(Buffer.from(labeledPdf(["Dropped page"]))));
+  await sidebar.getByRole("button", { name: "Page 1 from Second dropped.pdf, position 8", exact: true }).waitFor();
+  await organizer.getByRole("button", { name: "Undo", exact: true }).click();
+  const protectedPdf = readFileSync(new URL("./fixtures/protected-organizer.pdf", import.meta.url));
+  await picker.setInputFiles({ name: "Protected.pdf", mimeType: "application/pdf", buffer: protectedPdf });
+  await organizer.getByRole("alert").filter({ hasText: "Protected PDFs cannot be inserted." }).waitFor();
+  assert.equal(await imported.count(), 2);
+  await organizer.getByRole("button", { name: "Cancel", exact: true }).click();
+  // The single-page AES-256 fixture was made with PDFium EPDF_SetEncryption. Rotation must preserve its password.
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Protected.pdf", data: Buffer.from(data) }), Array.from(protectedPdf));
+  await page.locator('input[type=password]').fill("folio-test-reader");
+  await page.locator('input[type=password]').press("Enter");
+  await page.window.waitForFunction(() => document.title.startsWith("Protected.pdf"));
+  if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
+  await page.getByRole("tab", { name: "Pages", exact: true }).click();
+  await sidebar.getByRole("button", { name: "Organize pages" }).click();
+  assert.ok(await organizer.getByRole("button", { name: "Insert PDF…" }).isDisabled());
+  await organizer.getByRole("button", { name: "Rotate left" }).click();
+  const protectedCopy = path.join(folder, "protected-rotated.pdf");
+  await captureDownload(app, protectedCopy);
+  await organizer.getByRole("button", { name: "Save organized copy" }).click();
+  await organizer.getByRole("button", { name: "Open organized copy" }).waitFor();
+  assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
+  const protection = await page.evaluate(async bytes => {
+    const open = password => pdfjsLib.getDocument({ data: Uint8Array.from(bytes), password });
+    const locked = open(undefined);
+    try { await locked.promise; return "missing password protection"; }
+    catch (err) { if (err.name !== "PasswordException") throw err; }
+    finally { await locked.destroy(); }
+    const unlocked = open("folio-test-reader");
+    try { return (await (await unlocked.promise).getPage(1)).rotate; }
+    finally { await unlocked.destroy(); }
+  }, Array.from(readFileSync(protectedCopy)));
+  assert.equal(protection, 270);
+  await organizer.getByRole("button", { name: "Done", exact: true }).click();
+  console.log("ok  PDF insertion, selection, rotation, history, and password protection");
 }
 
 export async function checkReaderTools(app, page, folder, shots) {
@@ -1124,7 +1401,7 @@ export async function checkReaderTools(app, page, folder, shots) {
         const pages = [];
         for (let n = 1; n <= pdf.numPages; n++) {
           const p = await pdf.getPage(n);
-          pages.push({ text: (await p.getTextContent()).items.map(i => i.str).join(" "),
+          pages.push({ rotation: p.rotate, text: (await p.getTextContent()).items.map(i => i.str).join(" "),
             marks: (await p.getAnnotations()).map(a => a.subtype) });
         }
         const [bookmark] = await pdf.getOutline();
@@ -1180,6 +1457,7 @@ export async function checkReaderTools(app, page, folder, shots) {
   await page.getByTitle("Next page").click();
   assert.equal(await page.locator('.page[data-page-number="2"] .textWidgetAnnotation input').inputValue(), "A filled field");
   console.log("ok  the normal Save shortcut and Open organized copy preserve filled form fields");
+  await checkSignatureFields(app, page, folder);
   await checkScanSelection(app, page);
   await checkContentEditing(app, page, folder, shots);
   await checkImageInsertion(app, page, folder, shots);

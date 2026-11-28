@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const JSZip = require("jszip");
-const { stageWord, readRegular, cachedPdf, rememberPdf } = require("../electron/document-files.cjs");
+const { stageWord, readRegular, resolvePath, cachedPdf, rememberPdf } = require("../electron/document-files.cjs");
 const { boundedParts } = require("../electron/docx-parts.cjs");
 const { publish } = require("../electron/word-publish.cjs");
 const { systemPowerShell } = require("../electron/windows-powershell.cjs");
@@ -66,6 +66,24 @@ test("a symlink never authorizes a neighboring export, and files cannot redirect
   const staged = await stageWord(link, path.join(root, "copy.docx"));
   assert.equal(staged.location, null);
   await assert.rejects(readRegular(link), /regular file/);
+});
+
+test("resolvePath falls back to JS realpath only on Windows UNKNOWN errors", async (t) => {
+  const root = await folder(t);
+  const file = path.join(root, "sample.pdf");
+  await fs.writeFile(file, "%PDF-1.4\n");
+  const expected = await fs.realpath(file);
+  assert.equal(await resolvePath(file), expected);
+
+  const unknown = () => Promise.reject(Object.assign(new Error("UNKNOWN: unknown error, realpath"), { code: "UNKNOWN" }));
+  const fallback = await resolvePath(file, { platform: "win32", native: unknown });
+  assert.equal(fallback, require("node:fs").realpathSync(file));
+  assert.equal((await readRegular(fallback)).toString("utf8"), "%PDF-1.4\n");
+  await assert.rejects(resolvePath(file, { platform: "darwin", native: unknown }), { code: "UNKNOWN" });
+  await assert.rejects(resolvePath(file, { platform: "linux", native: unknown }), { code: "UNKNOWN" });
+
+  const enoent = () => Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+  await assert.rejects(resolvePath(file, { platform: "win32", native: enoent }), { code: "ENOENT" });
 });
 
 test("a PDF that grows after its descriptor is sized is rejected", async (t) => {

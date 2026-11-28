@@ -16,6 +16,7 @@ import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
 import { checkSignatureTargets } from "./smoke-signature-targets.mjs";
 import { checkOpenRouter } from "./smoke-openrouter.mjs";
+import { checkGemini } from "./smoke-gemini.mjs";
 import { checkCustomEndpoint } from "./smoke-custom-endpoint.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -138,6 +139,7 @@ try {
   assert.equal(await page.getByRole("dialog").count(), 0);
   console.log("ok  shortcuts wait while a dialog is open");
   await checkOpenRouter(app, page);
+  await checkGemini(app, page);
   await checkCustomEndpoint(app, page);
 
   const toolbar = page.getByRole("toolbar", { name: "Tools" });
@@ -194,8 +196,21 @@ try {
   console.log("ok  a sidebar bookmark persists on its own and toggling it leaves the current page in place");
   console.log("ok  Bookmarked filters the sidebar, jumps to the original page, and updates as bookmarks are removed");
 
-  // A signature is an unsaved edit that must survive a tab switch.
-  const photo = await page.evaluate(() => {
+  const saveCopy = async (name) => {
+    const file = path.join(env.FOLIO_TEST_USER_DATA, name);
+    await app.evaluate(({ session }, file) => {
+      globalThis.folioCopySaved = new Promise((resolve) => session.defaultSession.once("will-download", (_event, item) => {
+        item.setSavePath(file);
+        item.once("done", (_done, state) => resolve(state));
+      }));
+    }, file);
+    await page.keyboard.press("ControlOrMeta+s");
+    assert.equal(await app.evaluate(() => globalThis.folioCopySaved), "completed");
+    return readFileSync(file, "latin1");
+  };
+
+  // A signature remembered by an earlier Folio can be used alongside a newly captured one.
+  const photos = await page.evaluate(() => {
     const canvas = Object.assign(document.createElement("canvas"), { width: 600, height: 200 });
     const g = canvas.getContext("2d");
     g.fillStyle = "#fff";
@@ -204,17 +219,125 @@ try {
     g.beginPath();
     g.moveTo(40, 150);
     g.bezierCurveTo(150, 10, 250, 190, 350, 60);
+    g.stroke();
+    const initials = canvas.toDataURL();
+    localStorage.setItem("folio:signature", JSON.stringify({ url: initials, width: canvas.width, height: canvas.height }));
     g.lineTo(560, 120);
     g.stroke();
-    return canvas.toDataURL("image/png").split(",")[1];
+    return { initials, fullName: canvas.toDataURL() };
   });
-  await page.getByTitle("Add a signature").click();
-  await page.locator('input[aria-label="Upload signature photo"]').setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(photo, "base64") });
+  const sign = page.getByTitle("Add a signature");
+  const picker = page.getByRole("combobox", { name: "Saved signature" });
+  const uploadPhoto = async (url) => {
+    await page.getByLabel("Upload signature photo").setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(url.split(",")[1], "base64") });
+    await page.getByRole("button", { name: "Adjust crop and ink" }).waitFor();
+  };
+  const placeAt = async (x, y) => {
+    await page.getByRole("combobox", { name: "Signature placement" }).selectOption("manual");
+    await page.getByRole("button", { name: "Place signature on page 1" }).click({ position: { x, y } });
+  };
+  const approve = async () => {
+    await page.getByRole("button", { name: "Approve and add signature" }).click();
+    await page.getByRole("dialog", { name: "Sign page 1" }).waitFor({ state: "hidden" });
+  };
+  await sign.click();
+  assert.equal(await picker.locator("option:checked").textContent(), "Signature 1");
+  const originalPage = await page.getByRole("img", { name: "Page 1 placement preview", exact: true }).getAttribute("src");
+  await uploadPhoto(photos.fullName);
+  const remember = page.getByRole("checkbox", { name: /Remember this signature/ });
+  await remember.check();
+  await page.getByLabel("Signature name", { exact: true }).fill("Full name");
+  const fullName = await page.getByRole("img", { name: "Your signature preview", exact: true }).getAttribute("src");
+  await placeAt(70, 70);
+  await approve();
+  await sign.click();
+  assert.ok(await page.getByRole("img", { name: "Page 1 placement preview", exact: true }).getAttribute("src") !== originalPage, "the preview omitted the first stamp");
+  await picker.selectOption({ label: "Full name" });
+  assert.ok(await page.getByRole("img", { name: "Your signature preview", exact: true }).getAttribute("src") === fullName);
+  await placeAt(145, 180);
+  const proposedWidth = () => page.getByRole("img", { name: "Proposed signature location", exact: true }).evaluate(image => image.style.width);
+  const width = await proposedWidth();
+  await picker.selectOption({ label: "Signature 1" });
+  assert.ok(await page.getByRole("img", { name: "Your signature preview", exact: true }).getAttribute("src") !== fullName);
+  assert.equal(await proposedWidth(), width);
+  await approve();
+  assert.equal((await saveCopy("signed.pdf")).match(/\/Subtype\s*\/Stamp\b/g)?.length, 2);
+
+  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Storage", exact: true }).click();
+  await page.getByRole("button", { name: "Forget Signature 1", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await sign.click();
+  assert.deepEqual(await picker.locator("option").allTextContents(), ["Full name"]);
+  await uploadPhoto(photos.initials);
+  await page.getByRole("button", { name: "Adjust crop and ink" }).click();
+  await page.getByLabel("Crop signature photo").waitFor();
   await page.getByRole("button", { name: /Use this signature/ }).click();
-  await page.locator('select[aria-label="Signature placement"]').selectOption("manual");
-  await page.locator('[aria-label^="Place signature on page"]').click();
-  await page.getByRole("button", { name: /Approve and add signature/ }).click();
+  await remember.check();
+  await placeAt(100, 130);
+  await approve();
+  await sign.click();
+  assert.deepEqual(await picker.locator("option:enabled").allTextContents(), ["Full name", "Signature 1"]);
+  await page.getByRole("button", { name: "Cancel" }).click();
   await page.locator(".dirty-dot").waitFor();
+  console.log("ok  saved signatures can be selected, exported together, and forgotten individually");
+
+  // Select a placed signature in Select mode: drag to move, resize, undo, delete by key and trash button, and click away to read.
+  const stamps = page.locator(".annotationEditorLayer .stampEditor");
+  const initialStamps = await stamps.count();
+  assert.ok(initialStamps >= 1, "expected placed signatures on page 1");
+  const firstStamp = stamps.first();
+  const beforeMove = await firstStamp.boundingBox();
+  await page.mouse.click(beforeMove.x + beforeMove.width / 2, beforeMove.y + beforeMove.height / 2);
+  await page.locator(".stampEditor.selectedEditor").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Select", exact: true }).getAttribute("aria-pressed"), "true");
+  const removeSignature = page.getByRole("button", { name: "Remove signature", exact: true });
+  await removeSignature.waitFor();
+  assert.equal(await page.locator(".stampEditor.selectedEditor .editToolbar .altText").isVisible(), false);
+
+  await page.mouse.move(beforeMove.x + beforeMove.width / 2, beforeMove.y + beforeMove.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(beforeMove.x + beforeMove.width / 2 + 36, beforeMove.y + beforeMove.height / 2 + 24, { steps: 5 });
+  await page.mouse.up();
+  const afterMove = await firstStamp.boundingBox();
+  assert.ok(afterMove.x > beforeMove.x + 15 && afterMove.y > beforeMove.y + 10, "signature did not move when dragged");
+
+  const handle = await firstStamp.locator(".resizer.bottomRight").boundingBox();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2 + 28, handle.y + handle.height / 2 + 16, { steps: 5 });
+  await page.mouse.up();
+  const afterResize = await firstStamp.boundingBox();
+  assert.ok(afterResize.width > afterMove.width + 10, "signature did not resize from handle");
+
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.waitForTimeout(150);
+  const afterUndoResize = await firstStamp.boundingBox();
+  assert.ok(Math.abs(afterUndoResize.width - afterMove.width) < 6, "undo did not revert signature resize");
+
+  await page.keyboard.press("Delete");
+  await page.waitForFunction((n) => document.querySelectorAll(".annotationEditorLayer .stampEditor").length === n, initialStamps - 1);
+  assert.equal(await page.locator(".stampEditor.selectedEditor").count(), 0);
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.waitForFunction((n) => document.querySelectorAll(".annotationEditorLayer .stampEditor canvas").length === n, initialStamps);
+  assert.equal(await page.locator(".stampEditor.selectedEditor").count(), 0);
+
+  const restoredBox = await stamps.first().boundingBox();
+  await page.mouse.click(restoredBox.x + restoredBox.width / 2, restoredBox.y + restoredBox.height / 2);
+  await page.locator(".stampEditor.selectedEditor").waitFor();
+  await removeSignature.waitFor();
+  await removeSignature.click();
+  await page.waitForFunction((n) => document.querySelectorAll(".annotationEditorLayer .stampEditor").length === n, initialStamps - 1);
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.waitForFunction((n) => document.querySelectorAll(".annotationEditorLayer .stampEditor canvas").length === n, initialStamps);
+  assert.equal(await page.locator(".stampEditor.selectedEditor").count(), 0);
+
+  const boxForEscape = await stamps.first().boundingBox();
+  await page.mouse.click(boxForEscape.x + boxForEscape.width / 2, boxForEscape.y + boxForEscape.height / 2);
+  await page.locator(".stampEditor.selectedEditor").waitFor();
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator(".stampEditor.selectedEditor").count(), 0);
+  console.log("ok  placed signatures can be selected, moved, resized, undone, and removed from Select mode");
 
   // Stub the PDF viewer handoff in this renderer so printing cannot open a system dialog.
   await page.evaluate(interceptPdfPrint);
@@ -253,7 +376,8 @@ try {
   await select("Folio sample.pdf");
   assert.equal(await page.getByLabel("Page number", { exact: true }).inputValue(), "2");
   await page.getByTitle("Previous page").click();
-  await page.locator(".stampEditor").waitFor();
+  await page.locator(".stampEditor").first().waitFor();
+  assert.equal(await page.locator(".stampEditor").count(), 3);
   assert.deepEqual(await page.window.evaluate(() => window.tabPrompts), []);
   await select("Another.pdf");
   const closeSigned = docs.getByRole("button", { name: "Close Folio sample.pdf, unsaved changes" });
@@ -467,6 +591,9 @@ try {
   await page.evaluate(() => { Worker.prototype.postMessage = window.folioPostMessage; });
   await page.evaluate(() => document.querySelector('.page[data-page-number="1"]').scrollIntoView());
   await page.waitForTimeout(800);
+  const firstPageMarks = '.page[data-page-number="1"] .annotationEditorLayer [id^="pdfjs_internal_editor_"]';
+  const marksBefore = await page.locator(firstPageMarks).count();
+  assert.equal(marksBefore, 6);
   await page.keyboard.press("ControlOrMeta+w");
   await page.getByRole("button", { name: /Try a sample/ }).waitFor();
   // A slow notes read can finish after the reopened PDF is already usable. Hold the result until Save is pressed.
@@ -974,16 +1101,41 @@ try {
     const ai = globalThis.folioAi = { asked: [], cancelled: [], reply: "" };
     for (const channel of ["folio:ai-status", "folio:ai-ask", "folio:ai-cancel"]) ipcMain.removeHandler(channel);
     ipcMain.handle("folio:ai-status", () => ({ chatgpt: { connected: false, email: "", name: "", welcomeSeen: true, encrypted: true },
-      claude: { installed: true, loggedIn: true, subscription: true, version: "test", authMethod: "claude.ai" } }));
+      claude: { installed: true, loggedIn: true, subscription: true, version: "test", authMethod: "claude.ai" },
+      agy: { installed: true, loggedIn: true, version: "1.5.18", models: [
+        { id: "gemini-4-neon-high", name: "Gemini 4 Neon (High)" },
+        { id: "gemini-3.8-flash-medium", name: "Gemini 3.8 Flash (Medium)" },
+      ] } }));
     ipcMain.handle("folio:ai-ask", (_event, request) => {
       ai.asked.push(request.id);
+      ai.lastRequest = request;
       if (ai.reply) BrowserWindow.getAllWindows()[0].webContents.send("folio:ai-event", { id: request.id, type: "delta", text: ai.reply });
+      if (ai.finish) BrowserWindow.getAllWindows()[0].webContents.send("folio:ai-event", { id: request.id, type: "done" });
       return true;
     });
     ipcMain.handle("folio:ai-cancel", (_event, id) => { ai.cancelled.push(id); return true; });
   });
-  await page.evaluate(() => localStorage.setItem("folio:ai-provider", "claude"));
+  // Verify Gemini's Antigravity subscription flow (model selector + streaming ask) on all platforms.
+  await page.evaluate(() => {
+    localStorage.setItem("folio:ai-provider", "gemini");
+    localStorage.setItem("folio:ai-gemini-mode", "agy");
+  });
   const aiPanel = page.getByRole("complementary", { name: "Ask AI" });
+  await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+  await aiPanel.getByText("Using Antigravity").waitFor();
+  await aiPanel.getByLabel("Model").selectOption("gemini-4-neon-high");
+  await app.evaluate(() => { globalThis.folioAi.reply = "Answered via Antigravity (p. 1)."; globalThis.folioAi.finish = true; });
+  await aiPanel.getByRole("textbox").fill("Check Antigravity");
+  await aiPanel.getByRole("textbox").press("Enter");
+  await aiPanel.getByText("Answered via Antigravity").waitFor();
+  const agyReq = await app.evaluate(() => globalThis.folioAi.lastRequest);
+  assert.equal(agyReq.provider, "agy");
+  assert.equal(agyReq.model, "gemini-4-neon-high");
+  await app.evaluate(() => { globalThis.folioAi.finish = false; globalThis.folioAi.asked = []; globalThis.folioAi.cancelled = []; });
+  await aiPanel.getByRole("button", { name: "Close Ask AI" }).click();
+  console.log("ok  Antigravity subscription mode selects models and streams answers through agy");
+
+  await page.evaluate(() => localStorage.setItem("folio:ai-provider", "claude"));
   const askAndClose = async (question, reply) => {
     const asked = await app.evaluate((_electron, reply) => { globalThis.folioAi.reply = reply; return globalThis.folioAi.asked.length; }, reply);
     await aiPanel.getByRole("textbox").fill(question);
@@ -1128,10 +1280,17 @@ try {
 
   // Asked again at the end: the windows that convert a webpage or a Word document didn't bring it forward either.
   await checkStaysHidden();
-  await checkSignatureTargets(app, page, photo, shots);
+  await checkSignatureTargets(app, page, photos.fullName.split(",")[1], shots);
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {
+  // A failed interaction can leave a dirty tab. Closing the disposable profile must not wait on a native prompt.
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.removeAllListeners("will-prevent-unload");
+      win.webContents.on("will-prevent-unload", event => event.preventDefault());
+    }
+  }).catch(() => {});
   await app.close();
 }
 

@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld("folioDesktop", {
     ipcRenderer.on("folio:tab-command", listener);
     return () => ipcRenderer.removeListener("folio:tab-command", listener);
   },
+  onMenuCommand(callback) {
+    const listener = (_e, command) => callback(command);
+    ipcRenderer.on("folio:menu-command", listener);
+    return () => ipcRenderer.removeListener("folio:menu-command", listener);
+  },
+  setCanPrint: (enabled) => ipcRenderer.send("folio:can-print", !!enabled),
   /** Returns the converted PDF to the tab that opened the Word document. */
   openDocument: (file) => ipcRenderer.invoke("folio:open-document", webUtils.getPathForFile(file)),
   ready: () => ipcRenderer.invoke("folio:ready"),
@@ -64,8 +70,11 @@ contextBridge.exposeInMainWorld("folioDesktop", {
     chatgptWelcomeSeen: () => ipcRenderer.invoke("folio:ai-chatgpt-welcome-seen"),
     chatgptModels: () => ipcRenderer.invoke("folio:ai-chatgpt-models"),
     recheckClaude: () => ipcRenderer.invoke("folio:ai-claude-recheck"),
+    recheckAgy: () => ipcRenderer.invoke("folio:ai-agy-recheck"),
     openRouterKey: (action, key) => ipcRenderer.invoke("folio:ai-router-key", action, key),
     openRouterModels: () => ipcRenderer.invoke("folio:ai-router-models"),
+    geminiKey: (action, key) => ipcRenderer.invoke("folio:ai-gemini-key", action, key),
+    geminiModels: () => ipcRenderer.invoke("folio:ai-gemini-models"),
     customEndpoint: (action, input) => ipcRenderer.invoke("folio:ai-custom-endpoint", action, input),
     customModels: () => ipcRenderer.invoke("folio:ai-custom-models"),
     ask: (request) => ipcRenderer.invoke("folio:ai-ask", request),

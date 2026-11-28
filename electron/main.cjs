@@ -1,6 +1,6 @@
 // Folio desktop shell: one window, PDFs (and Word documents, converted) opened from Explorer / "Open with",
 // files served over app://.
-const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, screen, session } = require("electron");
+const { app, BrowserWindow, Menu, protocol, net, ipcMain, dialog, shell, screen, session } = require("electron");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -13,7 +13,7 @@ const { safePdfName } = require("./filenames.cjs");
 const { csp } = require("./csp.cjs");
 const { WORD_FILE, openWord } = require("./convert.cjs");
 const { registerPrinting } = require("./printing.cjs");
-const { MAX_DOCUMENT_BYTES, checkDiskPath, readRegular } = require("./document-files.cjs");
+const { MAX_DOCUMENT_BYTES, checkDiskPath, resolvePath, readRegular } = require("./document-files.cjs");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 // Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
@@ -57,6 +57,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let win = null;
+let printMenuItem = null;
 const OPENABLE = /\.(pdf|docx?)$/i;
 const pendingFiles = filesFromArgs(process.argv);
 let rendererReady = false;
@@ -95,7 +96,7 @@ async function sendFile(file) {
   if (WORD_FILE.test(file)) return sendWordFile(file, target);
   try {
     checkDiskPath(file);
-    const data = await readRegular(await fs.promises.realpath(file));
+    const data = await readRegular(await resolvePath(file));
     if (!target.isDestroyed()) target.webContents.send("folio:open-file", { name: path.basename(file), data });
   } catch (err) {
     dialog.showErrorBox("Couldn't open file", `${file}\n\n${err.userMessage ?? err.message}`);
@@ -372,7 +373,35 @@ function createWindow() {
     if (choice === 0) e.preventDefault();
   });
 
-  win.on("closed", () => { clearTimeout(windowTimer); win = null; rendererReady = false; });
+  win.on("closed", () => { clearTimeout(windowTimer); win = null; rendererReady = false; if (printMenuItem) printMenuItem.enabled = false; });
+}
+
+function setupMacMenu() {
+  if (!IS_MAC) return;
+  const menu = Menu.buildFromTemplate([
+    { role: "appMenu" },
+    {
+      label: "File",
+      submenu: [
+        {
+          id: "file-print",
+          label: "Print…",
+          accelerator: "CommandOrControl+P",
+          enabled: false,
+          click: () => {
+            if (win && !win.isDestroyed()) win.webContents.send("folio:menu-command", "print");
+          },
+        },
+        { type: "separator" },
+        { role: "close" },
+      ],
+    },
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    { role: "windowMenu" },
+  ]);
+  printMenuItem = menu.getMenuItemById("file-print");
+  Menu.setApplicationMenu(menu);
 }
 
 const MAX_URL_PDF_BYTES = MAX_DOCUMENT_BYTES;
@@ -381,7 +410,12 @@ const MAX_URL_PDF_BYTES = MAX_DOCUMENT_BYTES;
 const shortUrl = (url) => (url.href.length > 300 ? url.href.slice(0, 300) + "…" : url.href);
 
 // Folio's own links (src/ai.ts) open without asking.
-const FOLIO_LINKS = new Set(["https://chatgpt.com/settings/usage", "https://claude.com/claude-code"]);
+const FOLIO_LINKS = new Set([
+  "https://chatgpt.com/settings/usage",
+  "https://claude.com/claude-code",
+  "https://antigravity.google/docs/getting-started",
+  "https://aistudio.google.com/apikey",
+]);
 let askingAboutLink = false;
 
 // Links open in the browser (mailto: in the mail app), never in Folio, and only once the user has seen where they go:
@@ -620,6 +654,9 @@ if (!app.requestSingleInstanceLock()) {
     on("folio:install-update", () => {
       if (updateReady) autoUpdater.quitAndInstall(true, true);
     });
+    on("folio:can-print", (_e, enabled) => {
+      if (printMenuItem) printMenuItem.enabled = !!enabled && !!win && !win.isDestroyed();
+    });
     on("folio:theme", (_e, theme) => {
       if (win && Object.hasOwn(TITLEBAR, theme)) {
         if (!IS_MAC) win.setTitleBarOverlay(TITLEBAR[theme]);
@@ -627,6 +664,7 @@ if (!app.requestSingleInstanceLock()) {
       }
     });
 
+    setupMacMenu();
     createWindow();
     setupAutoUpdate();
   });

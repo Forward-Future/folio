@@ -16,6 +16,8 @@ interface FolioDesktop {
   onConverting(callback: (name: string, token: string) => void): () => void;
   onOpenFailed(callback: (message: string, token: string) => void): () => void;
   onTabCommand(callback: (command: "new" | "close" | "next" | "previous") => void): () => void;
+  onMenuCommand(callback: (command: "print") => void): () => void;
+  setCanPrint(enabled: boolean): void;
   openDocument(file: File): Promise<{ name: string; data: Uint8Array; note?: string }>;
   ready(): Promise<boolean>;
   /** Null when the user declines to open an address on their computer or local network, or the request is stopped. */
@@ -40,7 +42,16 @@ interface FolioDesktop {
   ai: FolioAi;
 }
 
+interface AgyStatus {
+  installed: boolean;
+  loggedIn: boolean;
+  version?: string;
+  models: { id: string; name: string }[];
+}
+
 interface AiStatus {
+  agy?: AgyStatus;
+  gemini: { configured: boolean };
   openrouter: { configured: boolean };
   custom: CustomEndpointStatus;
   chatgpt: { connected: boolean; email: string; name: string; welcomeSeen: boolean; encrypted: boolean };
@@ -69,11 +80,14 @@ interface FolioAi {
   chatgptWelcomeSeen(): Promise<boolean>;
   chatgptModels(): Promise<{ ok: boolean; models?: { id: string; name: string }[]; error?: string; code?: string }>;
   recheckClaude(): Promise<AiStatus["claude"]>;
+  recheckAgy(): Promise<AgyStatus>;
   openRouterKey(action: "save" | "check" | "remove", key?: string): Promise<{ ok: boolean; configured?: boolean; error?: string }>;
   openRouterModels(): Promise<{ ok: boolean; models?: OpenRouterModel[]; error?: string }>;
+  geminiKey(action: "save" | "check" | "remove", key?: string): Promise<{ ok: boolean; configured?: boolean; error?: string }>;
+  geminiModels(): Promise<{ ok: boolean; models?: OpenRouterModel[]; error?: string }>;
   customEndpoint(action: "save" | "check" | "remove", input?: { baseUrl: string; key: string }): Promise<{ ok: boolean; status?: CustomEndpointStatus; error?: string }>;
   customModels(): Promise<{ ok: boolean; models?: OpenRouterModel[]; error?: string }>;
-  ask(request: { id: string; provider: "chatgpt" | "claude" | "openrouter" | "custom"; model: string; document: { name: string; text: string; truncated: boolean; recognized: boolean };
+  ask(request: { id: string; provider: "chatgpt" | "claude" | "agy" | "gemini" | "openrouter" | "custom"; model: string; document: { name: string; text: string; truncated: boolean; recognized: boolean };
     messages: AiMessage[] }): Promise<boolean>;
   cancel(id: string): Promise<boolean>;
   onEvent(callback: (event: AiEvent) => void): () => void;
